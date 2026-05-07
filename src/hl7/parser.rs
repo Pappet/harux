@@ -262,4 +262,23 @@ mod tests {
         assert_eq!(get_field_value(msh, 4), "SENDING_FAC");
         assert_eq!(get_field_value(msh, 9), "ADT^A01^ADT_A01");
     }
+
+    #[test]
+    fn test_parse_empty_message() {
+        let res = parse_message("", "127.0.0.1:9999");
+        assert_eq!(res.unwrap_err(), "Empty message");
+    }
+
+    #[test]
+    fn test_parse_invalid_msh_prefix() {
+        let res = parse_message("NOT MSH", "127.0.0.1:9999");
+        let err = res.unwrap_err();
+        assert!(err.starts_with("Message does not start with MSH"));
+    }
+
+    #[test]
+    fn test_parse_short_msh_segment() {
+        let res = parse_message("MSH|", "127.0.0.1:9999");
+        assert_eq!(res.unwrap_err(), "MSH segment too short to extract delimiters");
+    }
 }
