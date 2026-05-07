@@ -21,6 +21,9 @@ let renderScheduled = false;
 let showBookmarkedOnly = false;
 let validationFilter = 0; // 0: All, 1: Warnings, 2: Errors Only
 
+// Server state for accurate total message count
+let totalMessagesCount = 0;
+
 // Segment diff state
 let diffPinnedMessage = null; // the reference message pinned for comparison
 let diffIgnoreDynamic = false;
@@ -191,7 +194,8 @@ function connectWs() {
     ws.onmessage = (event) => {
         const data = JSON.parse(event.data);
         if (data.type === 'init') {
-            document.getElementById('stat-total').textContent = data.total;
+            totalMessagesCount = data.total;
+            document.getElementById('stat-total').textContent = totalMessagesCount;
             loadMessages();
         } else if (data.type === 'new_message') {
             addMessage(data.data);
@@ -206,6 +210,7 @@ function connectWs() {
             console.info("Server cleared messages via Web UI or API");
             messages = [];
             pendingMessages = [];
+            totalMessagesCount = 0;
             selectedId = null;
             selectedMessage = null;
             renderMessageList();
@@ -252,8 +257,8 @@ function addMessage(summary) {
     pendingMessages.unshift(summary);
     // Register source for color mapping
     registerSource(summary.source_addr);
-    document.getElementById('stat-total').textContent =
-        messages.length + pendingMessages.length;
+    totalMessagesCount++;
+    document.getElementById('stat-total').textContent = totalMessagesCount;
     if (!paused) {
         scheduleRender();
     }
@@ -272,8 +277,8 @@ function flushAndRender() {
     if (pendingMessages.length > 0) {
         messages = [...pendingMessages, ...messages];
         pendingMessages = [];
-        document.getElementById('stat-total').textContent = messages.length;
     }
+    document.getElementById('stat-total').textContent = totalMessagesCount;
     renderMessageList();
     renderSourceLegend();
 }
@@ -288,7 +293,7 @@ async function loadMessages() {
         for (const m of messages) {
             registerSource(m.source_addr);
         }
-        document.getElementById('stat-total').textContent = messages.length;
+        document.getElementById('stat-total').textContent = totalMessagesCount;
         renderMessageList();
         renderSourceLegend();
     } catch (e) {
@@ -302,7 +307,8 @@ async function pollStats() {
         const resp = await fetch('/api/stats');
         if (!resp.ok) return;
         const stats = await resp.json();
-        document.getElementById('stat-total').textContent = stats.total_messages;
+        totalMessagesCount = stats.total_messages;
+        document.getElementById('stat-total').textContent = totalMessagesCount;
         document.getElementById('stat-connections').textContent =
             `${stats.active_connections} / ${stats.max_connections}`;
         document.getElementById('stat-errors').textContent = stats.parse_errors;
