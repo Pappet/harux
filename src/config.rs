@@ -3,9 +3,9 @@ use std::path::PathBuf;
 use std::time::Duration;
 use tracing::info;
 
-/// Top-level configuration for HL7 Forge.
+/// Top-level configuration for Harux.
 ///
-/// Load priority: `hl7-forge.toml` (next to binary, then CWD) → env vars → built-in defaults.
+/// Load priority: `harux.toml` (next to binary, then CWD) → env vars → built-in defaults.
 #[derive(Debug, Default, Deserialize)]
 #[serde(default)]
 pub struct Config {
@@ -165,9 +165,9 @@ impl Config {
     }
 }
 
-/// Search for `hl7-forge.toml`: first next to the binary, then in the CWD.
+/// Search for `harux.toml`: first next to the binary, then in the CWD.
 fn find_config_path() -> Option<PathBuf> {
-    const FILE_NAME: &str = "hl7-forge.toml";
+    const FILE_NAME: &str = "harux.toml";
 
     // 1. Next to the binary
     if let Ok(exe) = std::env::current_exe() {

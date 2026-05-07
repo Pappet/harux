@@ -2,7 +2,7 @@
 
 ## Context
 
-HL7 Forge is designed to run in healthcare network environments where it receives and displays HL7 v2.x messages via MLLP. These messages may contain Protected Health Information (PHI) and other sensitive patient data. Security issues in this tool could have serious implications.
+Harux is designed to run in healthcare network environments where it receives and displays HL7 v2.x messages via MLLP. These messages may contain Protected Health Information (PHI) and other sensitive patient data. Security issues in this tool could have serious implications.
 
 ## Supported Versions
 
@@ -18,7 +18,7 @@ HL7 Forge is designed to run in healthcare network environments where it receive
 Instead, report security issues privately via one of these methods:
 
 1. **GitHub Private Vulnerability Reporting** (preferred):
-   Go to [Security → Advisories → Report a vulnerability](https://github.com/Pappet/hl7-forge/security/advisories/new)
+   Go to [Security → Advisories → Report a vulnerability](https://github.com/Pappet/harux/security/advisories/new)
 
 2. **Email**: Contact the maintainer directly (see GitHub profile [@Pappet](https://github.com/Pappet))
 
@@ -37,9 +37,9 @@ Instead, report security issues privately via one of these methods:
 
 ## Security Considerations
 
-HL7 Forge is an **inspection and debugging tool** — not a production message broker. Please keep the following in mind when deploying:
+Harux is an **inspection and debugging tool** — not a production message broker. Please keep the following in mind when deploying:
 
-- **Network placement**: Run HL7 Forge only within trusted network segments. The Web UI and API have no authentication by default.
+- **Network placement**: Run Harux only within trusted network segments. The Web UI and API have no authentication by default.
 - **No TLS**: MLLP connections and the Web UI are unencrypted. Use network-level controls (VPN, firewall rules) to restrict access.
 - **PHI exposure**: Messages displayed in the Web UI may contain patient data. Limit browser access to authorized personnel.
 - **No persistent storage** (currently): Messages are held in memory only and are lost on restart. This limits exposure but does not eliminate it while the service is running.

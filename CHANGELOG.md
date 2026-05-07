@@ -13,7 +13,7 @@ and this project follows [Semantic Versioning](https://semver.org/lang/en/).
 
 ## [0.4.0] – 2026-03-08 – Message Analysis
 
-> Completes Milestone 3 (Message Analysis). HL7 Forge now understands the content of messages: field names from the HL7 v2.5.1 spec, validation with severity-coded badges, a segment diff view, and quick copy-to-clipboard throughout.
+> Completes Milestone 3 (Message Analysis). Harux now understands the content of messages: field names from the HL7 v2.5.1 spec, validation with severity-coded badges, a segment diff view, and quick copy-to-clipboard throughout.
 
 ### Added
 - **HL7 field dictionary** — hover over any field in the detail view for a CSS tooltip with its official HL7 v2.5.1 description (e.g. "Patient Name" for PID-5); powered by a compiled-in zero-overhead JSON dictionary (#48)
@@ -43,27 +43,27 @@ and this project follows [Semantic Versioning](https://semver.org/lang/en/).
 
 | Commit | Description |
 |--------|-------------|
-| [`7cd9062`](https://github.com/Pappet/hl7-forge/commit/7cd9062) | `feat(ui):` Quick copy-to-clipboard for segments, fields, and raw message (#76) |
-| [`598c713`](https://github.com/Pappet/hl7-forge/commit/598c713) | `feat(validation):` Data type validation for NM, DT, TS, SI fields (#74) |
-| [`7f040df`](https://github.com/Pappet/hl7-forge/commit/7f040df) | `feat(ui):` Dynamic field toggle in diff view (#73) |
-| [`dd8a216`](https://github.com/Pappet/hl7-forge/commit/dd8a216) | `feat(ui):` Validation status filter (#72) |
-| [`56bb394`](https://github.com/Pappet/hl7-forge/commit/56bb394) | `fix(ui):` Enforce diff table column widths (#70) |
-| [`87de6d1`](https://github.com/Pappet/hl7-forge/commit/87de6d1) | `fix(ui):` Accent color for pinned messages in detail view (#69) |
-| [`18484c4`](https://github.com/Pappet/hl7-forge/commit/18484c4) | `fix(ui):` Add missing .msg-ack CSS class (#68) |
-| [`b70ff1f`](https://github.com/Pappet/hl7-forge/commit/b70ff1f) | `style(ui):` Remove duplicate theme-toggle CSS block (#66) |
-| [`4fdc373`](https://github.com/Pappet/hl7-forge/commit/4fdc373) | `fix(ui):` Prevent message row content shift on selection (#65) |
-| [`3ef653e`](https://github.com/Pappet/hl7-forge/commit/3ef653e) | `fix(ui):` Show full date and time in message list (#64) |
-| [`292ef35`](https://github.com/Pappet/hl7-forge/commit/292ef35) | `feat:` Color-code typical segment badges by validation state (#54) |
-| [`91d03dd`](https://github.com/Pappet/hl7-forge/commit/91d03dd) | `feat:` HL7 validation engine with UI warning display (#51) |
-| [`28cbb88`](https://github.com/Pappet/hl7-forge/commit/28cbb88) | `feat:` Message type detection with descriptions and typical segments (#50) |
-| [`f36c3de`](https://github.com/Pappet/hl7-forge/commit/f36c3de) | `feat:` Segment diff — compare two messages side by side (#52) |
-| [`60ba09d`](https://github.com/Pappet/hl7-forge/commit/60ba09d) | `feat:` Embed HL7 v2.5.1 JSON dictionary for field hover tooltips (#48) |
+| [`7cd9062`](https://github.com/Pappet/harux/commit/7cd9062) | `feat(ui):` Quick copy-to-clipboard for segments, fields, and raw message (#76) |
+| [`598c713`](https://github.com/Pappet/harux/commit/598c713) | `feat(validation):` Data type validation for NM, DT, TS, SI fields (#74) |
+| [`7f040df`](https://github.com/Pappet/harux/commit/7f040df) | `feat(ui):` Dynamic field toggle in diff view (#73) |
+| [`dd8a216`](https://github.com/Pappet/harux/commit/dd8a216) | `feat(ui):` Validation status filter (#72) |
+| [`56bb394`](https://github.com/Pappet/harux/commit/56bb394) | `fix(ui):` Enforce diff table column widths (#70) |
+| [`87de6d1`](https://github.com/Pappet/harux/commit/87de6d1) | `fix(ui):` Accent color for pinned messages in detail view (#69) |
+| [`18484c4`](https://github.com/Pappet/harux/commit/18484c4) | `fix(ui):` Add missing .msg-ack CSS class (#68) |
+| [`b70ff1f`](https://github.com/Pappet/harux/commit/b70ff1f) | `style(ui):` Remove duplicate theme-toggle CSS block (#66) |
+| [`4fdc373`](https://github.com/Pappet/harux/commit/4fdc373) | `fix(ui):` Prevent message row content shift on selection (#65) |
+| [`3ef653e`](https://github.com/Pappet/harux/commit/3ef653e) | `fix(ui):` Show full date and time in message list (#64) |
+| [`292ef35`](https://github.com/Pappet/harux/commit/292ef35) | `feat:` Color-code typical segment badges by validation state (#54) |
+| [`91d03dd`](https://github.com/Pappet/harux/commit/91d03dd) | `feat:` HL7 validation engine with UI warning display (#51) |
+| [`28cbb88`](https://github.com/Pappet/harux/commit/28cbb88) | `feat:` Message type detection with descriptions and typical segments (#50) |
+| [`f36c3de`](https://github.com/Pappet/harux/commit/f36c3de) | `feat:` Segment diff — compare two messages side by side (#52) |
+| [`60ba09d`](https://github.com/Pappet/harux/commit/60ba09d) | `feat:` Embed HL7 v2.5.1 JSON dictionary for field hover tooltips (#48) |
 
 ---
 
 ## [0.3.0] – 2026-03-07 – Multi-User Experience
 
-> Completes Milestone 1 (Team-Ready Server) and Milestone 2 (Multi-User Experience). HL7 Forge is now fully multi-user capable, production-configurable, and deployed as a stable Windows service.
+> Completes Milestone 1 (Team-Ready Server) and Milestone 2 (Multi-User Experience). Harux is now fully multi-user capable, production-configurable, and deployed as a stable Windows service.
 
 ### Added
 - **Bookmark/pin messages** — star icon on each message row to bookmark important messages; bookmarked messages are protected from eviction; state syncs across tabs via WebSocket (#27)
@@ -75,10 +75,10 @@ and this project follows [Semantic Versioning](https://semver.org/lang/en/).
 - **Connection limits** — configurable `max_connections` (default 100) for the MLLP server using a `tokio::sync::Semaphore`; rejected connections are counted and exposed via `/api/stats` (#6)
 - **ACK UI** — sent ACK/NACK messages (AA, AE, AR) are now stored and viewable in an "ACK" tab (#19)
 - **Graceful shutdown** — MLLP server active connections are cleanly drained on `Ctrl+C` or service stop before exiting (#7)
-- **Configuration file** (`hl7-forge.toml`) — ports, memory limits, log level, MLLP timeouts and max message size configurable without recompilation
+- **Configuration file** (`harux.toml`) — ports, memory limits, log level, MLLP timeouts and max message size configurable without recompilation
   - Load priority: config file (next to binary or CWD) → environment variables (`MLLP_PORT`, `WEB_PORT`, `RUST_LOG`) → built-in defaults
   - New `src/config.rs` module with `Config`, `ServerConfig`, `LoggingConfig`, `StoreConfig`, `MllpConfig` structs
-  - Example `hl7-forge.toml` included with all defaults commented out
+  - Example `harux.toml` included with all defaults commented out
 - STYLE_GUIDE.md detailing design, architecture, and workflow conventions
 - Branch protection rules (main branch requires PRs and successful CI checks)
 - GitHub Actions CI workflow (`.github/workflows/ci.yml`) for `fmt`, `clippy`, `build`, and `test`
@@ -105,45 +105,45 @@ and this project follows [Semantic Versioning](https://semver.org/lang/en/).
 
 | Commit | Description |
 |--------|-------------|
-| [`5e4c4ec`](https://github.com/Pappet/hl7-forge/commit/5e4c4ec7a360c0b9bb249cc7c138454ca99a3a52) | `docs:` Remove Windows Service tasks from Milestone 1, add issue-based branch naming |
-| [`70723f5`](https://github.com/Pappet/hl7-forge/commit/70723f5bffd6a9a33cd682ee8408c87bfb8e38a1) | `docs:` Refactor documentation structure, merge MILESTONES.md into ROADMAP.md |
-| [`5cc749f`](https://github.com/Pappet/hl7-forge/commit/5cc749fe76e9f29c6827d888b702ff09dba61e0c) | `feat:` Bookmark/pin messages with eviction protection (#27) |
+| [`5e4c4ec`](https://github.com/Pappet/harux/commit/5e4c4ec7a360c0b9bb249cc7c138454ca99a3a52) | `docs:` Remove Windows Service tasks from Milestone 1, add issue-based branch naming |
+| [`70723f5`](https://github.com/Pappet/harux/commit/70723f5bffd6a9a33cd682ee8408c87bfb8e38a1) | `docs:` Refactor documentation structure, merge MILESTONES.md into ROADMAP.md |
+| [`5cc749f`](https://github.com/Pappet/harux/commit/5cc749fe76e9f29c6827d888b702ff09dba61e0c) | `feat:` Bookmark/pin messages with eviction protection (#27) |
 
 #### 2026-03-06
 
 | Commit | Description |
 |--------|-------------|
-| [`a143155`](https://github.com/Pappet/hl7-forge/commit/a143155) | `feat:` show ACK message in message selection (#19) |
+| [`a143155`](https://github.com/Pappet/harux/commit/a143155) | `feat:` show ACK message in message selection (#19) |
 
 #### 2026-03-05
 
 | Commit | Description |
 |--------|-------------|
-| [`16d4da8`](https://github.com/Pappet/hl7-forge/commit/16d4da82c54484485c7af0d56d00cef1f78e7b49) | `test:` Add regression tests for MSH field indexing quirk (#11) |
+| [`16d4da8`](https://github.com/Pappet/harux/commit/16d4da82c54484485c7af0d56d00cef1f78e7b49) | `test:` Add regression tests for MSH field indexing quirk (#11) |
 
 #### 2026-02-28
 
 | Commit | Description |
 |--------|-------------|
-| [`4ea0538`](https://github.com/Pappet/hl7-forge/commit/4ea05380ab3adaef719f6afb5eb23bb45dd8e5f0) | `docs:` Add STYLE_GUIDE.md detailing design, architecture, and workflow conventions |
+| [`4ea0538`](https://github.com/Pappet/harux/commit/4ea05380ab3adaef719f6afb5eb23bb45dd8e5f0) | `docs:` Add STYLE_GUIDE.md detailing design, architecture, and workflow conventions |
 
 #### 2026-02-22
 
 | Commit | Description |
 |--------|-------------|
-| [`5cf9f29`](https://github.com/Pappet/hl7-forge/commit/5cf9f29) | `docs:` document Branch Protection and CI workflow rules in CLAUDE.md, AGENTS.md, and CHANGELOG.md |
-| [`da5738a`](https://github.com/Pappet/hl7-forge/commit/da5738a5ced7625ddf524b87fd0a5e6558b1f275) | `feat:` add hl7-forge.toml configuration file support |
-| [`29e5e8c`](https://github.com/Pappet/hl7-forge/commit/29e5e8c6a7336400a1e02e05687ad1976cfec330) | `docs:` add CONTRIBUTING, SECURITY, and PR template |
-| [`89ba306`](https://github.com/Pappet/hl7-forge/commit/89ba3063590a0ee3aef05f0e3ebf5b07921dcfd4) | `chore:` Add Templates for Bugs and Feature Requests |
+| [`5cf9f29`](https://github.com/Pappet/harux/commit/5cf9f29) | `docs:` document Branch Protection and CI workflow rules in CLAUDE.md, AGENTS.md, and CHANGELOG.md |
+| [`da5738a`](https://github.com/Pappet/harux/commit/da5738a5ced7625ddf524b87fd0a5e6558b1f275) | `feat:` add harux.toml configuration file support |
+| [`29e5e8c`](https://github.com/Pappet/harux/commit/29e5e8c6a7336400a1e02e05687ad1976cfec330) | `docs:` add CONTRIBUTING, SECURITY, and PR template |
+| [`89ba306`](https://github.com/Pappet/harux/commit/89ba3063590a0ee3aef05f0e3ebf5b07921dcfd4) | `chore:` Add Templates for Bugs and Feature Requests |
 
 #### 2026-02-21
 
 | Commit | Description |
 |--------|-------------|
-| [`efb0bcc`](https://github.com/Pappet/hl7-forge/commit/efb0bcc2025500ba7e26e56494dfc8aefbbd0e33) | `docs:` Update ROADMAP with completed Phase 1 tasks, refine deployment and memory management sections, clarify non-goals, and add development guidelines. |
-| [`8128ab4`](https://github.com/Pappet/hl7-forge/commit/8128ab456f0a0ff23c3739481fd2194a8934a3aa) | `docs:` add detailed issue comment preferences for AI agents |
-| [`a1837a4`](https://github.com/Pappet/hl7-forge/commit/a1837a45d7af2898ee1f693e78d509b56688f51a) | `fix:` Fix UI sync on clear database |
-| [`09121a5`](https://github.com/Pappet/hl7-forge/commit/09121a50a319c494c233f050df7eb561aa4c49f0) | `docs:` translate all German text to English across the codebase |
+| [`efb0bcc`](https://github.com/Pappet/harux/commit/efb0bcc2025500ba7e26e56494dfc8aefbbd0e33) | `docs:` Update ROADMAP with completed Phase 1 tasks, refine deployment and memory management sections, clarify non-goals, and add development guidelines. |
+| [`8128ab4`](https://github.com/Pappet/harux/commit/8128ab456f0a0ff23c3739481fd2194a8934a3aa) | `docs:` add detailed issue comment preferences for AI agents |
+| [`a1837a4`](https://github.com/Pappet/harux/commit/a1837a45d7af2898ee1f693e78d509b56688f51a) | `fix:` Fix UI sync on clear database |
+| [`09121a5`](https://github.com/Pappet/harux/commit/09121a50a319c494c233f050df7eb561aa4c49f0) | `docs:` translate all German text to English across the codebase |
 
 ---
 
@@ -159,41 +159,41 @@ and this project follows [Semantic Versioning](https://semver.org/lang/en/).
 
 | Commit | Description |
 |--------|-------------|
-| [`868b440`](https://github.com/Pappet/hl7-forge/commit/868b440) | `docs:` fix commit hash in CHANGELOG for fdb6e05 |
-| [`fdb6e05`](https://github.com/Pappet/hl7-forge/commit/fdb6e05) | `docs:` document mandatory changelog workflow in CLAUDE.md and AGENTS.md |
-| [`79cec90`](https://github.com/Pappet/hl7-forge/commit/79cec901f6141ba32c719dda2829e15d20f9f5d3) | `docs:` update CLAUDE.md, add AGENTS.md with architecture and deployment context |
-| [`041cb04`](https://github.com/Pappet/hl7-forge/commit/041cb0417f821b354fce1c021148d4e18a78cd01) | `fix:` ACK storm prevention, search debounce (300 ms), size-based store eviction (`MAX_STORE_BYTES`) |
-| [`44afeb9`](https://github.com/Pappet/hl7-forge/commit/44afeb9364ce45d2073da84cd840d72ccd6e1882) | `.gitignore` updated |
+| [`868b440`](https://github.com/Pappet/harux/commit/868b440) | `docs:` fix commit hash in CHANGELOG for fdb6e05 |
+| [`fdb6e05`](https://github.com/Pappet/harux/commit/fdb6e05) | `docs:` document mandatory changelog workflow in CLAUDE.md and AGENTS.md |
+| [`79cec90`](https://github.com/Pappet/harux/commit/79cec901f6141ba32c719dda2829e15d20f9f5d3) | `docs:` update CLAUDE.md, add AGENTS.md with architecture and deployment context |
+| [`041cb04`](https://github.com/Pappet/harux/commit/041cb0417f821b354fce1c021148d4e18a78cd01) | `fix:` ACK storm prevention, search debounce (300 ms), size-based store eviction (`MAX_STORE_BYTES`) |
+| [`44afeb9`](https://github.com/Pappet/harux/commit/44afeb9364ce45d2073da84cd840d72ccd6e1882) | `.gitignore` updated |
 
 #### 2026-02-20
 
 | Commit | Description |
 |--------|-------------|
-| [`1ee69f3`](https://github.com/Pappet/hl7-forge/commit/1ee69f3655a286ea6dfeb2bec71d49f6f56a5270) | `.gitignore` extended |
-| [`2f45c7e`](https://github.com/Pappet/hl7-forge/commit/2f45c7e19f1f8c966e857396bc1df178bc0abb4f) | `ux:` various UX optimizations |
-| [`f10cd40`](https://github.com/Pappet/hl7-forge/commit/f10cd40efab007e5d629942ed6cd91611488d468) | `feat:` store failed messages; introduce UI batching (250 ms); split static assets into separate files (`index.html`, `style.css`, `app.js`) |
-| [`ee0dcda`](https://github.com/Pappet/hl7-forge/commit/ee0dcda6cd673733bd37e9ab01e9b6933625264b) | `docs:` add PowerShell test script (`tests/test.ps1`); document both test runners |
-| [`1bd7c9f`](https://github.com/Pappet/hl7-forge/commit/1bd7c9f841fee412d172599e137e8a91bb06eb16) | create PowerShell test script for Windows load tests (1000 messages, persistent TCP connection) |
-| [`7a08611`](https://github.com/Pappet/hl7-forge/commit/7a0861102763aed1898eb4c24f1d344978a92cb7) | rename social card image (`hl7-forge-card.png` → `social-card.png`) |
-| [`fd7178a`](https://github.com/Pappet/hl7-forge/commit/fd7178ae69eb4dfe90fb8e5725c2d51db15e9da6) | `docs:` completely revamp README.md |
-| [`a6860b1`](https://github.com/Pappet/hl7-forge/commit/a6860b125d40031c131a9c8dc4a9f7e64c3d7b10) | `.gitignore` extended |
-| [`71eb33c`](https://github.com/Pappet/hl7-forge/commit/71eb33cdb4d232977b4045c26531de2e4f3b8b0a) | `ci:` migrate release upload from `softprops/action-gh-release` to `gh release upload` |
-| [`564aba3`](https://github.com/Pappet/hl7-forge/commit/564aba33437afc23e8657f8518982c89366414a8) | `ci:` simplify build pipeline to three independent jobs: Windows, macOS Apple Silicon, Linux |
-| [`c8711e8`](https://github.com/Pappet/hl7-forge/commit/c8711e840d6e1db31867f0577be01a4d2ec03fda) | `ci:` cross-compile Intel macOS binary on Apple Silicon runner |
-| [`acc9908`](https://github.com/Pappet/hl7-forge/commit/acc9908b5c222fbfa7956d87c8cabe0083c27dd1) | `ci:` add macOS builds for Intel and Apple Silicon |
-| [`8c0db5f`](https://github.com/Pappet/hl7-forge/commit/8c0db5fd3821715e03bae3c8a7f17ac90cfeff7d) | `ci:` set `contents: write` permission for release asset upload |
-| [`9a14291`](https://github.com/Pappet/hl7-forge/commit/9a14291ba9281c9b135cf8d3b07ae73934db7cbd) | add MIT license (`LICENSE`) |
-| [`5bd3579`](https://github.com/Pappet/hl7-forge/commit/5bd357946f568dc7806ea0ca38f4367023c014a4) | `docs:` clarify ACK behavior for unknown message types; revise `test.sh` |
-| [`9ef8ed9`](https://github.com/Pappet/hl7-forge/commit/9ef8ed9cf631b442ebf6e10d7767fcdff5b6e3c1) | `fix:` align MSH field indices with HL7 standard (correct +1 offset); add graceful shutdown via `Ctrl+C` signal handler |
-| [`bbde980`](https://github.com/Pappet/hl7-forge/commit/bbde98060ccc46fbe5a9ed238907a73ebcd9af21) | `fix:` harden MLLP server and message store against load spikes and DoS (connection timeouts, 10 MB payload limit) |
-| [`fa11aa4`](https://github.com/Pappet/hl7-forge/commit/fa11aa42ae65bde3926349bea3ee81d2b3d9714c) | `polish:` add Cargo metadata; clean up Tokio features; introduce toast notifications in UI |
-| [`f33ccfc`](https://github.com/Pappet/hl7-forge/commit/f33ccfccdfb12e16f4879e06fb8a3a9b8802919) | `fix:` UI polish and pre-release fixes (correct Axum route `:id`, clean up compiler warnings) |
-| [`696522c`](https://github.com/Pappet/hl7-forge/commit/696522c4126fc45096687fdb5ef38d6462f593b2) | `docs:` revamp README with feature overview, Windows deployment guide, and milestone table |
-| [`679aad3`](https://github.com/Pappet/hl7-forge/commit/679aad3e02d1d0c89299ad8f22b38e95b10bb37c) | `ci:` initial GitHub Actions build workflow |
-| [`0c46811`](https://github.com/Pappet/hl7-forge/commit/0c468114f5080b9da02ea6e3b4a22796e56337f2) | `docs:` add ROADMAP.md as strategic planning document |
-| [`6cedfc6`](https://github.com/Pappet/hl7-forge/commit/6cedfc6b8cd47c94cf475d6905a00b53f7540fc1) | `docs:` create MILESTONES.md with 6 structured milestones from ROADMAP phases 2–4 |
-| [`f087a62`](https://github.com/Pappet/hl7-forge/commit/f087a62b435ecf3d8e6e7d9dc7c5902f4d9d8b82) | `docs:` add CLAUDE.md with build commands and architecture overview for AI agents |
-| [`f6fef07`](https://github.com/Pappet/hl7-forge/commit/f6fef074115caf756797f5257578349c583c7bec) | **Initial commit:** HL7 Forge MLLP server with real-time web UI |
+| [`1ee69f3`](https://github.com/Pappet/harux/commit/1ee69f3655a286ea6dfeb2bec71d49f6f56a5270) | `.gitignore` extended |
+| [`2f45c7e`](https://github.com/Pappet/harux/commit/2f45c7e19f1f8c966e857396bc1df178bc0abb4f) | `ux:` various UX optimizations |
+| [`f10cd40`](https://github.com/Pappet/harux/commit/f10cd40efab007e5d629942ed6cd91611488d468) | `feat:` store failed messages; introduce UI batching (250 ms); split static assets into separate files (`index.html`, `style.css`, `app.js`) |
+| [`ee0dcda`](https://github.com/Pappet/harux/commit/ee0dcda6cd673733bd37e9ab01e9b6933625264b) | `docs:` add PowerShell test script (`tests/test.ps1`); document both test runners |
+| [`1bd7c9f`](https://github.com/Pappet/harux/commit/1bd7c9f841fee412d172599e137e8a91bb06eb16) | create PowerShell test script for Windows load tests (1000 messages, persistent TCP connection) |
+| [`7a08611`](https://github.com/Pappet/harux/commit/7a0861102763aed1898eb4c24f1d344978a92cb7) | rename social card image (`harux-card.png` → `social-card.png`) |
+| [`fd7178a`](https://github.com/Pappet/harux/commit/fd7178ae69eb4dfe90fb8e5725c2d51db15e9da6) | `docs:` completely revamp README.md |
+| [`a6860b1`](https://github.com/Pappet/harux/commit/a6860b125d40031c131a9c8dc4a9f7e64c3d7b10) | `.gitignore` extended |
+| [`71eb33c`](https://github.com/Pappet/harux/commit/71eb33cdb4d232977b4045c26531de2e4f3b8b0a) | `ci:` migrate release upload from `softprops/action-gh-release` to `gh release upload` |
+| [`564aba3`](https://github.com/Pappet/harux/commit/564aba33437afc23e8657f8518982c89366414a8) | `ci:` simplify build pipeline to three independent jobs: Windows, macOS Apple Silicon, Linux |
+| [`c8711e8`](https://github.com/Pappet/harux/commit/c8711e840d6e1db31867f0577be01a4d2ec03fda) | `ci:` cross-compile Intel macOS binary on Apple Silicon runner |
+| [`acc9908`](https://github.com/Pappet/harux/commit/acc9908b5c222fbfa7956d87c8cabe0083c27dd1) | `ci:` add macOS builds for Intel and Apple Silicon |
+| [`8c0db5f`](https://github.com/Pappet/harux/commit/8c0db5fd3821715e03bae3c8a7f17ac90cfeff7d) | `ci:` set `contents: write` permission for release asset upload |
+| [`9a14291`](https://github.com/Pappet/harux/commit/9a14291ba9281c9b135cf8d3b07ae73934db7cbd) | add MIT license (`LICENSE`) |
+| [`5bd3579`](https://github.com/Pappet/harux/commit/5bd357946f568dc7806ea0ca38f4367023c014a4) | `docs:` clarify ACK behavior for unknown message types; revise `test.sh` |
+| [`9ef8ed9`](https://github.com/Pappet/harux/commit/9ef8ed9cf631b442ebf6e10d7767fcdff5b6e3c1) | `fix:` align MSH field indices with HL7 standard (correct +1 offset); add graceful shutdown via `Ctrl+C` signal handler |
+| [`bbde980`](https://github.com/Pappet/harux/commit/bbde98060ccc46fbe5a9ed238907a73ebcd9af21) | `fix:` harden MLLP server and message store against load spikes and DoS (connection timeouts, 10 MB payload limit) |
+| [`fa11aa4`](https://github.com/Pappet/harux/commit/fa11aa42ae65bde3926349bea3ee81d2b3d9714c) | `polish:` add Cargo metadata; clean up Tokio features; introduce toast notifications in UI |
+| [`f33ccfc`](https://github.com/Pappet/harux/commit/f33ccfccdfb12e16f4879e06fb8a3a9b8802919) | `fix:` UI polish and pre-release fixes (correct Axum route `:id`, clean up compiler warnings) |
+| [`696522c`](https://github.com/Pappet/harux/commit/696522c4126fc45096687fdb5ef38d6462f593b2) | `docs:` revamp README with feature overview, Windows deployment guide, and milestone table |
+| [`679aad3`](https://github.com/Pappet/harux/commit/679aad3e02d1d0c89299ad8f22b38e95b10bb37c) | `ci:` initial GitHub Actions build workflow |
+| [`0c46811`](https://github.com/Pappet/harux/commit/0c468114f5080b9da02ea6e3b4a22796e56337f2) | `docs:` add ROADMAP.md as strategic planning document |
+| [`6cedfc6`](https://github.com/Pappet/harux/commit/6cedfc6b8cd47c94cf475d6905a00b53f7540fc1) | `docs:` create MILESTONES.md with 6 structured milestones from ROADMAP phases 2–4 |
+| [`f087a62`](https://github.com/Pappet/harux/commit/f087a62b435ecf3d8e6e7d9dc7c5902f4d9d8b82) | `docs:` add CLAUDE.md with build commands and architecture overview for AI agents |
+| [`f6fef07`](https://github.com/Pappet/harux/commit/f6fef074115caf756797f5257578349c583c7bec) | **Initial commit:** Harux MLLP server with real-time web UI |
 
 ---
 
@@ -261,7 +261,7 @@ and this project follows [Semantic Versioning](https://semver.org/lang/en/).
 
 ---
 
-[Unreleased]: https://github.com/Pappet/hl7-forge/compare/v0.3.0...HEAD
-[0.3.0]: https://github.com/Pappet/hl7-forge/compare/v0.2.0...v0.3.0
-[0.2.0]: https://github.com/Pappet/hl7-forge/compare/v0.1.0...v0.2.0
-[0.1.0]: https://github.com/Pappet/hl7-forge/releases/tag/v0.1.0
+[Unreleased]: https://github.com/Pappet/harux/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/Pappet/harux/compare/v0.2.0...v0.3.0
+[0.2.0]: https://github.com/Pappet/harux/compare/v0.1.0...v0.2.0
+[0.1.0]: https://github.com/Pappet/harux/releases/tag/v0.1.0

@@ -1,11 +1,11 @@
 [package]
-name = "hl7-forge"
+name = "harux"
 version = "0.4.0"
 edition = "2021"
 authors = ["Peter Paprotny"]
 description = "High-performance HL7 MLLP server with real-time Web UI"
 license = "MIT"
-repository = "https://github.com/Pappet/hl7-forge"
+repository = "https://github.com/Pappet/harux"
 readme = "README.md"
 keywords = ["hl7", "mllp", "healthcare", "fhir", "integration"]
 categories = ["network-programming", "web-programming"]

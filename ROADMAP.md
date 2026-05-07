@@ -1,4 +1,4 @@
-# HL7 Forge — Roadmap
+# Harux — Roadmap
 
 This document tracks all milestones and planned features. Each milestone lists its tasks, completion status, and acceptance criteria.
 
@@ -32,7 +32,7 @@ This document tracks all milestones and planned features. Each milestone lists i
 
 ## Milestone 1 — Team-Ready Server
 
-**Goal:** HL7 Forge runs stably as a Windows service on the dev server, is configurable without recompilation, and holds up under high load.
+**Goal:** Harux runs stably as a Windows service on the dev server, is configurable without recompilation, and holds up under high load.
 
 **Status: Complete**
 
@@ -42,7 +42,7 @@ This document tracks all milestones and planned features. Each milestone lists i
 
 ### Tasks
 
-- [x] **Configuration file** (`hl7-forge.toml`) — ports, memory limits, log level, retention configurable
+- [x] **Configuration file** (`harux.toml`) — ports, memory limits, log level, retention configurable
 - [x] **File Logging** — standard rotating log files for operation monitoring
 - [x] **Portable binary** — single `.exe` without dependencies, xcopy deployment
 - [x] **Backpressure handling** — evict oldest messages when the store is full instead of OOM
@@ -52,11 +52,11 @@ This document tracks all milestones and planned features. Each milestone lists i
 
 ### Acceptance Criteria
 
-- [x] Server starts via `hl7-forge.toml` with configured ports and limits
+- [x] Server starts via `harux.toml` with configured ports and limits
 - [x] When the memory budget is reached, old messages are evicted — no OOM
 - [x] `Ctrl+C` or service stop terminates active MLLP connections cleanly
 
-> **Note:** Windows Service installation is handled externally via NSSM (`nssm install HL7Forge hl7-forge.exe`). No native `windows-service` crate integration needed.
+> **Note:** Windows Service installation is handled externally via NSSM (`nssm install Harux harux.exe`). No native `windows-service` crate integration needed.
 
 ---
 
@@ -153,7 +153,7 @@ This document tracks all milestones and planned features. Each milestone lists i
 
 ### Tasks
 
-- [ ] **SQLite backend** — optional persistence, enabled via `hl7-forge.toml`
+- [ ] **SQLite backend** — optional persistence, enabled via `harux.toml`
 - [ ] **Retention policy** — automatic deletion after X days or X messages
 - [ ] **Extended export** — CSV export, HL7 file export (`.hl7`), filtered exports
 

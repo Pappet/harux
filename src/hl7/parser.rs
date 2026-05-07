@@ -211,7 +211,7 @@ fn get_field_value(segment: &Hl7Segment, index: usize) -> String {
 pub fn build_ack(original: &Hl7Message, ack_code: &str) -> String {
     let now = chrono::Utc::now().format("%Y%m%d%H%M%S").to_string();
     let msh = format!(
-        "MSH|^~\\&|HL7Forge|HL7Forge|{}|{}|{}||ACK^{}|{}|P|{}",
+        "MSH|^~\\&|Harux|Harux|{}|{}|{}||ACK^{}|{}|P|{}",
         original.sending_application,
         original.sending_facility,
         now,
@@ -247,7 +247,7 @@ mod tests {
     fn test_build_ack() {
         let msg = parse_message(SAMPLE_ADT, "127.0.0.1:9999").unwrap();
         let ack = build_ack(&msg, "AA");
-        assert!(ack.starts_with("MSH|^~\\&|HL7Forge"));
+        assert!(ack.starts_with("MSH|^~\\&|Harux"));
         assert!(ack.contains("MSA|AA|MSG00001"));
     }
 

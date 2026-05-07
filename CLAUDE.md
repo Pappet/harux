@@ -43,7 +43,7 @@ You must ensure your code satisfies these requirements locally before pushing.
 **Before every commit and push**, update `CHANGELOG.md`:
 
 1. Add a new row to the commit-history table under today's date (add a new `#### YYYY-MM-DD` heading if it doesn't exist yet).
-2. Row format: `| [\`<short-hash>\`](<https://github.com/Pappet/hl7-forge/commit/<full-hash>>) | \`<type>:\` Short description |`
+2. Row format: `| [\`<short-hash>\`](<https://github.com/Pappet/harux/commit/<full-hash>>) | \`<type>:\` Short description |`
    — The short hash is the first 7 characters of the commit hash.
 3. For substantive changes (new feature, fix, refactor): also update the relevant `### Added`, `### Fixed`, or `### Changed` entries in the `[Unreleased]` or the active release section.
 4. The changelog format follows [Keep a Changelog](https://keepachangelog.com/de/1.0.0/).
@@ -52,7 +52,7 @@ The commit hash is only available **after** `git commit`. Update the changelog a
 
 ## Architecture
 
-HL7 Forge is an MLLP server with a real-time web UI for inspecting HL7 v2.x messages. Two async Tokio tasks run concurrently via `tokio::select!` in `main.rs`:
+Harux is an MLLP server with a real-time web UI for inspecting HL7 v2.x messages. Two async Tokio tasks run concurrently via `tokio::select!` in `main.rs`:
 
 1. **MLLP Server** (`mllp.rs`) — TCP listener accepting HL7 messages wrapped in MLLP framing (VT `0x0B` start, FS `0x1C` + CR `0x0D` end). Parses each message, stores it, and returns ACK/NACK.
 

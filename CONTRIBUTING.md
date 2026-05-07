@@ -1,6 +1,6 @@
-# Contributing to HL7 Forge
+# Contributing to Harux
 
-Thanks for your interest in contributing to HL7 Forge! This document explains how to get started and what we expect from contributions.
+Thanks for your interest in contributing to Harux! This document explains how to get started and what we expect from contributions.
 
 ## Getting Started
 
@@ -16,7 +16,7 @@ cargo clippy -- -D warnings
 
 ## Opening Issues
 
-Please use the [Issue Templates](https://github.com/Pappet/hl7-forge/issues/new/choose) for bug reports and feature requests. If you're unsure whether something is a bug or just have a question, start a [Discussion](https://github.com/Pappet/hl7-forge/discussions) instead.
+Please use the [Issue Templates](https://github.com/Pappet/harux/issues/new/choose) for bug reports and feature requests. If you're unsure whether something is a bug or just have a question, start a [Discussion](https://github.com/Pappet/harux/discussions) instead.
 
 For **larger changes** (new features, architectural changes, new dependencies), please open an issue first so we can discuss the approach before you invest time into implementation.
 

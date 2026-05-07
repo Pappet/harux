@@ -7,7 +7,7 @@ For Claude Code specifically, see also `CLAUDE.md`.
 
 ## Project Overview
 
-HL7 Forge is a single-binary MLLP server with an embedded real-time web UI for inspecting HL7 v2.x messages. It is written in Rust and deployed as a Windows Service on a hospital integration server. Multiple developers use it simultaneously via browser.
+Harux is a single-binary MLLP server with an embedded real-time web UI for inspecting HL7 v2.x messages. It is written in Rust and deployed as a Windows Service on a hospital integration server. Multiple developers use it simultaneously via browser.
 
 **Primary use case:** Receiving, storing, and displaying HL7 v2.x messages from Orchestra (a healthcare integration platform) for development and debugging. MDM messages with Base64-encoded attachments are common daily traffic.
 
@@ -59,7 +59,7 @@ Only PRs that pass these checks can be merged. Ensure these run successfully on 
 2. Open `CHANGELOG.md` and find (or create) the `#### YYYY-MM-DD` heading for today under `## [Unreleased]` → commit history table.
 3. Add one row per commit:
    ```
-   | [`<hash>`](https://github.com/Pappet/hl7-forge/commit/<full-hash>) | `<type>:` Short description |
+   | [`<hash>`](https://github.com/Pappet/harux/commit/<full-hash>) | `<type>:` Short description |
    ```
 4. For features or fixes: also update the corresponding `### Added` / `### Fixed` / `### Changed` prose section of the active release block.
 5. Stage `CHANGELOG.md` and amend the commit (`git commit --amend --no-edit`) **or** include it in the same commit from the start.
@@ -149,7 +149,7 @@ When evicting, subtract the freed bytes from `current_bytes` using `saturating_s
 
 ### 6. Parse Errors Are Stored, Not Discarded
 
-When a message fails to parse, it is still inserted into the store with `parse_error: Some(error_string)` and `message_type: "UNKNOWN"`. This is intentional — HL7 Forge is a debugging tool and broken messages are often the most important ones to inspect. Do not silently discard parse failures.
+When a message fails to parse, it is still inserted into the store with `parse_error: Some(error_string)` and `message_type: "UNKNOWN"`. This is intentional — Harux is a debugging tool and broken messages are often the most important ones to inspect. Do not silently discard parse failures.
 
 ---
 

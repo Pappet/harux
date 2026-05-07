@@ -62,7 +62,7 @@ async fn main() -> anyhow::Result<()> {
 
     info!("╔══════════════════════════════════════════╗");
     info!(
-        "║          HL7 Forge v{}                ║",
+        "║          Harux v{}                ║",
         env!("CARGO_PKG_VERSION")
     );
     info!("╠══════════════════════════════════════════╣");
@@ -148,6 +148,6 @@ async fn main() -> anyhow::Result<()> {
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
     }
 
-    info!("HL7 Forge stopped.");
+    info!("Harux stopped.");
     Ok(())
 }

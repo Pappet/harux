@@ -1,24 +1,24 @@
 <div align="center">
 
-<img src="https://raw.githubusercontent.com/Pappet/hl7-forge/main/assets/social-card.png" alt="HL7 Forge" width="100%">
+<img src="https://raw.githubusercontent.com/Pappet/harux/main/assets/social-card.png" alt="Harux" width="100%">
 
 <br/>
 <br/>
 
-[![Build](https://img.shields.io/github/actions/workflow/status/Pappet/hl7-forge/build.yml?branch=main&style=flat-square&logo=github&label=build&color=4caf84)](https://github.com/Pappet/hl7-forge/actions)
-[![Release](https://img.shields.io/github/v/release/Pappet/hl7-forge?style=flat-square&color=6c8cff&logo=rust)](https://github.com/Pappet/hl7-forge/releases)
+[![Build](https://img.shields.io/github/actions/workflow/status/Pappet/harux/build.yml?branch=main&style=flat-square&logo=github&label=build&color=4caf84)](https://github.com/Pappet/harux/actions)
+[![Release](https://img.shields.io/github/v/release/Pappet/harux?style=flat-square&color=6c8cff&logo=rust)](https://github.com/Pappet/harux/releases)
 [![License](https://img.shields.io/badge/license-MIT-blue?style=flat-square&color=525775)](LICENSE)
 [![Rust](https://img.shields.io/badge/built%20with-Rust-b7410e?style=flat-square&logo=rust)](https://www.rust-lang.org/)
 
 <br/>
 
-**HL7 Forge** is a high-performance MLLP server with a real-time web UI for inspecting HL7 v2.x messages — built in Rust, deployed as a single binary.
+**Harux** is a high-performance MLLP server with a real-time web UI for inspecting HL7 v2.x messages — built in Rust, deployed as a single binary.
 
 Designed as a drop-in replacement for HL7 Inspector: runs as a central service, accessible by your entire team via browser. No local setup. No RDP-exclusive windows.
 
 <br/>
 
-[**Download**](https://github.com/Pappet/hl7-forge/releases) · [**Docs**](#-documentation) · [**Quickstart**](#-quick-start)
+[**Download**](https://github.com/Pappet/harux/releases) · [**Docs**](#-documentation) · [**Quickstart**](#-quick-start)
 
 </div>
 
@@ -42,7 +42,7 @@ Designed as a drop-in replacement for HL7 Inspector: runs as a central service, 
 - **Smart Store** — in-memory with configurable capacity and dual eviction (count + size)
 - **JSON Export** — export full message data with one click
 - **Resizable Panels** — drag splitter between message list and detail view
-- **Configurable** — `hl7-forge.toml` for ports, memory limits, timeouts, log level
+- **Configurable** — `harux.toml` for ports, memory limits, timeouts, log level
 - **Single Binary** — frontend embedded via `rust-embed`, zero runtime dependencies
 
 ---
@@ -52,28 +52,28 @@ Designed as a drop-in replacement for HL7 Inspector: runs as a central service, 
 **Prerequisites:** [Rust toolchain](https://rustup.rs)
 
 ```bash
-git clone https://github.com/Pappet/hl7-forge.git
-cd hl7-forge
+git clone https://github.com/Pappet/harux.git
+cd harux
 cargo build --release
 cargo run --release
 ```
 
 Open **http://localhost:8080** — the UI connects automatically.
 
-**Defaults:** MLLP port `2575`, Web UI port `8080`. Override via `hl7-forge.toml` or environment variables (`MLLP_PORT`, `WEB_PORT`).
+**Defaults:** MLLP port `2575`, Web UI port `8080`. Override via `harux.toml` or environment variables (`MLLP_PORT`, `WEB_PORT`).
 
 ### Windows
 
 ```powershell
 # Direct start
-.\hl7-forge.exe
+.\harux.exe
 
 # Install as Windows Service (NSSM)
-nssm install HL7Forge C:\Tools\hl7-forge.exe
-nssm start HL7Forge
+nssm install Harux C:\Tools\harux.exe
+nssm start Harux
 ```
 
-Pre-built binaries for Windows, macOS, and Linux are available on the [Releases](https://github.com/Pappet/hl7-forge/releases) page.
+Pre-built binaries for Windows, macOS, and Linux are available on the [Releases](https://github.com/Pappet/harux/releases) page.
 
 ---
 
@@ -108,5 +108,5 @@ MIT — see [LICENSE](LICENSE) for the full text.
 ---
 
 <div align="center">
-<sub>Built with Rust · <a href="https://github.com/Pappet/hl7-forge">github.com/Pappet/hl7-forge</a></sub>
+<sub>Built with Rust · <a href="https://github.com/Pappet/harux">github.com/Pappet/harux</a></sub>
 </div>
