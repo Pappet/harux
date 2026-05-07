@@ -279,6 +279,9 @@ mod tests {
     #[test]
     fn test_parse_short_msh_segment() {
         let res = parse_message("MSH|", "127.0.0.1:9999");
-        assert_eq!(res.unwrap_err(), "MSH segment too short to extract delimiters");
+        assert_eq!(
+            res.unwrap_err(),
+            "MSH segment too short to extract delimiters"
+        );
     }
 }
