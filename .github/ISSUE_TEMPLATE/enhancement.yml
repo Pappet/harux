@@ -1,5 +1,5 @@
 name: ✨ Enhancement / Feature Request
-description: Suggest a new feature or improvement for HL7 Forge
+description: Suggest a new feature or improvement for Harux
 title: "[Enhancement]: "
 labels: ["enhancement"]
 assignees: []
@@ -8,13 +8,13 @@ body:
   - type: markdown
     attributes:
       value: |
-        Have an idea to make HL7 Forge better? We'd love to hear it!
+        Have an idea to make Harux better? We'd love to hear it!
 
   - type: dropdown
     id: component
     attributes:
       label: Related Component
-      description: Which area of HL7 Forge does this relate to?
+      description: Which area of Harux does this relate to?
       options:
         - MLLP Server (TCP listener, framing, ACK/NACK)
         - HL7 Parser (message parsing, validation, HL7 versions)
@@ -22,7 +22,7 @@ body:
         - WebSocket (real-time updates)
         - REST API (endpoints, data format)
         - Message Store (persistence, capacity, export)
-        - Configuration (hl7-forge.toml, environment variables)
+        - Configuration (harux.toml, environment variables)
         - Build / CI / Deployment
         - Documentation
         - New Component

@@ -1,5 +1,5 @@
 name: 🐛 Bug Report
-description: Report a bug or unexpected behavior in HL7 Forge
+description: Report a bug or unexpected behavior in Harux
 title: "[Bug]: "
 labels: ["bug", "triage"]
 assignees: []
@@ -14,7 +14,7 @@ body:
     id: component
     attributes:
       label: Affected Component
-      description: Which part of HL7 Forge is affected?
+      description: Which part of Harux is affected?
       options:
         - MLLP Server (TCP listener, framing, ACK/NACK)
         - HL7 Parser (message parsing, delimiter detection)
@@ -42,7 +42,7 @@ body:
       label: Steps to Reproduce
       description: How can we reproduce this behavior?
       placeholder: |
-        1. Start hl7-forge with default settings
+        1. Start Harux with default settings
         2. Send this HL7 message via netcat: ...
         3. Open Web UI at http://localhost:8080
         4. Click on the message
@@ -73,7 +73,7 @@ body:
       description: If applicable, provide a (de-identified!) sample HL7 message that triggers the bug.
       render: text
       placeholder: |
-        MSH|^~\&|SENDING|FACILITY|HL7FORGE|HL7FORGE|20240101120000||ADT^A01|MSG001|P|2.5
+        MSH|^~\&|SENDING|FACILITY|HARUX|HARUX|20240101120000||ADT^A01|MSG001|P|2.5
         PID|||12345||Doe^John||19900101|M
     validations:
       required: false
@@ -92,7 +92,7 @@ body:
   - type: input
     id: version
     attributes:
-      label: HL7 Forge Version
+      label: Harux Version
       description: Release version or commit hash
       placeholder: "v0.1.0 or commit abc1234"
     validations:

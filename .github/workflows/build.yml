@@ -40,15 +40,15 @@ jobs:
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: hl7-forge-windows
-          path: target/release/hl7-forge.exe
+          name: harux-windows
+          path: target/release/harux.exe
           retention-days: 30
 
       - name: Attach to Release
         if: github.event_name == 'release'
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh release upload ${{ github.ref_name }} target/release/hl7-forge.exe --clobber
+        run: gh release upload ${{ github.ref_name }} target/release/harux.exe --clobber
 
   build-macos:
     runs-on: macos-latest
@@ -80,8 +80,8 @@ jobs:
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: hl7-forge-macos-apple-silicon
-          path: target/release/hl7-forge
+          name: harux-macos-apple-silicon
+          path: target/release/harux
           retention-days: 30
 
       - name: Attach to Release
@@ -89,8 +89,8 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          cp target/release/hl7-forge hl7-forge-macos-apple-silicon
-          gh release upload ${{ github.ref_name }} hl7-forge-macos-apple-silicon --clobber
+          cp target/release/harux harux-macos-apple-silicon
+          gh release upload ${{ github.ref_name }} harux-macos-apple-silicon --clobber
 
   build-linux:
     runs-on: ubuntu-latest
@@ -122,8 +122,8 @@ jobs:
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: hl7-forge-linux
-          path: target/release/hl7-forge
+          name: harux-linux
+          path: target/release/harux
           retention-days: 30
 
       - name: Attach to Release
@@ -131,5 +131,5 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          cp target/release/hl7-forge hl7-forge-linux
-          gh release upload ${{ github.ref_name }} hl7-forge-linux --clobber
+          cp target/release/harux harux-linux
+          gh release upload ${{ github.ref_name }} harux-linux --clobber
