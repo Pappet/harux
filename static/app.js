@@ -489,7 +489,7 @@ function renderDetail() {
     }
 
     document.getElementById('detail-meta').textContent =
-        `${msg.source_addr} | ${msg.message_control_id} | v${msg.version}`;
+        `${msg.source_addr} | ${msg.message_control_id} | v${msg.version}${msg.charset ? ` | ${msg.charset}` : ''}`;
 
     const tagsContainer = document.getElementById('detail-tags');
 

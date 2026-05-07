@@ -28,6 +28,7 @@ and this project follows [Semantic Versioning](https://semver.org/lang/en/).
 - **Detail header layout** — message title, type description, and meta line are stacked vertically on the left; Bookmark button and tag controls are grouped on the right side of the header
 
 ### Fixed
+- **ISO 8859/1 Encoding** — implemented two-pass MLLP frame decoding with `encoding_rs` to respect the charset declared in MSH-18 before parsing, preventing corruption of extended Latin characters (#78)
 - **Missing CSS closing brace** — `.validation-seg` rule was missing its closing `}` in the merged main branch, causing the diff-view CSS block to be incorrectly scoped
 - **Message list date/time** — replaced `toLocaleTimeString` with manual formatting to ensure consistent `YYYY-MM-DD HH:mm:ss` display (#55)
 - **Message row layout shift** — added transparent left borders to all message rows to prevent horizontal shifting when a row is selected (#56)
@@ -38,6 +39,12 @@ and this project follows [Semantic Versioning](https://semver.org/lang/en/).
 - **Typical-segment badge colour for data type warnings** — `INVALID_DATATYPE` warnings no longer turn a segment badge yellow; only `MISSING_FIELD` triggers amber, keeping the badge colour semantics accurate (red = missing segment, amber = missing required field, blue = present)
 
 ### Commit History (chronological)
+
+#### 2026-05-08
+
+| Commit | Description |
+|--------|-------------|
+| [`a14f0de`](https://github.com/Pappet/harux/commit/a14f0de20053257e6b9cd2b9e6063fc8e2daf8dc) | `fix:` resolve ISO-8859-1 charset encoding issues (#78) |
 
 #### 2026-03-08
 
