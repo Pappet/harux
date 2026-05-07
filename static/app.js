@@ -118,7 +118,7 @@ function renderSourceLegend() {
 }
 
 // --- Session Persistence ---
-const SESSION_KEY = 'hl7forge_session';
+const SESSION_KEY = 'harux_session';
 const SESSION_STATE_KEY = SESSION_KEY + '_state';
 const sessionId = sessionStorage.getItem(SESSION_KEY) || crypto.randomUUID();
 sessionStorage.setItem(SESSION_KEY, sessionId);
@@ -839,7 +839,7 @@ async function exportMessages() {
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
         a.href = url;
-        a.download = `hl7-forge-export-${new Date().toISOString().slice(0, 19)}.json`;
+        a.download = `harux-export-${new Date().toISOString().slice(0, 19)}.json`;
         a.click();
         URL.revokeObjectURL(url);
     } catch (e) {
@@ -991,7 +991,7 @@ function copyRawMessage(el) {
 }
 
 // --- Panel Splitter ---
-const SPLITTER_STORAGE_KEY = 'hl7forge_splitter_width';
+const SPLITTER_STORAGE_KEY = 'harux_splitter_width';
 const SPLITTER_DEFAULT_RATIO = 0.55;
 const SPLITTER_MIN_PX = 300;
 const SPLITTER_MAX_RATIO = 0.80;

@@ -29,6 +29,7 @@ Harux is a **clinical tool with a wry mythological edge**. Documentation and UI 
 - **Occasionally mythological** — release names, error pages, or easter eggs may reference Roman augury. The core UI stays professional.
 
 ### Logo Concept
+
 **NOT FINAL**
 The Harux mark combines two motifs: **inspection** and **message dissection**.
 
@@ -167,6 +168,7 @@ Two tooltip styles are in use — choose based on the element:
 ### Detail Header Layout
 
 The `.detail-header` is a flex row:
+
 - **Left** (`.detail-header-info`, `flex: 1`): message title → type description → meta line — vertical stack
 - **Right** (`#detail-tags` / `.detail-tags-container`, `flex-shrink: 0`): Bookmark button, tag chips, Add tag input — right-aligned
 

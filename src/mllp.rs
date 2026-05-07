@@ -190,7 +190,7 @@ async fn handle_connection(
 
                     // Send NACK (AE = Application Error)
                     let nack =
-                        "MSH|^~\\&|HL7Forge|HL7Forge|||||ACK||P|2.5\rMSA|AE|UNKNOWN|Message parse error"
+                        "MSH|^~\\&|Harux|Harux|||||ACK||P|2.5\rMSA|AE|UNKNOWN|Message parse error"
                             .to_string();
 
                     // Store the failed message so it is visible in the UI

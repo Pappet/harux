@@ -1,8 +1,8 @@
-# HL7 Forge — Project Overview
+# Harux — Project Overview
 
 ## What Is It
 
-HL7 Forge is a high-performance MLLP server with a real-time web UI for inspecting HL7 v2.x messages. It is built in Rust and deployed as a single portable binary. It serves as a central service for interface integration teams to view and inspect MLLP messages in real time without local setup.
+Harux is a high-performance MLLP server with a real-time web UI for inspecting HL7 v2.x messages. It is built in Rust and deployed as a single portable binary. It serves as a central service for interface integration teams to view and inspect MLLP messages in real time without local setup.
 
 ## Project Status
 
@@ -75,7 +75,7 @@ Listens on a TCP port, handles MLLP framing (`0x0B` start, `0x1C 0x0D` end), par
 
 - **ACK storm prevention:** incoming messages with `message_type.starts_with("ACK")` are stored but never ACK'd back — prevents infinite ping-pong with Orchestra.
 - **DoS hardening:** 10 MB payload limit, 60s read timeout, 30s write timeout.
-- **Connection limits:** configurable `max_connections` via `hl7-forge.toml`.
+- **Connection limits:** configurable `max_connections` via `harux.toml`.
 
 ### Web Server (`src/web.rs`)
 
@@ -140,7 +140,7 @@ Key behaviors:
 ```
 src/
 ├── main.rs              # Entry point, tokio::select! over MLLP + Web tasks
-├── config.rs            # Configuration loading (hl7-forge.toml + env vars)
+├── config.rs            # Configuration loading (harux.toml + env vars)
 ├── mllp.rs              # TCP listener, MLLP framing, ACK/NACK dispatch
 ├── store.rs             # In-memory store with broadcast channel, dual eviction
 ├── web.rs               # Axum router, REST handlers, WebSocket handler

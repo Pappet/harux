@@ -1,4 +1,4 @@
-# HL7 Forge Configuration
+# Harux Configuration
 # All values shown below are the built-in defaults.
 # Uncomment and change only the settings you need.
 # Environment variables (MLLP_PORT, WEB_PORT, RUST_LOG) override this file.
@@ -9,7 +9,7 @@
 
 # [logging]
 # level = "info"
-# file = "logs/hl7-forge.log" # omit or empty = no file logging
+# file = "logs/harux.log" # omit or empty = no file logging
 # max_size_mb = 50            # rotate when file exceeds this size
 # max_files = 5               # keep at most N rotated files
 
