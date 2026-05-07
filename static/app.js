@@ -101,7 +101,7 @@ function renderSourceLegend() {
         const isDimmed = highlightedSource && highlightedSource !== label;
         const classes = `source-legend-item${isHighlighted ? ' highlighted' : ''}${isDimmed ? ' dimmed' : ''}`;
 
-        return `<span class="${classes}" onclick="toggleHighlightSource('${esc(label)}')">
+        return `<span class="${classes}" onclick="toggleHighlightSource('${escAttr(escJS(label))}')">
             <span class="source-dot" style="background:${color};box-shadow:0 0 4px ${color}"></span>
             ${esc(label)}
         </span>`;
@@ -498,7 +498,7 @@ function renderDetail() {
         <button class="${bookmarkBtnClass}" onclick="toggleBookmark('${msg.id}', event)" title="Toggle bookmark">${bookmarkBtnIcon} Bookmark</button>
         <button class="${pinBtnClass}" onclick="toggleDiffPin('${msg.id}')" title="Pin this message as the diff reference">${pinBtnLabel}</button>
     ` + (msg.tags || []).map(t =>
-        `<span class="msg-tag">${esc(t)} <span class="msg-tag-remove" onclick="removeTag('${msg.id}', '${escAttr(t)}')">×</span></span>`
+        `<span class="msg-tag">${esc(t)} <span class="msg-tag-remove" onclick="removeTag('${msg.id}', '${escAttr(escJS(t))}')">×</span></span>`
     ).join('') + `
         <div class="msg-tag-add">
             <input type="text" id="add-tag-input" placeholder="Add tag" onkeypress="if(event.key === 'Enter') addTag('${msg.id}', this.value)">
@@ -964,6 +964,15 @@ function escAttr(str) {
         .replace(/'/g, '&#x27;')
         .replace(/</g, '&lt;')
         .replace(/>/g, '&gt;');
+}
+
+function escJS(str) {
+    if (!str) return '';
+    return str.replace(/\\/g, '\\\\')
+        .replace(/'/g, '\\\'')
+        .replace(/"/g, '\\"')
+        .replace(/\n/g, '\\n')
+        .replace(/\r/g, '\\r');
 }
 
 // --- Copy to Clipboard ---
