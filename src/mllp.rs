@@ -155,11 +155,12 @@ async fn handle_connection(
         }
 
         // Process all complete MLLP frames in the buffer
-        while let Some((message, consumed)) = extract_mllp_frame(&accumulated) {
+        while let Some((message, consumed, charset)) = extract_mllp_frame(&accumulated) {
             stats.received.fetch_add(1, Ordering::Relaxed);
 
             match parse_message(&message, peer) {
                 Ok(mut msg) => {
+                    msg.charset = charset.clone();
                     stats.parsed_ok.fetch_add(1, Ordering::Relaxed);
 
                     // Never ACK an ACK — doing so would create an ACK storm
@@ -195,6 +196,7 @@ async fn handle_connection(
 
                     // Store the failed message so it is visible in the UI
                     let mut failed = Hl7Message::new_empty(message.clone(), peer.to_string());
+                    failed.charset = charset.clone();
                     failed.message_type = "UNKNOWN".to_string();
                     failed.parse_error = Some(e.clone());
                     failed.ack_response = Some(nack.clone());
@@ -220,8 +222,8 @@ async fn handle_connection(
 }
 
 /// Extract one complete MLLP frame from the buffer.
-/// Returns (message_content, bytes_consumed) or None if incomplete.
-fn extract_mllp_frame(buf: &[u8]) -> Option<(String, usize)> {
+/// Returns (message_content, bytes_consumed, detected_charset) or None if incomplete.
+fn extract_mllp_frame(buf: &[u8]) -> Option<(String, usize, Option<String>)> {
     // Find start byte
     let start_pos = buf.iter().position(|&b| b == MLLP_START)?;
 
@@ -229,12 +231,52 @@ fn extract_mllp_frame(buf: &[u8]) -> Option<(String, usize)> {
     for i in (start_pos + 1)..buf.len().saturating_sub(1) {
         if buf[i] == MLLP_END_1 && buf[i + 1] == MLLP_END_2 {
             let message_bytes = &buf[start_pos + 1..i];
-            let message = String::from_utf8_lossy(message_bytes).to_string();
-            return Some((message, i + 2));
+            
+            let charset = extract_msh18(message_bytes);
+            let message = if let Some(cs) = &charset {
+                let normalized = cs.replace("/", "-");
+                let label = if normalized.starts_with("8859-") {
+                    format!("iso-{}", normalized)
+                } else {
+                    normalized
+                };
+                if let Some(encoding) = encoding_rs::Encoding::for_label(label.as_bytes()) {
+                    let (cow, _, _) = encoding.decode(message_bytes);
+                    cow.into_owned()
+                } else {
+                    String::from_utf8_lossy(message_bytes).to_string()
+                }
+            } else {
+                String::from_utf8_lossy(message_bytes).to_string()
+            };
+
+            return Some((message, i + 2, charset));
         }
     }
 
     None // Incomplete frame
+}
+
+fn extract_msh18(bytes: &[u8]) -> Option<String> {
+    // Find the first \r to isolate the MSH segment
+    let end_of_msh = bytes.iter().position(|&b| b == b'\r').unwrap_or(bytes.len());
+    let msh_bytes = &bytes[..end_of_msh];
+
+    if msh_bytes.len() < 5 || &msh_bytes[0..3] != b"MSH" {
+        return None;
+    }
+
+    let separator = msh_bytes[3];
+    let mut parts = msh_bytes.split(|&b| b == separator);
+    // MSH-1 is the separator itself. MSH-2 is index 1.
+    // ...
+    // MSH-18 is index 17.
+    let msh18_part = parts.nth(17)?;
+
+    String::from_utf8(msh18_part.to_vec())
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
 }
 
 /// Wrap a message in MLLP framing
@@ -259,9 +301,27 @@ mod tests {
         frame.push(MLLP_END_1);
         frame.push(MLLP_END_2);
 
-        let (extracted, consumed) = extract_mllp_frame(&frame).unwrap();
+        let (extracted, consumed, charset) = extract_mllp_frame(&frame).unwrap();
         assert_eq!(extracted, msg);
         assert_eq!(consumed, frame.len());
+        assert_eq!(charset, None);
+    }
+
+    #[test]
+    fn test_extract_mllp_frame_latin1() {
+        // MSH|^~\&|...|8859/1
+        // We put Latin-1 byte \xE4 which is 'ä'
+        let msg_bytes = b"MSH|^~\\&||||||||||||||||8859/1\rPID|||\xE4\r".to_vec();
+        let mut frame = vec![MLLP_START];
+        frame.extend_from_slice(&msg_bytes);
+        frame.push(MLLP_END_1);
+        frame.push(MLLP_END_2);
+
+        let (extracted, consumed, charset) = extract_mllp_frame(&frame).unwrap();
+        assert_eq!(charset.as_deref(), Some("8859/1"));
+        assert_eq!(consumed, frame.len());
+        // \xE4 should be decoded as 'ä'
+        assert!(extracted.contains('ä'));
     }
 
     #[test]

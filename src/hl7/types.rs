@@ -34,6 +34,7 @@ pub struct Hl7Message {
     pub typical_segments: Vec<String>,
     /// Description for each typical segment name, from the embedded dictionary
     pub typical_segment_descriptions: HashMap<String, String>,
+    pub charset: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -102,6 +103,7 @@ impl Hl7Message {
             message_type_description: None,
             typical_segments: Vec::new(),
             typical_segment_descriptions: HashMap::new(),
+            charset: None,
         }
     }
 }
@@ -129,6 +131,7 @@ pub struct Hl7MessageSummary {
     /// True when at least one warning is a MISSING_SEGMENT error (badge turns red)
     pub has_segment_errors: bool,
     pub message_type_description: Option<String>,
+    pub charset: Option<String>,
 }
 
 impl From<&Hl7Message> for Hl7MessageSummary {
@@ -155,6 +158,7 @@ impl From<&Hl7Message> for Hl7MessageSummary {
                 .iter()
                 .any(|w| w.code == "MISSING_SEGMENT"),
             message_type_description: msg.message_type_description.clone(),
+            charset: msg.charset.clone(),
         }
     }
 }
