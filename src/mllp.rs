@@ -231,7 +231,7 @@ fn extract_mllp_frame(buf: &[u8]) -> Option<(String, usize, Option<String>)> {
     for i in (start_pos + 1)..buf.len().saturating_sub(1) {
         if buf[i] == MLLP_END_1 && buf[i + 1] == MLLP_END_2 {
             let message_bytes = &buf[start_pos + 1..i];
-            
+
             let charset = extract_msh18(message_bytes);
             let message = if let Some(cs) = &charset {
                 let normalized = cs.replace("/", "-");
@@ -259,7 +259,10 @@ fn extract_mllp_frame(buf: &[u8]) -> Option<(String, usize, Option<String>)> {
 
 fn extract_msh18(bytes: &[u8]) -> Option<String> {
     // Find the first \r to isolate the MSH segment
-    let end_of_msh = bytes.iter().position(|&b| b == b'\r').unwrap_or(bytes.len());
+    let end_of_msh = bytes
+        .iter()
+        .position(|&b| b == b'\r')
+        .unwrap_or(bytes.len());
     let msh_bytes = &bytes[..end_of_msh];
 
     if msh_bytes.len() < 5 || &msh_bytes[0..3] != b"MSH" {
