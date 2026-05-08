@@ -9,6 +9,12 @@ and this project follows [Semantic Versioning](https://semver.org/lang/en/).
 
 ## [Unreleased]
 
+---
+
+## [0.5.0] – 2026-05-08 – UI Redesign
+
+> Visual + IA refactor of the entire frontend (`CLAUDE_CODE_HANDOFF.md`, items 1–14, plus the chrome-cleanup follow-up). Six numbered phases shipped between #87 and #103 plus a chrome-cleanup pass in #105. Two perf wins (#102 parser allocations, #100 frontend search filter) round out the release. No protocol, API, or storage changes.
+
 ### Added
 - **Keyboard accessibility for message rows** — message list rows now support `Tab` focus navigation and `Enter`/`Space` to select; a 2px accent outline appears on `:focus-visible`. Improves screen-reader and keyboard-only workflows.
 - **ARIA labels on message rows + bookmark/pin controls** — each row exposes a synthesized `aria-label` (facility, type, time); the bookmark and pin controls were promoted from `<span>` to native `<button>` so they receive `Tab` focus, keyboard activation, and `aria-label`. Pin clicks now `stopPropagation` so the row beneath does not also select.
@@ -46,6 +52,29 @@ and this project follows [Semantic Versioning](https://semver.org/lang/en/).
 - **Diff tab affordance** — the right-aligned Diff tab gains a chevron icon and reads `Diff vs pinned` so it visually announces "leads to the comparison view" (#101)
 - **Source-chip count badge + tab font weight** — source-chip count badges get a tinted background so they pop against the chip body; active tabs render at `font-weight: 600` for a clearer reading rhythm (#101)
 
+### Commit History (chronological)
+
+#### 2026-05-08
+
+| Commit | Description |
+|--------|-------------|
+| `release/v0.5.0` (this commit) | `chore(release):` v0.5.0 — UI Redesign |
+| [`f99e426`](https://github.com/Pappet/harux/commit/f99e426) | `feat(ui):` chrome cleanup — topbar pills + inbox controls row (#105) |
+| [`3c64799`](https://github.com/Pappet/harux/commit/3c64799) | `perf(ui):` memoize parsed search query + short-circuit field checks (#104) |
+| [`6040b4c`](https://github.com/Pappet/harux/commit/6040b4c) | `perf(parser):` eliminate redundant Vec allocations in HL7 parsing (#102) |
+| [`9fa7368`](https://github.com/Pappet/harux/commit/9fa7368) | `feat(ui):` empty-state CLI hint + Phase 6 polish pass (#103) |
+| [`549919e`](https://github.com/Pappet/harux/commit/549919e) | `feat(ui):` detail panel restructure — header / tabs / validation / fields (#99) |
+| [`1ea2e2b`](https://github.com/Pappet/harux/commit/1ea2e2b) | `feat(ui):` always-visible source rail + 60-bar throughput band (#97) |
+| [`bdf92b0`](https://github.com/Pappet/harux/commit/bdf92b0) | `feat(ui):` two-line message rows with time grouping + ACK chips (#95) |
+| [`4426a61`](https://github.com/Pappet/harux/commit/4426a61) | `feat(ui):` top-bar health pills replace stats dots (#93) |
+| [`90c7520`](https://github.com/Pappet/harux/commit/90c7520) | `feat(a11y):` ARIA labels, native buttons, global focus ring (#91) |
+| [`c4089ad`](https://github.com/Pappet/harux/commit/c4089ad) | `feat(ui):` typography + color foundation for v0.5.0 redesign (#87) |
+| [`2569bd3`](https://github.com/Pappet/harux/commit/2569bd3) | `feat(a11y):` keyboard navigation for message list rows (#88) |
+| [`dfdda56`](https://github.com/Pappet/harux/commit/dfdda56) | `🛡️ Sentinel:` [HIGH] Fix Cross-Site Scripting (XSS) vulnerability (#85) |
+| [`e6fa07c`](https://github.com/Pappet/harux/commit/e6fa07c) | `fix:` resolve XSS vulnerability in HTML attribute injection (#84) |
+| [`1ac0b4e`](https://github.com/Pappet/harux/commit/1ac0b4e) | `⚡ Bolt:` optimize dictionary lookup to O(1) where possible (#83) |
+| [`47d1fa7`](https://github.com/Pappet/harux/commit/47d1fa7) | `fix:` resolve ISO-8859-1 charset encoding issues (#82) |
+
 ---
 
 ## [0.4.0] – 2026-03-08 – Message Analysis
@@ -76,23 +105,6 @@ and this project follows [Semantic Versioning](https://semver.org/lang/en/).
 - **Typical-segment badge colour for data type warnings** — `INVALID_DATATYPE` warnings no longer turn a segment badge yellow; only `MISSING_FIELD` triggers amber, keeping the badge colour semantics accurate (red = missing segment, amber = missing required field, blue = present)
 
 ### Commit History (chronological)
-
-#### 2026-05-08
-
-| Commit | Description |
-|--------|-------------|
-| [`e2d1501`](https://github.com/Pappet/harux/commit/e2d15015cabb8fe3b3c4fa7d8f9e68eda84677ff) | `perf(parser):` eliminate redundant Vec allocations in HL7 parsing |
-| [`c118c5e`](https://github.com/Pappet/harux/commit/c118c5e9cd4646d0c56067112c9e5be9513f39a9) | `perf(ui):` memoize parsed search query + short-circuit field checks (#100) |
-| [`b16cc5c`](https://github.com/Pappet/harux/commit/b16cc5c6f80ec3b93162137cb2688fbfa50a5b5c) | `feat(ui):` chrome cleanup — topbar pills + inbox controls row |
-| [`a14f0de`](https://github.com/Pappet/harux/commit/a14f0de20053257e6b9cd2b9e6063fc8e2daf8dc) | `fix:` resolve ISO-8859-1 charset encoding issues (#78) |
-| [`a6f1ce7`](https://github.com/Pappet/harux/commit/a6f1ce7e1e8deb5dbead3248e099423231b1cd09) | `feat(a11y):` ARIA labels, native buttons, global focus ring |
-| [`4554d90`](https://github.com/Pappet/harux/commit/4554d90488df2bd604f1017d024013cd08331f72) | `feat(ui):` top-bar health pills replace stats dots (#92) |
-| [`e658905`](https://github.com/Pappet/harux/commit/e658905e9faf919031eb267d8179c720d857e468) | `feat(ui):` two-line message rows with time grouping + ACK chips (#94) |
-| [`3e49222`](https://github.com/Pappet/harux/commit/3e49222e15524144e94b7c780cf1cb03e2a0b21a) | `feat(ui):` always-visible source rail + 60-bar throughput band (#96) |
-| [`c353274`](https://github.com/Pappet/harux/commit/c35327476243aecfd9c5763052ef890b6216fd38) | `feat(ui):` detail panel restructure — header / tabs / validation / fields (#98) |
-| [`eeb4fd2`](https://github.com/Pappet/harux/commit/eeb4fd208c2e8f15b462a65b66c2fef21d5cc7f8) | `feat(ui):` empty-state CLI hint + Phase 6 polish pass (#101) |
-| [`1993bcb`](https://github.com/Pappet/harux/commit/1993bcb07709460bce5d468c046be6e2f1db533c) | `feat(a11y):` keyboard navigation for message list rows |
-| [`f5c650a`](https://github.com/Pappet/harux/commit/f5c650aa025132a5a6e660092957fd3ad69099ec) | `feat(ui):` typography + color foundation for v0.5.0 redesign (#86) |
 
 #### 2026-03-08
 
@@ -330,7 +342,9 @@ and this project follows [Semantic Versioning](https://semver.org/lang/en/).
 
 ---
 
-[Unreleased]: https://github.com/Pappet/harux/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/Pappet/harux/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/Pappet/harux/compare/v0.4.0...v0.5.0
+[0.4.0]: https://github.com/Pappet/harux/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/Pappet/harux/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/Pappet/harux/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/Pappet/harux/releases/tag/v0.1.0
