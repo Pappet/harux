@@ -870,20 +870,25 @@ body.resizing * {
     opacity: 0.6;
 }
 
-.detail-tags-row {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 6px;
-    align-items: center;
-    margin-top: 10px;
-    min-height: 22px;
-}
-
 .detail-actions {
     display: flex;
     gap: 6px;
     align-items: center;
+    flex-wrap: wrap;
+    justify-content: flex-end;
     flex-shrink: 0;
+    max-width: 480px;
+}
+
+.detail-tags-inline {
+    display: inline-flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 6px;
+}
+
+.detail-tags-inline:empty {
+    display: none;
 }
 
 .detail-actions .action-btn {

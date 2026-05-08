@@ -763,8 +763,6 @@ function resetDetailHeader() {
     if (metaEl) metaEl.innerHTML = '';
     const actionsEl = document.getElementById('detail-actions');
     if (actionsEl) actionsEl.innerHTML = '';
-    const tagsEl = document.getElementById('detail-tags');
-    if (tagsEl) tagsEl.innerHTML = '';
     const segBadge = document.getElementById('tab-segments-badge');
     if (segBadge) segBadge.style.display = 'none';
 }
@@ -845,27 +843,28 @@ function renderDetail() {
     // Metadata row.
     document.getElementById('detail-meta').innerHTML = buildDetailMeta(msg);
 
-    // Actions: bookmark + pin.
+    // Actions row: tag chips + add-tag input + Bookmark + Pin diff (all on the right).
     const isPinned = diffPinnedMessage && diffPinnedMessage.id === msg.id;
     const bookmarkClass = msg.bookmarked ? 'action-btn bookmark active' : 'action-btn bookmark';
     const bookmarkIcon = msg.bookmarked ? '★' : '☆';
     const bookmarkLabel = msg.bookmarked ? 'Bookmarked' : 'Bookmark';
     const pinClass = isPinned ? 'action-btn pin active' : 'action-btn pin';
     const pinLabel = isPinned ? '📌 Pinned' : '📌 Pin diff';
-    document.getElementById('detail-actions').innerHTML = `
-        <button class="${bookmarkClass}" aria-label="${bookmarkLabel}" onclick="toggleBookmark('${msg.id}', event)" title="Toggle bookmark">${bookmarkIcon} ${bookmarkLabel}</button>
-        <button class="${pinClass}" aria-label="${pinLabel}" onclick="toggleDiffPin('${msg.id}', event)" title="Pin this message as the diff reference">${pinLabel}</button>
-    `;
 
-    // Tags row.
-    const tagsRow = document.getElementById('detail-tags');
-    tagsRow.innerHTML = (msg.tags || []).map(t =>
+    const tagChipsHtml = (msg.tags || []).map(t =>
         `<span class="msg-tag">${esc(t)} <span class="msg-tag-remove" onclick="removeTag('${msg.id}', '${escAttr(escJS(t))}')">×</span></span>`
-    ).join('') + `
+    ).join('');
+    const tagAddHtml = `
         <div class="msg-tag-add">
             <input type="text" id="add-tag-input" placeholder="Add tag" onkeypress="if(event.key === 'Enter') addTag('${msg.id}', this.value)">
             <button onclick="addTag('${msg.id}', document.getElementById('add-tag-input').value)">+</button>
         </div>
+    `;
+
+    document.getElementById('detail-actions').innerHTML = `
+        <div id="detail-tags" class="detail-tags-inline">${tagChipsHtml}${tagAddHtml}</div>
+        <button class="${bookmarkClass}" aria-label="${bookmarkLabel}" onclick="toggleBookmark('${msg.id}', event)" title="Toggle bookmark">${bookmarkIcon} ${bookmarkLabel}</button>
+        <button class="${pinClass}" aria-label="${pinLabel}" onclick="toggleDiffPin('${msg.id}', event)" title="Pin this message as the diff reference">${pinLabel}</button>
     `;
 
     // Segments tab badge — segment count.
