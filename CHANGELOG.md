@@ -268,6 +268,20 @@ and this project follows [Semantic Versioning](https://semver.org/lang/en/).
 
 ---
 
+| [`47d1fa7`](https://github.com/Pappet/harux/commit/47d1fa7) | `security:` fix XSS vulnerability in JS event handlers |
+
+---
+
+## [0.3.0] – 2026-03-01 – UI Enhancements & Security Fixes
+
+> This release includes a critical security fix for a Cross-Site Scripting (XSS) vulnerability in the UI.
+
+### Added
+### Fixed
+- Fixed a Cross-Site Scripting (XSS) vulnerability in the UI caused by improper escaping of user input in JavaScript event handlers.
+
+---
+
 [Unreleased]: https://github.com/Pappet/harux/compare/v0.3.0...HEAD
 [0.3.0]: https://github.com/Pappet/harux/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/Pappet/harux/compare/v0.1.0...v0.2.0
