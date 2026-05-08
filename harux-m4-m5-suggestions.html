@@ -1,0 +1,1547 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Harux — Milestone 4 & 5 design suggestions</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg-0: #0b0d12;
+    --bg-1: #131620;
+    --bg-2: #1b1f2c;
+    --bg-3: #242938;
+    --bg-4: #2e3447;
+    --line: #262b3a;
+    --line-strong: #343a4f;
+    --fg-0: #e9ebf2;
+    --fg-1: #aab0c2;
+    --fg-2: #6e7388;
+    --fg-3: #4a4f64;
+    --accent: #7aa2ff;
+    --accent-2: #5a82e8;
+    --accent-bg: rgba(122,162,255,0.10);
+    --ok: #4fb98a;
+    --warn: #e5a54b;
+    --err: #ea6363;
+    --info: #6cc6e0;
+    --purple: #c78cff;
+    --mono: 'JetBrains Mono', ui-monospace, monospace;
+    --sans: 'Inter', system-ui, sans-serif;
+    --radius: 8px;
+  }
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body {
+    font-family: var(--sans);
+    background: var(--bg-0);
+    color: var(--fg-0);
+    font-size: 13px;
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+  }
+  .page {
+    max-width: 1240px;
+    margin: 0 auto;
+    padding: 48px 32px 96px;
+  }
+  .header {
+    margin-bottom: 48px;
+    padding-bottom: 24px;
+    border-bottom: 1px solid var(--line);
+  }
+  .eyebrow {
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--accent);
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    margin-bottom: 8px;
+  }
+  h1 {
+    font-size: 28px;
+    font-weight: 700;
+    letter-spacing: -0.02em;
+    margin-bottom: 10px;
+  }
+  .lede {
+    color: var(--fg-1);
+    font-size: 14px;
+    max-width: 720px;
+  }
+
+  /* Section */
+  .milestone {
+    margin-bottom: 64px;
+  }
+  .milestone-head {
+    display: flex;
+    align-items: baseline;
+    gap: 12px;
+    margin-bottom: 6px;
+  }
+  .milestone-tag {
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--accent);
+    background: var(--accent-bg);
+    border: 1px solid rgba(122,162,255,0.3);
+    padding: 2px 8px;
+    border-radius: 4px;
+  }
+  .milestone-title { font-size: 20px; font-weight: 600; letter-spacing: -0.01em; }
+  .milestone-desc { color: var(--fg-2); font-size: 13px; margin-bottom: 28px; }
+
+  .idea {
+    margin-bottom: 36px;
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    background: var(--bg-1);
+    overflow: hidden;
+  }
+  .idea-head {
+    padding: 16px 22px;
+    border-bottom: 1px solid var(--line);
+    display: flex;
+    align-items: center;
+    gap: 14px;
+  }
+  .idea-num {
+    width: 28px; height: 28px;
+    display: grid; place-items: center;
+    background: var(--bg-3);
+    border-radius: 6px;
+    font-family: var(--mono);
+    font-weight: 600;
+    font-size: 12px;
+    color: var(--fg-1);
+    flex-shrink: 0;
+  }
+  .idea-title { font-size: 15px; font-weight: 600; }
+  .idea-sub { color: var(--fg-2); font-size: 12px; margin-left: auto; }
+
+  .idea-body { padding: 22px; }
+  .idea-rationale {
+    color: var(--fg-1);
+    font-size: 13px;
+    margin-bottom: 18px;
+    max-width: 760px;
+  }
+  .idea-rationale code {
+    font-family: var(--mono);
+    background: var(--bg-2);
+    padding: 1px 5px;
+    border-radius: 3px;
+    font-size: 11px;
+  }
+
+  /* Mock UI components */
+  .mock {
+    background: var(--bg-0);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    overflow: hidden;
+  }
+
+  /* Mock — replay drawer */
+  .replay-drawer {
+    padding: 18px;
+  }
+  .replay-head {
+    display: flex; align-items: center; justify-content: space-between;
+    margin-bottom: 14px;
+  }
+  .replay-head h3 { font-size: 14px; }
+  .replay-head .x {
+    color: var(--fg-2); cursor: pointer;
+    width: 24px; height: 24px;
+    display: grid; place-items: center;
+    border-radius: 4px;
+  }
+  .replay-head .x:hover { background: var(--bg-3); color: var(--fg-0); }
+
+  .replay-source {
+    background: var(--bg-2);
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    padding: 10px 12px;
+    margin-bottom: 14px;
+    font-size: 12px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  .replay-source .label {
+    font-size: 10px;
+    text-transform: uppercase;
+    color: var(--fg-3);
+    letter-spacing: 0.06em;
+  }
+  .replay-source .v { font-family: var(--mono); color: var(--fg-0); }
+
+  .field-group { margin-bottom: 12px; }
+  .field-label {
+    display: block;
+    font-size: 11px;
+    color: var(--fg-2);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    margin-bottom: 6px;
+  }
+  .field-input, .field-select {
+    width: 100%;
+    height: 32px;
+    padding: 0 10px;
+    background: var(--bg-2);
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    color: var(--fg-0);
+    font: inherit;
+    font-family: var(--mono);
+    font-size: 12px;
+    outline: none;
+  }
+  .field-input:focus, .field-select:focus { border-color: var(--accent-2); }
+
+  .target-row {
+    display: grid;
+    grid-template-columns: 1fr 110px;
+    gap: 8px;
+  }
+
+  .preset-pills {
+    display: flex; gap: 6px; flex-wrap: wrap;
+    margin-bottom: 12px;
+  }
+  .preset-pill {
+    padding: 4px 10px;
+    background: var(--bg-2);
+    border: 1px solid var(--line);
+    border-radius: 999px;
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--fg-1);
+    cursor: pointer;
+  }
+  .preset-pill.active {
+    background: var(--accent-bg);
+    color: var(--accent);
+    border-color: rgba(122,162,255,0.4);
+  }
+
+  .toggle-row {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 10px 12px;
+    background: var(--bg-2);
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    margin-bottom: 8px;
+    font-size: 12px;
+  }
+  .toggle-row .desc { color: var(--fg-2); font-size: 11px; margin-top: 2px; }
+  .switch {
+    width: 32px; height: 18px;
+    background: var(--bg-3);
+    border-radius: 999px;
+    position: relative;
+    cursor: pointer;
+    flex-shrink: 0;
+  }
+  .switch::after {
+    content: ''; position: absolute;
+    top: 2px; left: 2px;
+    width: 14px; height: 14px;
+    background: var(--fg-2);
+    border-radius: 50%;
+    transition: all .15s;
+  }
+  .switch.on { background: rgba(122,162,255,0.25); }
+  .switch.on::after { left: 16px; background: var(--accent); }
+
+  .replay-footer {
+    display: flex; gap: 8px;
+    margin-top: 18px;
+    padding-top: 14px;
+    border-top: 1px solid var(--line);
+  }
+  .btn {
+    height: 32px;
+    padding: 0 14px;
+    border: 1px solid var(--line);
+    background: var(--bg-2);
+    color: var(--fg-0);
+    font: inherit;
+    font-size: 12px;
+    border-radius: 6px;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .btn:hover { background: var(--bg-3); }
+  .btn.primary {
+    background: var(--accent);
+    border-color: var(--accent);
+    color: #0b0d12;
+    font-weight: 600;
+  }
+  .btn.primary:hover { background: #8db0ff; }
+  .btn.ghost { background: transparent; }
+  .btn.danger { color: var(--err); border-color: rgba(234,99,99,0.3); }
+
+  /* Result banner */
+  .result-banner {
+    margin-top: 14px;
+    padding: 10px 12px;
+    border-radius: 6px;
+    font-size: 12px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  .result-banner.ok {
+    background: rgba(79,185,138,0.08);
+    border: 1px solid rgba(79,185,138,0.3);
+    color: var(--ok);
+  }
+  .result-banner .latency {
+    margin-left: auto;
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--fg-2);
+  }
+
+  /* Mock — generator */
+  .generator {
+    display: grid;
+    grid-template-columns: 220px 1fr;
+    min-height: 420px;
+  }
+  .gen-sidebar {
+    background: var(--bg-1);
+    border-right: 1px solid var(--line);
+    padding: 12px 0;
+  }
+  .gen-section-title {
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--fg-3);
+    padding: 6px 16px;
+    margin-top: 8px;
+  }
+  .gen-template {
+    padding: 8px 16px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 12px;
+    color: var(--fg-1);
+  }
+  .gen-template:hover { background: var(--bg-2); }
+  .gen-template.active {
+    background: var(--bg-3);
+    color: var(--fg-0);
+    border-left: 2px solid var(--accent);
+    padding-left: 14px;
+  }
+  .gen-template .code {
+    font-family: var(--mono);
+    color: var(--accent);
+    font-weight: 600;
+    font-size: 11px;
+  }
+  .gen-template .desc {
+    color: var(--fg-2);
+    font-size: 10px;
+  }
+
+  .gen-main {
+    display: grid;
+    grid-template-rows: auto 1fr auto;
+  }
+  .gen-toolbar {
+    padding: 10px 16px;
+    border-bottom: 1px solid var(--line);
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+  .gen-tabs {
+    display: flex;
+    gap: 0;
+  }
+  .gen-tab {
+    padding: 6px 12px;
+    font-size: 12px;
+    color: var(--fg-2);
+    border: none;
+    background: none;
+    border-bottom: 2px solid transparent;
+    cursor: pointer;
+    font: inherit;
+    margin-bottom: -10px;
+    padding-bottom: 12px;
+  }
+  .gen-tab.active { color: var(--accent); border-bottom-color: var(--accent); }
+  .gen-tab:hover { color: var(--fg-0); }
+  .gen-toolbar .right { margin-left: auto; display: flex; gap: 6px; align-items: center; }
+
+  .gen-form {
+    padding: 16px;
+    overflow-y: auto;
+  }
+  .gen-segment-card {
+    margin-bottom: 14px;
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    overflow: hidden;
+  }
+  .gen-seg-head {
+    background: var(--bg-2);
+    padding: 8px 12px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    border-bottom: 1px solid var(--line);
+  }
+  .gen-seg-head .name {
+    font-family: var(--mono);
+    font-weight: 700;
+    color: var(--accent);
+  }
+  .gen-seg-head .desc { color: var(--fg-2); font-size: 11px; }
+  .gen-seg-fields {
+    display: grid;
+    grid-template-columns: 100px 1fr;
+    background: var(--bg-1);
+  }
+  .gen-seg-fields > div {
+    padding: 6px 12px;
+    border-bottom: 1px solid var(--line);
+    font-size: 12px;
+  }
+  .gen-seg-fields > div:nth-last-child(-n+2) { border-bottom: none; }
+  .gen-seg-fields .k {
+    font-family: var(--mono);
+    color: var(--fg-2);
+    font-size: 11px;
+    background: var(--bg-1);
+  }
+  .gen-seg-fields .v {
+    font-family: var(--mono);
+    color: var(--fg-0);
+    background: var(--bg-1);
+  }
+  .gen-seg-fields .v input {
+    width: 100%;
+    background: transparent;
+    border: 1px solid transparent;
+    color: var(--fg-0);
+    font: inherit;
+    font-family: var(--mono);
+    font-size: 12px;
+    padding: 2px 6px;
+    border-radius: 3px;
+    margin: -2px -6px;
+    outline: none;
+  }
+  .gen-seg-fields .v input:hover { border-color: var(--line); background: var(--bg-2); }
+  .gen-seg-fields .v input:focus { border-color: var(--accent-2); background: var(--bg-2); }
+  .gen-seg-fields .v.dyn input { color: var(--purple); }
+  .gen-seg-fields .v .dyn-tag {
+    display: inline-block;
+    margin-left: 6px;
+    font-family: var(--mono);
+    font-size: 10px;
+    color: var(--purple);
+    background: rgba(199,140,255,0.1);
+    border: 1px solid rgba(199,140,255,0.3);
+    padding: 0 5px;
+    border-radius: 3px;
+  }
+
+  .gen-footer {
+    padding: 12px 16px;
+    background: var(--bg-1);
+    border-top: 1px solid var(--line);
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  .gen-footer .target {
+    flex: 1;
+    font-family: var(--mono);
+    font-size: 12px;
+    color: var(--fg-1);
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .gen-footer .target .dot {
+    width: 8px; height: 8px; border-radius: 50%;
+    background: var(--ok);
+    box-shadow: 0 0 6px var(--ok);
+  }
+
+  /* Mock — editor */
+  .editor-wrap {
+    display: grid;
+    grid-template-rows: auto 1fr auto;
+    min-height: 380px;
+  }
+  .editor-toolbar {
+    padding: 10px 16px;
+    background: var(--bg-1);
+    border-bottom: 1px solid var(--line);
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  .editor-toolbar .breadcrumb {
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--fg-2);
+  }
+  .editor-toolbar .breadcrumb b { color: var(--fg-0); }
+  .editor-toolbar .right { margin-left: auto; display: flex; gap: 6px; }
+  .editor-status {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 11px;
+    color: var(--ok);
+    padding: 2px 8px;
+    background: rgba(79,185,138,0.08);
+    border: 1px solid rgba(79,185,138,0.3);
+    border-radius: 999px;
+  }
+  .editor-status.warn {
+    color: var(--warn);
+    background: rgba(229,165,75,0.08);
+    border-color: rgba(229,165,75,0.3);
+  }
+
+  .editor-body {
+    display: grid;
+    grid-template-columns: 36px 1fr 220px;
+    background: var(--bg-0);
+    font-family: var(--mono);
+    font-size: 12px;
+    line-height: 1.7;
+  }
+  .gutter {
+    background: var(--bg-1);
+    color: var(--fg-3);
+    text-align: right;
+    padding: 12px 8px;
+    user-select: none;
+    border-right: 1px solid var(--line);
+  }
+  .gutter > div { height: 1.7em; }
+  .gutter .marker {
+    color: var(--warn);
+    font-weight: 700;
+  }
+  .code-area {
+    padding: 12px 14px;
+    overflow-x: auto;
+    white-space: pre;
+    color: var(--fg-0);
+    position: relative;
+  }
+  .seg-name { color: var(--accent); font-weight: 600; }
+  .sep { color: var(--fg-3); }
+  .field-val { color: var(--fg-0); }
+  .field-empty { color: var(--fg-3); font-style: italic; }
+  .underline-warn {
+    text-decoration: underline wavy var(--warn);
+    text-underline-offset: 3px;
+  }
+
+  .inspector {
+    background: var(--bg-1);
+    border-left: 1px solid var(--line);
+    padding: 12px 14px;
+    font-family: var(--sans);
+  }
+  .inspector h4 {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--fg-3);
+    margin-bottom: 8px;
+  }
+  .inspector .field-name {
+    font-family: var(--mono);
+    font-weight: 600;
+    color: var(--accent);
+    font-size: 13px;
+    margin-bottom: 2px;
+  }
+  .inspector .field-desc {
+    color: var(--fg-1);
+    font-size: 12px;
+    margin-bottom: 12px;
+  }
+  .inspector .meta {
+    font-size: 11px;
+    color: var(--fg-2);
+    line-height: 1.7;
+  }
+  .inspector .meta b { color: var(--fg-0); font-weight: 500; }
+  .inspector .hint {
+    margin-top: 12px;
+    padding: 8px 10px;
+    background: rgba(229,165,75,0.05);
+    border: 1px solid rgba(229,165,75,0.25);
+    border-radius: 5px;
+    font-size: 11px;
+    color: var(--warn);
+    line-height: 1.4;
+  }
+
+  /* Mock — persistence settings */
+  .settings-card {
+    padding: 18px 20px;
+  }
+  .setting-row {
+    display: grid;
+    grid-template-columns: 200px 1fr;
+    gap: 16px;
+    padding: 14px 0;
+    border-bottom: 1px solid var(--line);
+    align-items: start;
+  }
+  .setting-row:last-child { border-bottom: none; }
+  .setting-row .k { font-size: 13px; color: var(--fg-0); font-weight: 500; }
+  .setting-row .k .desc { color: var(--fg-2); font-size: 11px; font-weight: 400; margin-top: 3px; }
+  .setting-row .v { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+
+  .seg-control {
+    display: inline-flex;
+    background: var(--bg-2);
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    overflow: hidden;
+  }
+  .seg-control button {
+    background: transparent;
+    border: none;
+    padding: 6px 12px;
+    color: var(--fg-1);
+    font: inherit;
+    font-size: 12px;
+    cursor: pointer;
+  }
+  .seg-control button.active { background: var(--bg-4); color: var(--fg-0); }
+
+  .stat-strip {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 10px;
+    margin-bottom: 18px;
+  }
+  .stat-card {
+    background: var(--bg-2);
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    padding: 10px 12px;
+  }
+  .stat-card .l {
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--fg-3);
+    margin-bottom: 4px;
+  }
+  .stat-card .v {
+    font-family: var(--mono);
+    font-size: 16px;
+    font-weight: 600;
+    color: var(--fg-0);
+  }
+  .stat-card .v.ok { color: var(--ok); }
+  .stat-card .v.warn { color: var(--warn); }
+
+  .retention-viz {
+    height: 28px;
+    background: var(--bg-2);
+    border: 1px solid var(--line);
+    border-radius: 4px;
+    overflow: hidden;
+    position: relative;
+    margin-top: 8px;
+  }
+  .retention-viz .filled {
+    height: 100%;
+    width: 62%;
+    background: linear-gradient(90deg, var(--accent-2), var(--accent));
+    border-right: 2px solid var(--warn);
+  }
+  .retention-viz .label {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    padding: 0 10px;
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--fg-0);
+    justify-content: space-between;
+  }
+
+  /* Export modal */
+  .export-modal {
+    padding: 20px;
+  }
+  .export-options {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 8px;
+    margin-bottom: 18px;
+  }
+  .export-opt {
+    padding: 14px;
+    background: var(--bg-2);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    cursor: pointer;
+    text-align: left;
+    transition: all .12s;
+  }
+  .export-opt:hover { border-color: var(--line-strong); }
+  .export-opt.selected {
+    border-color: var(--accent);
+    background: var(--accent-bg);
+  }
+  .export-opt .ext {
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--accent);
+    margin-bottom: 4px;
+    font-weight: 600;
+  }
+  .export-opt .name { font-size: 13px; font-weight: 500; margin-bottom: 2px; }
+  .export-opt .desc { font-size: 11px; color: var(--fg-2); line-height: 1.4; }
+
+  .export-summary {
+    background: var(--bg-2);
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    padding: 12px 14px;
+    font-size: 12px;
+    color: var(--fg-1);
+    line-height: 1.6;
+  }
+  .export-summary code {
+    font-family: var(--mono);
+    color: var(--fg-0);
+    background: var(--bg-1);
+    padding: 1px 5px;
+    border-radius: 3px;
+  }
+
+  /* Connection picker */
+  .conn-list {
+    background: var(--bg-1);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    overflow: hidden;
+  }
+  .conn-row {
+    display: grid;
+    grid-template-columns: 12px 1fr auto auto;
+    gap: 14px;
+    padding: 12px 16px;
+    align-items: center;
+    border-bottom: 1px solid var(--line);
+    cursor: pointer;
+  }
+  .conn-row:last-child { border-bottom: none; }
+  .conn-row:hover { background: var(--bg-2); }
+  .conn-row.default { background: rgba(122,162,255,0.04); }
+  .conn-row .light {
+    width: 8px; height: 8px;
+    border-radius: 50%;
+  }
+  .conn-row .light.ok { background: var(--ok); box-shadow: 0 0 6px var(--ok); }
+  .conn-row .light.idle { background: var(--fg-3); }
+  .conn-row .light.err { background: var(--err); box-shadow: 0 0 6px var(--err); }
+  .conn-row .meta {
+    display: flex; flex-direction: column;
+  }
+  .conn-row .name { font-weight: 500; font-size: 13px; }
+  .conn-row .addr {
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--fg-2);
+    margin-top: 2px;
+  }
+  .conn-row .latency {
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--fg-2);
+  }
+  .conn-row .badge {
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--accent);
+    background: var(--accent-bg);
+    padding: 2px 6px;
+    border-radius: 3px;
+  }
+
+  /* Notification banner */
+  .notif-mock {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 12px 14px;
+    background: var(--bg-2);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    box-shadow: 0 8px 24px rgba(0,0,0,0.3);
+    max-width: 360px;
+  }
+  .notif-mock .icon {
+    width: 32px; height: 32px;
+    border-radius: 6px;
+    background: var(--accent-bg);
+    display: grid; place-items: center;
+    color: var(--accent);
+    flex-shrink: 0;
+  }
+  .notif-mock .body { flex: 1; min-width: 0; }
+  .notif-mock .title { font-size: 12px; font-weight: 600; margin-bottom: 1px; }
+  .notif-mock .sub { font-size: 11px; color: var(--fg-2); font-family: var(--mono); }
+
+  /* Annotations */
+  .annotations {
+    background: var(--bg-1);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    padding: 14px 18px;
+    margin-top: 16px;
+  }
+  .annotations ul { list-style: none; }
+  .annotations li {
+    font-size: 12px;
+    color: var(--fg-1);
+    padding: 4px 0 4px 18px;
+    position: relative;
+  }
+  .annotations li::before {
+    content: '→';
+    position: absolute;
+    left: 0;
+    color: var(--accent);
+  }
+  .annotations li b { color: var(--fg-0); font-weight: 500; }
+  .annotations li code {
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--fg-0);
+    background: var(--bg-2);
+    padding: 1px 5px;
+    border-radius: 3px;
+  }
+
+  .icon-i { width: 14px; height: 14px; flex-shrink: 0; }
+
+  .twocol {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 16px;
+  }
+  @media (max-width: 980px) {
+    .twocol { grid-template-columns: 1fr; }
+    .generator { grid-template-columns: 1fr; }
+    .editor-body { grid-template-columns: 30px 1fr; }
+    .editor-body .inspector { display: none; }
+  }
+</style>
+</head>
+<body>
+
+<div class="page">
+
+  <div class="header">
+    <div class="eyebrow">Harux · design exploration</div>
+    <h1>Milestones 4 & 5 — workflow, replay, persistence</h1>
+    <p class="lede">Concrete UI suggestions for the next two milestones. Each section: a working mock, the rationale, and bullet notes on the data wiring. Mocks are static — they show the shape, not the behavior.</p>
+  </div>
+
+  <!-- ─── M4 ─────────────────────────────────────────────────────── -->
+  <div class="milestone">
+    <div class="milestone-head">
+      <span class="milestone-tag">M4</span>
+      <span class="milestone-title">Workflow & Testing</span>
+    </div>
+    <div class="milestone-desc">Send · edit · replay against Orchestra (or any MLLP target) without leaving the inspector.</div>
+
+    <!-- Idea 1: Replay drawer -->
+    <div class="idea">
+      <div class="idea-head">
+        <div class="idea-num">1</div>
+        <div class="idea-title">Replay drawer — one-click resend with knobs</div>
+        <div class="idea-sub">addresses: replay task</div>
+      </div>
+      <div class="idea-body">
+        <div class="idea-rationale">
+          A right-side drawer that opens from a "Replay…" button in the detail header. The source message is locked at top (you can't accidentally replay the wrong one). Target picker is a dropdown of saved connections, not a free-form input — typing host:port every time is friction. Live ACK/latency feedback shown inline after send.
+        </div>
+
+        <div class="twocol">
+          <div class="mock replay-drawer">
+            <div class="replay-head">
+              <h3>Replay message</h3>
+              <div class="x">✕</div>
+            </div>
+
+            <div class="replay-source">
+              <span class="label">source</span>
+              <span class="v">ADT^A01</span>
+              <span style="color:var(--fg-3)">·</span>
+              <span class="v" style="color:var(--fg-1)">Romero, Marcus</span>
+              <span style="color:var(--fg-3)">·</span>
+              <span class="v">MSG00042185</span>
+            </div>
+
+            <div class="field-group">
+              <label class="field-label">Target connection</label>
+              <select class="field-select">
+                <option>Orchestra · staging · 10.4.1.22:6661</option>
+                <option>Orchestra · prod · orchestra.local:6661</option>
+                <option>localhost:2575 (self)</option>
+                <option>+ Add new target…</option>
+              </select>
+            </div>
+
+            <div class="field-group">
+              <label class="field-label">Modify before sending</label>
+              <div class="preset-pills">
+                <span class="preset-pill active">As-is</span>
+                <span class="preset-pill">Refresh MSH-7 (timestamp)</span>
+                <span class="preset-pill">New MSH-10 (control ID)</span>
+                <span class="preset-pill">Rewrite MRN…</span>
+              </div>
+            </div>
+
+            <div class="toggle-row">
+              <div>
+                <div>Wait for ACK</div>
+                <div class="desc">Capture the response, show inline.</div>
+              </div>
+              <div class="switch on"></div>
+            </div>
+            <div class="toggle-row">
+              <div>
+                <div>Tag replay in inbox</div>
+                <div class="desc">Adds <code>replay</code> + reference link.</div>
+              </div>
+              <div class="switch on"></div>
+            </div>
+
+            <div class="result-banner ok">
+              <svg class="icon-i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 6L9 17l-5-5"/></svg>
+              <span>Replay sent · <strong style="color:var(--fg-0)">AA</strong> received from staging</span>
+              <span class="latency">42 ms</span>
+            </div>
+
+            <div class="replay-footer">
+              <button class="btn ghost">Cancel</button>
+              <button class="btn">Send & open response</button>
+              <button class="btn primary" style="margin-left:auto">
+                <svg class="icon-i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="22 2 11 13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
+                Replay
+              </button>
+            </div>
+          </div>
+
+          <div>
+            <div class="conn-list">
+              <div style="padding:10px 16px; font-size:10px; text-transform:uppercase; letter-spacing:0.08em; color:var(--fg-3); border-bottom:1px solid var(--line); background:var(--bg-2)">Saved targets · settings</div>
+              <div class="conn-row default">
+                <span class="light ok"></span>
+                <div class="meta">
+                  <span class="name">Orchestra · staging</span>
+                  <span class="addr">10.4.1.22:6661 · TLS</span>
+                </div>
+                <span class="latency">~38ms</span>
+                <span class="badge">default</span>
+              </div>
+              <div class="conn-row">
+                <span class="light idle"></span>
+                <div class="meta">
+                  <span class="name">Orchestra · prod</span>
+                  <span class="addr">orchestra.local:6661 · TLS</span>
+                </div>
+                <span class="latency">~52ms</span>
+                <span></span>
+              </div>
+              <div class="conn-row">
+                <span class="light err"></span>
+                <div class="meta">
+                  <span class="name">Mirth (lab)</span>
+                  <span class="addr">mirth.dev:6660</span>
+                </div>
+                <span class="latency" style="color:var(--err)">refused</span>
+                <span></span>
+              </div>
+              <div class="conn-row">
+                <span class="light ok"></span>
+                <div class="meta">
+                  <span class="name">Self loopback</span>
+                  <span class="addr">localhost:2575</span>
+                </div>
+                <span class="latency">~1ms</span>
+                <span></span>
+              </div>
+            </div>
+            <div class="annotations">
+              <ul>
+                <li><b>Saved targets</b> live in <code>harux.toml</code> under <code>[targets.orchestra-staging]</code> — same shape as Postman environments.</li>
+                <li>Health check pings each target every 30s so the dropdown shows <code>~38ms</code> next to live ones, <code>refused</code> next to dead.</li>
+                <li>Default target gets the keyboard shortcut <code>R</code> from the message row — instant replay without opening the drawer.</li>
+                <li>"Replay" tagged messages get a small <code>↻ from MSG042185</code> link in their detail header.</li>
+              </ul>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Idea 2: Test message generator -->
+    <div class="idea">
+      <div class="idea-head">
+        <div class="idea-num">2</div>
+        <div class="idea-title">Template generator — pick a trigger, edit fields, fire</div>
+        <div class="idea-sub">addresses: test message generator</div>
+      </div>
+      <div class="idea-body">
+        <div class="idea-rationale">
+          Templates organized by category in a sidebar. The form is a structured field editor (not free-form HL7) so users don't have to remember segment delimiters. Fields with a <span style="color:var(--purple)">∼</span> tag are auto-generated on send (timestamp, control ID, UUIDs) — important for sending many messages without collisions. Switch to "Raw" tab for power users.
+        </div>
+
+        <div class="mock generator">
+          <div class="gen-sidebar">
+            <div class="gen-section-title">Patient admin · ADT</div>
+            <div class="gen-template active">
+              <div>
+                <div class="code">A01</div>
+                <div class="desc">Admit / visit notification</div>
+              </div>
+            </div>
+            <div class="gen-template">
+              <div>
+                <div class="code">A03</div>
+                <div class="desc">Discharge</div>
+              </div>
+            </div>
+            <div class="gen-template">
+              <div>
+                <div class="code">A08</div>
+                <div class="desc">Update patient info</div>
+              </div>
+            </div>
+            <div class="gen-section-title">Orders · ORM / OMG</div>
+            <div class="gen-template">
+              <div>
+                <div class="code">ORM^O01</div>
+                <div class="desc">Order message</div>
+              </div>
+            </div>
+            <div class="gen-template">
+              <div>
+                <div class="code">OMG^O19</div>
+                <div class="desc">General clinical order</div>
+              </div>
+            </div>
+            <div class="gen-section-title">Results · ORU</div>
+            <div class="gen-template">
+              <div>
+                <div class="code">ORU^R01</div>
+                <div class="desc">Unsolicited observation</div>
+              </div>
+            </div>
+            <div class="gen-section-title">Custom</div>
+            <div class="gen-template" style="color:var(--fg-2)">
+              <div>
+                <div class="code" style="color:var(--fg-2)">+ New from received…</div>
+              </div>
+            </div>
+          </div>
+
+          <div class="gen-main">
+            <div class="gen-toolbar">
+              <div class="gen-tabs">
+                <button class="gen-tab active">Form</button>
+                <button class="gen-tab">Raw HL7</button>
+                <button class="gen-tab">Preview</button>
+              </div>
+              <div class="right">
+                <button class="btn">Sample faker data</button>
+                <button class="btn">Save as preset</button>
+              </div>
+            </div>
+
+            <div class="gen-form">
+              <div class="gen-segment-card">
+                <div class="gen-seg-head">
+                  <span class="name">MSH</span>
+                  <span class="desc">Message header</span>
+                </div>
+                <div class="gen-seg-fields">
+                  <div class="k">MSH-3</div>
+                  <div class="v"><input value="HARUX_TEST" /></div>
+                  <div class="k">MSH-4</div>
+                  <div class="v"><input value="HARUX.LAB" /></div>
+                  <div class="k">MSH-7</div>
+                  <div class="v dyn"><input value="20260508.140321" /><span class="dyn-tag">∼ now</span></div>
+                  <div class="k">MSH-9</div>
+                  <div class="v"><input value="ADT^A01^ADT_A01" /></div>
+                  <div class="k">MSH-10</div>
+                  <div class="v dyn"><input value="MSG_a4b2c1f8" /><span class="dyn-tag">∼ uuid</span></div>
+                  <div class="k">MSH-11</div>
+                  <div class="v"><input value="T" /></div>
+                </div>
+              </div>
+
+              <div class="gen-segment-card">
+                <div class="gen-seg-head">
+                  <span class="name">PID</span>
+                  <span class="desc">Patient identification</span>
+                </div>
+                <div class="gen-seg-fields">
+                  <div class="k">PID-3</div>
+                  <div class="v"><input value="MRN-78421^^^MGH^MR" /></div>
+                  <div class="k">PID-5</div>
+                  <div class="v"><input value="Romero^Marcus^J" /></div>
+                  <div class="k">PID-7</div>
+                  <div class="v"><input value="19840712" /></div>
+                  <div class="k">PID-8</div>
+                  <div class="v"><input value="M" /></div>
+                </div>
+              </div>
+            </div>
+
+            <div class="gen-footer">
+              <span class="target">
+                <span class="dot"></span>
+                Send to <strong>Orchestra · staging</strong>
+                <span style="color:var(--fg-3)">10.4.1.22:6661</span>
+              </span>
+              <button class="btn">Send 1</button>
+              <button class="btn">Send <input style="width:36px; height:20px; background:var(--bg-1); border:1px solid var(--line); color:var(--fg-0); font:inherit; font-family:var(--mono); font-size:11px; padding:0 4px; border-radius:3px; outline:none; text-align:center" value="50" /></button>
+              <button class="btn primary">
+                <svg class="icon-i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="22 2 11 13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
+                Send & watch
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <div class="annotations">
+          <ul>
+            <li>Templates ship as <code>.hl7</code> files in <code>examples/templates/</code> — users can drop their own in and they appear in the sidebar.</li>
+            <li><b>"+ New from received"</b> turns any inbox message into a saved template — captures the whole structure as a starting point.</li>
+            <li><b>Dynamic tags</b> (<code>∼ now</code>, <code>∼ uuid</code>, <code>∼ faker.name</code>) re-evaluate per-send. Critical when burst-sending — every message gets a unique MSH-10.</li>
+            <li><b>"Send 50"</b> burst mode for load testing. Progress bar + per-message ACK summary appears as a transient panel.</li>
+            <li>Orchestra-specific: pre-shipped templates that match their accepted profiles (PID-3 with their assigning authority, MSH-21 conformance profile).</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+
+    <!-- Idea 3: Raw editor -->
+    <div class="idea">
+      <div class="idea-head">
+        <div class="idea-num">3</div>
+        <div class="idea-title">Raw editor — HL7 with live validation gutter</div>
+        <div class="idea-sub">addresses: message editor</div>
+      </div>
+      <div class="idea-body">
+        <div class="idea-rationale">
+          A monospace text area with line numbers and a right-side inspector that updates as you click into fields. Wavy underlines mark validation issues live. <code>⌘↵</code> sends. The whole thing opens fullscreen via "Edit raw…" on any inbox message — pre-filled with the source.
+        </div>
+
+        <div class="mock editor-wrap">
+          <div class="editor-toolbar">
+            <span class="breadcrumb">editor · forked from <b>MSG00042185</b></span>
+            <span class="editor-status warn">
+              <svg class="icon-i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+              1 warning
+            </span>
+            <div class="right">
+              <button class="btn">Format</button>
+              <button class="btn">Validate</button>
+              <button class="btn primary">
+                Send to staging
+                <span style="font-family:var(--mono); font-size:10px; background:rgba(0,0,0,0.2); padding:1px 5px; border-radius:3px; margin-left:4px">⌘↵</span>
+              </button>
+            </div>
+          </div>
+
+          <div class="editor-body">
+            <div class="gutter">
+              <div>1</div>
+              <div>2</div>
+              <div>3</div>
+              <div class="marker">4 ⚠</div>
+              <div>5</div>
+              <div>6</div>
+              <div>7</div>
+              <div>8</div>
+            </div>
+            <div class="code-area"><span class="seg-name">MSH</span><span class="sep">|^~\&|</span>EPIC<span class="sep">|</span>EPIC.MGH<span class="sep">|</span>HARUX<span class="sep">|</span>HARUX.LAB<span class="sep">|</span>20260508140321<span class="sep">||</span>ADT^A01^ADT_A01<span class="sep">|</span>MSG00042185<span class="sep">|</span>P<span class="sep">|</span>2.5.1
+<span class="seg-name">EVN</span><span class="sep">|</span>A01<span class="sep">|</span>20260508140321
+<span class="seg-name">PID</span><span class="sep">|</span>1<span class="sep">||</span>MRN-78421^^^MGH^MR<span class="sep">||</span>Romero^Marcus^J^^Mr.<span class="sep">||</span>19840712<span class="sep">|</span>M
+<span class="seg-name">PD1</span><span class="sep">|||</span><span class="underline-warn"><span class="field-empty">(missing)</span></span><span class="sep">|</span>PCP-1109^Reyes^Daniel
+<span class="seg-name">NK1</span><span class="sep">|</span>1<span class="sep">|</span>Romero^Elena^M<span class="sep">|</span>SPO
+<span class="seg-name">PV1</span><span class="sep">|</span>1<span class="sep">|</span>I<span class="sep">|</span>7E^702^A^MGH<span class="sep">|||||</span>1234^Patel^Anjali
+<span class="seg-name">DG1</span><span class="sep">|</span>1<span class="sep">||</span>I10:J18.9<span class="sep">|</span>Pneumonia
+<span class="seg-name">AL1</span><span class="sep">|</span>1<span class="sep">|</span>DA<span class="sep">|</span>Penicillin<span class="sep">|</span>SV</div>
+
+            <div class="inspector">
+              <h4>Field inspector</h4>
+              <div class="field-name">PD1-3</div>
+              <div class="field-desc">Patient primary facility</div>
+              <div class="meta">
+                <div><b>Type</b> XON (composite)</div>
+                <div><b>Required</b> conditional</div>
+                <div><b>Length</b> ≤ 250</div>
+                <div><b>Repeats</b> 0..*</div>
+              </div>
+              <div class="hint">
+                <strong>Required for ADT^A01</strong> per Orchestra profile. Suggested: <code>MGH^^4815</code>.
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="annotations">
+          <ul>
+            <li>Cursor in the code area updates the inspector live — uses your existing field dictionary.</li>
+            <li><b>"Format"</b> rewrites the message with consistent delimiters and aligned columns (debugging aid).</li>
+            <li><b>"Validate"</b> runs the same rules as the inbox validation — same warnings list appears.</li>
+            <li>On send, the response opens in a transient pane below the editor; if AE/AR, jumps cursor to the field referenced in the ACK error.</li>
+            <li>Saved drafts persist in <code>localStorage</code>; "Send to inbox (loopback)" is also an option for testing Harux's own parser.</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+
+    <!-- Idea 4: Notifications -->
+    <div class="idea">
+      <div class="idea-head">
+        <div class="idea-num">4</div>
+        <div class="idea-title">Smart notifications — not "new message" spam</div>
+        <div class="idea-sub">addresses: auto-refresh trigger / desktop notification</div>
+      </div>
+      <div class="idea-body">
+        <div class="idea-rationale">
+          A desktop notification on every message is noise. Make it triggerable: notify only when a watched filter matches. "Notify me on parse errors", "notify me when I get a message tagged <code>followup</code>", "notify me when this MRN appears". Configurable from the same chip-style filter UI.
+        </div>
+
+        <div class="twocol">
+          <div class="notif-mock">
+            <div class="icon">
+              <svg class="icon-i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10.3 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.7 3.86a2 2 0 00-3.4 0z"/><line x1="12" y1="9" x2="12" y2="13"/></svg>
+            </div>
+            <div class="body">
+              <div class="title">Parse error from epic.hospital.local</div>
+              <div class="sub">ADT^A01 · Malformed MSH segment</div>
+            </div>
+          </div>
+
+          <div class="notif-mock">
+            <div class="icon" style="background:rgba(229,165,75,0.1); color:var(--warn)">
+              <svg class="icon-i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+            </div>
+            <div class="body">
+              <div class="title">No messages received in 5 min</div>
+              <div class="sub">Listener still up — sender may be down</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="annotations">
+          <ul>
+            <li>Notification rules live next to the filter chips: <code>+ Notify on this filter</code> appears when a search has matches.</li>
+            <li><b>Silence</b> rule by default — "no messages in N minutes" catches the common "is the integration broken?" question.</li>
+            <li>Click on a notification deep-links to the matching message in the Harux UI.</li>
+            <li>Browser <code>Notification.requestPermission()</code> on first rule creation; falls back to in-app toast.</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- ─── M5 ─────────────────────────────────────────────────────── -->
+  <div class="milestone">
+    <div class="milestone-head">
+      <span class="milestone-tag">M5</span>
+      <span class="milestone-title">Persistence</span>
+    </div>
+    <div class="milestone-desc">Survive restarts, prune sensibly, export anything.</div>
+
+    <!-- Idea 5: Persistence settings -->
+    <div class="idea">
+      <div class="idea-head">
+        <div class="idea-num">5</div>
+        <div class="idea-title">Storage settings — single page, visual retention</div>
+        <div class="idea-sub">addresses: SQLite backend + retention policy</div>
+      </div>
+      <div class="idea-body">
+        <div class="idea-rationale">
+          Persistence defaults to off (current behavior). One settings page exposes the toggle, the location, and the retention policy. The retention bar shows live what's about to be pruned — way clearer than just a number. Live stats card at the top: how big is my db, how many messages, how full is the retention window.
+        </div>
+
+        <div class="mock settings-card">
+          <div class="stat-strip">
+            <div class="stat-card">
+              <div class="l">stored messages</div>
+              <div class="v">14,283</div>
+            </div>
+            <div class="stat-card">
+              <div class="l">db size</div>
+              <div class="v">128 MB</div>
+            </div>
+            <div class="stat-card">
+              <div class="l">oldest</div>
+              <div class="v">5d 12h ago</div>
+            </div>
+            <div class="stat-card">
+              <div class="l">next prune</div>
+              <div class="v ok">in 11h</div>
+            </div>
+          </div>
+
+          <div class="setting-row">
+            <div class="k">
+              Persistence
+              <div class="desc">Survive server restarts. Stored at <code style="font-size:11px">~/.harux/messages.db</code>.</div>
+            </div>
+            <div class="v">
+              <div class="seg-control">
+                <button>Off</button>
+                <button class="active">SQLite (local)</button>
+                <button>Postgres</button>
+              </div>
+            </div>
+          </div>
+
+          <div class="setting-row">
+            <div class="k">
+              Retention by age
+              <div class="desc">Delete messages older than this on every prune cycle.</div>
+            </div>
+            <div class="v" style="flex-direction:column; align-items:stretch; gap:4px;">
+              <div style="display:flex; gap:8px; align-items:center;">
+                <input class="field-input" style="width:80px;" value="14" />
+                <select class="field-select" style="width:auto; min-width:100px;">
+                  <option>days</option>
+                  <option>hours</option>
+                  <option>weeks</option>
+                </select>
+              </div>
+              <div class="retention-viz">
+                <div class="filled"></div>
+                <div class="label">
+                  <span>5d 12h oldest</span>
+                  <span style="color:var(--warn)">prune at 14d</span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="setting-row">
+            <div class="k">
+              Retention by count
+              <div class="desc">Keep at most this many messages — overrides age if smaller.</div>
+            </div>
+            <div class="v">
+              <input class="field-input" style="width:120px;" value="50,000" />
+              <span style="color:var(--fg-2); font-size:11px">≈ 250 MB at current avg size</span>
+            </div>
+          </div>
+
+          <div class="setting-row">
+            <div class="k">
+              Bookmarked messages
+              <div class="desc">Pinned messages can survive retention.</div>
+            </div>
+            <div class="v">
+              <div class="seg-control">
+                <button>Same as others</button>
+                <button class="active">Never auto-delete</button>
+              </div>
+            </div>
+          </div>
+
+          <div class="setting-row">
+            <div class="k">
+              Encryption at rest
+              <div class="desc">Encrypts the SQLite db (SQLCipher). Required for PHI in many setups.</div>
+            </div>
+            <div class="v">
+              <div class="switch on"></div>
+              <span style="color:var(--fg-2); font-size:11px">Key derived from <code style="font-size:11px">HARUX_DB_KEY</code> env var.</span>
+            </div>
+          </div>
+
+          <div class="setting-row">
+            <div class="k">
+              Manual actions
+              <div class="desc"></div>
+            </div>
+            <div class="v">
+              <button class="btn">Run prune now</button>
+              <button class="btn">Vacuum db</button>
+              <button class="btn danger">Wipe all stored messages</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="annotations">
+          <ul>
+            <li>Retention bar is the killer feature — when you adjust the slider, you see immediately which messages would be deleted. Less anxiety than blind numbers.</li>
+            <li><b>Bookmarks-survive-retention</b> is a small but high-value detail: lets users pin "interesting" messages without setting up complex queries.</li>
+            <li><b>SQLCipher</b> is a single-line addition over plain SQLite and unlocks healthcare deployments.</li>
+            <li>Storage backend is pluggable — Postgres option matters for multi-instance Harux deployments.</li>
+            <li>Stats cards link to the existing top-bar health pills design language.</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+
+    <!-- Idea 6: Export modal -->
+    <div class="idea">
+      <div class="idea-head">
+        <div class="idea-num">6</div>
+        <div class="idea-title">Export — formats with purpose, scoped to current filter</div>
+        <div class="idea-sub">addresses: extended export</div>
+      </div>
+      <div class="idea-body">
+        <div class="idea-rationale">
+          Each format is for a different audience. Cards explain when to use each, instead of a bare dropdown. The export <em>scope</em> always reflects the current filter — clear summary at the bottom: "you're exporting 42 messages matching <code>has:errors</code> from epic.hospital.local".
+        </div>
+
+        <div class="mock export-modal">
+          <h3 style="font-size:15px; margin-bottom:14px;">Export messages</h3>
+
+          <div class="export-options">
+            <div class="export-opt">
+              <div class="ext">.json</div>
+              <div class="name">Structured JSON</div>
+              <div class="desc">Full parsed segments, metadata, ACK, validation. For programmatic use.</div>
+            </div>
+            <div class="export-opt selected">
+              <div class="ext">.hl7</div>
+              <div class="name">Raw HL7 batch</div>
+              <div class="desc">Original wire format, FHS/BHS framed. Replay-able into any HL7 engine.</div>
+            </div>
+            <div class="export-opt">
+              <div class="ext">.csv</div>
+              <div class="name">CSV summary</div>
+              <div class="desc">One row per message: type, patient, source, time, ACK. For spreadsheets.</div>
+            </div>
+            <div class="export-opt">
+              <div class="ext">.ndjson</div>
+              <div class="name">Newline-delimited JSON</div>
+              <div class="desc">Streamable. Pipe into <code>jq</code>, log shippers, or kafka producers.</div>
+            </div>
+            <div class="export-opt">
+              <div class="ext">.zip</div>
+              <div class="name">One file per message</div>
+              <div class="desc">Each message as a separate <code>.hl7</code> file — for fixture libraries.</div>
+            </div>
+            <div class="export-opt">
+              <div class="ext">.har-ish</div>
+              <div class="name">Harux session bundle</div>
+              <div class="desc">Everything: messages + ACKs + tags + bookmarks. Re-importable into Harux.</div>
+            </div>
+          </div>
+
+          <div class="export-summary">
+            <strong style="color:var(--fg-0)">Exporting 42 messages</strong> matching current filter:
+            <code>has:errors source:epic.hospital.local</code>.
+            Includes raw + parsed + ACKs.
+            Estimated size: <strong style="color:var(--fg-0)">~340 KB</strong>.
+          </div>
+
+          <div class="replay-footer" style="margin-top: 16px; padding-top: 0; border-top: none;">
+            <label style="display:flex; align-items:center; gap:6px; font-size:12px; color:var(--fg-1);">
+              <input type="checkbox" /> Include validation warnings
+            </label>
+            <label style="display:flex; align-items:center; gap:6px; font-size:12px; color:var(--fg-1);">
+              <input type="checkbox" checked /> Anonymize PHI
+            </label>
+            <button class="btn ghost" style="margin-left:auto">Cancel</button>
+            <button class="btn primary">
+              <svg class="icon-i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+              Export
+            </button>
+          </div>
+        </div>
+
+        <div class="annotations">
+          <ul>
+            <li><b>"Anonymize PHI"</b> toggle: replaces patient names / MRNs / addresses with consistent fakes (Faker.js) before writing. Huge for sharing test fixtures.</li>
+            <li><b>Harux session bundle</b> (<code>.har-ish</code>) round-trips: import a colleague's bundle and see exactly what they saw, with their tags and bookmarks intact. Killer feature for support/debugging.</li>
+            <li><b>Per-message zip</b> turns Harux into a fixture-generator for your test suite — no more hand-curating `.hl7` files in <code>tests/messages/</code>.</li>
+            <li>Format cards make this self-documenting; new users discover capabilities without docs.</li>
+            <li>Footer summary always reflects the current filter — no surprise giant exports.</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+
+    <!-- Idea 7: Restart banner -->
+    <div class="idea">
+      <div class="idea-head">
+        <div class="idea-num">7</div>
+        <div class="idea-title">Post-restart context — show what survived</div>
+        <div class="idea-sub">addresses: persistence acceptance criteria</div>
+      </div>
+      <div class="idea-body">
+        <div class="idea-rationale">
+          When persistence is on and the server restarts, messages reappear — but the user might not realize they're looking at "old" data vs "live". Show a small contextual banner above the inbox the first time it loads: "Restored 14,283 messages from disk · last activity 3m ago". Self-dismisses after 10s or on first new message.
+        </div>
+
+        <div class="mock" style="padding:12px 16px; display:flex; align-items:center; gap:12px;">
+          <svg class="icon-i" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="2" style="width:18px; height:18px;"><path d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/><path d="M3 12c4 0 4-4 8-4s4 4 8 4"/></svg>
+          <div style="flex:1;">
+            <div style="font-size:13px; color:var(--fg-0);"><strong>14,283 messages restored</strong> from disk · last activity 3m ago</div>
+            <div style="font-size:11px; color:var(--fg-2); margin-top:2px;">Listener resumed on :2575 · oldest message 5d 12h old</div>
+          </div>
+          <button class="btn ghost" style="height:28px;">Dismiss</button>
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- Footer -->
+  <div style="margin-top: 64px; padding-top: 32px; border-top: 1px solid var(--line); color: var(--fg-2); font-size: 12px; line-height: 1.7;">
+    <strong style="color:var(--fg-0); display:block; margin-bottom:6px;">Implementation order suggestion</strong>
+    1. Saved targets in <code style="font-family:var(--mono); background:var(--bg-2); padding:1px 5px; border-radius:3px;">harux.toml</code> (M4 prereq) →
+    2. Replay drawer →
+    3. SQLite backend + retention (M5 core) →
+    4. Export modal →
+    5. Template generator →
+    6. Raw editor →
+    7. Smart notifications.
+    <br><br>
+    Replay + persistence are the two highest-leverage items: replay turns Harux into a Postman for HL7, persistence turns it into a debugging journal you can come back to.
+  </div>
+
+</div>
+
+</body>
+</html>
