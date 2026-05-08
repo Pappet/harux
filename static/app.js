@@ -24,6 +24,10 @@ let validationFilter = 0; // 0: All, 1: Warnings, 2: Errors Only
 // Server state for accurate total message count
 let totalMessagesCount = 0;
 
+// Health-pill state: rolling 60-second window of message timestamps.
+const rateWindow = [];               // Date.now() timestamps within last 60 s
+let lastMessageReceivedAt = null;    // Date.now() of most recent addMessage
+
 // Segment diff state
 let diffPinnedMessage = null; // the reference message pinned for comparison
 let diffIgnoreDynamic = false;
@@ -172,30 +176,26 @@ function connectWs() {
 
     ws.onopen = () => {
         wsReconnectDelay = WS_RECONNECT_INITIAL; // reset on success
-        document.getElementById('ws-dot').className = 'stat-dot green';
-        document.getElementById('ws-status').textContent = 'Connected';
+        setListeningPillState('live');
     };
 
     ws.onclose = () => {
-        document.getElementById('ws-dot').className = 'stat-dot red';
         const jitter = wsReconnectDelay * (0.75 + Math.random() * 0.5);
         const delaySec = Math.round(jitter / 1000);
-        document.getElementById('ws-status').textContent = `Reconnecting in ${delaySec}s\u2026`;
+        setListeningPillState('disconnected', `Reconnecting in ${delaySec}s\u2026`);
         setTimeout(connectWs, jitter);
         wsReconnectDelay = Math.min(wsReconnectDelay * WS_RECONNECT_MULT, WS_RECONNECT_MAX);
     };
 
     ws.onerror = (event) => {
         console.error('WebSocket error:', event);
-        document.getElementById('ws-dot').className = 'stat-dot red';
-        document.getElementById('ws-status').textContent = 'Error';
+        setListeningPillState('disconnected', 'WebSocket error');
     };
 
     ws.onmessage = (event) => {
         const data = JSON.parse(event.data);
         if (data.type === 'init') {
             totalMessagesCount = data.total;
-            document.getElementById('stat-total').textContent = totalMessagesCount;
             loadMessages();
         } else if (data.type === 'new_message') {
             addMessage(data.data);
@@ -211,13 +211,15 @@ function connectWs() {
             messages = [];
             pendingMessages = [];
             totalMessagesCount = 0;
+            rateWindow.length = 0;
+            lastMessageReceivedAt = null;
             selectedId = null;
             selectedMessage = null;
             renderMessageList();
+            renderHealthPills();
             document.getElementById('detail-content').innerHTML = '<div class="empty-state"><p>No message selected</p></div>';
             document.getElementById('detail-title').textContent = 'Select a message';
             document.getElementById('detail-meta').textContent = '';
-            document.getElementById('stat-total').textContent = '0';
         }
     };
 }
@@ -258,7 +260,9 @@ function addMessage(summary) {
     // Register source for color mapping
     registerSource(summary.source_addr);
     totalMessagesCount++;
-    document.getElementById('stat-total').textContent = totalMessagesCount;
+    const now = Date.now();
+    rateWindow.push(now);
+    lastMessageReceivedAt = now;
     if (!paused) {
         scheduleRender();
     }
@@ -278,7 +282,6 @@ function flushAndRender() {
         messages = [...pendingMessages, ...messages];
         pendingMessages = [];
     }
-    document.getElementById('stat-total').textContent = totalMessagesCount;
     renderMessageList();
     renderSourceLegend();
 }
@@ -293,7 +296,6 @@ async function loadMessages() {
         for (const m of messages) {
             registerSource(m.source_addr);
         }
-        document.getElementById('stat-total').textContent = totalMessagesCount;
         renderMessageList();
         renderSourceLegend();
     } catch (e) {
@@ -308,23 +310,109 @@ async function pollStats() {
         if (!resp.ok) return;
         const stats = await resp.json();
         totalMessagesCount = stats.total_messages;
-        document.getElementById('stat-total').textContent = totalMessagesCount;
-        document.getElementById('stat-connections').textContent =
+
+        // conns pill
+        document.getElementById('pill-conns-value').textContent =
             `${stats.active_connections} / ${stats.max_connections}`;
-        document.getElementById('stat-errors').textContent = stats.parse_errors;
-        const rejectedEl = document.getElementById('stat-rejected');
-        if (rejectedEl) {
+
+        // errors pill — paint value red when nonzero
+        const errorsValue = document.getElementById('pill-errors-value');
+        errorsValue.textContent = stats.parse_errors;
+        errorsValue.classList.toggle('warn', stats.parse_errors > 0);
+
+        // rejected pill — hidden when zero
+        const rejectedPill = document.getElementById('pill-rejected');
+        const rejectedValue = document.getElementById('pill-rejected-value');
+        if (rejectedPill && rejectedValue) {
             if (stats.rejected_connections > 0) {
-                rejectedEl.parentElement.style.display = '';
-                rejectedEl.textContent = stats.rejected_connections;
+                rejectedPill.style.display = '';
+                rejectedValue.textContent = stats.rejected_connections;
+                rejectedValue.classList.add('warn');
             } else {
-                rejectedEl.parentElement.style.display = 'none';
+                rejectedPill.style.display = 'none';
             }
         }
+
+        // listening pill port + empty-state hint
         if (stats.mllp_port) {
-            document.getElementById('mllp-port').textContent = stats.mllp_port;
+            document.getElementById('pill-port').textContent = stats.mllp_port;
+            const emptyPort = document.getElementById('mllp-port');
+            if (emptyPort) emptyPort.textContent = stats.mllp_port;
         }
     } catch (e) { }
+}
+
+// --- Health pills ---
+function setListeningPillState(state, tooltip) {
+    const pill = document.getElementById('pill-listening');
+    if (!pill) return;
+    pill.classList.remove('live', 'disconnected');
+    pill.classList.add(state);
+    pill.title = tooltip || (state === 'live' ? 'MLLP listener health' : 'WebSocket disconnected — reconnecting');
+}
+
+function formatRelativeTime(ms) {
+    if (ms < 1000) return 'just now';
+    if (ms < 60000) return `${Math.floor(ms / 1000)}s ago`;
+    if (ms < 3600000) return `${Math.floor(ms / 60000)}m ago`;
+    return `${Math.floor(ms / 3600000)}h ago`;
+}
+
+function pruneRateWindow() {
+    const cutoff = Date.now() - 60000;
+    while (rateWindow.length > 0 && rateWindow[0] < cutoff) {
+        rateWindow.shift();
+    }
+}
+
+function renderRateSpark() {
+    const buckets = new Array(10).fill(0);
+    const now = Date.now();
+    for (const t of rateWindow) {
+        const age = now - t;
+        if (age < 0 || age >= 60000) continue;
+        // idx 0 = oldest (60s ago), idx 9 = newest (most recent 6s)
+        const idx = Math.floor((60000 - age) / 6000);
+        const clamped = Math.max(0, Math.min(9, idx));
+        buckets[clamped]++;
+    }
+    const max = Math.max(...buckets, 1);
+    const w = 60;
+    const h = 18;
+    const pad = 1;
+    const step = w / (buckets.length - 1);
+    const points = buckets.map((v, i) => {
+        const x = i * step;
+        const y = h - (v / max) * (h - 2 * pad) - pad;
+        return `${x.toFixed(1)},${y.toFixed(1)}`;
+    }).join(' ');
+    return `<polyline points="${points}" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round" />`;
+}
+
+function renderHealthPills() {
+    pruneRateWindow();
+
+    // rate pill — show only after first message
+    const ratePill = document.getElementById('pill-rate');
+    const rateValue = document.getElementById('pill-rate-value');
+    const rateSpark = document.getElementById('pill-rate-spark');
+    if (rateWindow.length > 0) {
+        ratePill.style.display = '';
+        rateValue.textContent = `${rateWindow.length}/min`;
+        rateSpark.innerHTML = renderRateSpark();
+    } else {
+        ratePill.style.display = 'none';
+    }
+
+    // last pill — show only after first message
+    const lastPill = document.getElementById('pill-last');
+    const lastValue = document.getElementById('pill-last-value');
+    if (lastMessageReceivedAt !== null) {
+        lastPill.style.display = '';
+        lastValue.textContent = formatRelativeTime(Date.now() - lastMessageReceivedAt);
+    } else {
+        lastPill.style.display = 'none';
+    }
 }
 
 // --- Rendering ---
@@ -1150,3 +1238,6 @@ autoscroll = !autoscroll;
 toggleAutoscroll();
 connectWs();
 setInterval(pollStats, 3000);
+setInterval(renderHealthPills, 1000);
+renderHealthPills();
+pollStats();
