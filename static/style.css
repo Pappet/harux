@@ -64,42 +64,91 @@ header {
     height: 22px;
 }
 
-.stats-bar {
-    display: flex;
-    gap: 24px;
-    font-size: 12px;
-    font-family: var(--font-mono);
-    color: var(--text-secondary);
-}
-
-.stat {
+/* ── Health pills ───────────────────────────────────────────────────── */
+.health {
     display: flex;
     align-items: center;
     gap: 6px;
+    flex-wrap: nowrap;
+    overflow: hidden;
 }
 
-.stat-dot {
+.health-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 11px;
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    font-size: 12px;
+    color: var(--text-secondary);
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+}
+
+.health-pill .label {
+    color: var(--text-muted);
+    font-size: 11px;
+}
+
+.health-pill .value {
+    color: var(--text-primary);
+    font-family: var(--font-mono);
+    font-weight: 500;
+}
+
+.health-pill .dot {
     width: 7px;
     height: 7px;
     border-radius: 50%;
-    display: inline-block;
-}
-
-.stat-dot.green {
     background: var(--success);
-    box-shadow: 0 0 6px var(--success);
+    box-shadow: 0 0 0 0 rgba(79, 185, 138, 0.55);
+    animation: health-pulse 1.8s ease-out infinite;
 }
 
-.stat-dot.blue {
-    background: var(--accent);
+.health-pill.live {
+    border-color: rgba(79, 185, 138, 0.35);
+    background: rgba(79, 185, 138, 0.08);
 }
 
-.stat-dot.red {
+.health-pill.live .value {
+    color: var(--success);
+}
+
+.health-pill.disconnected {
+    border-color: rgba(234, 99, 99, 0.35);
+    background: rgba(234, 99, 99, 0.08);
+}
+
+.health-pill.disconnected .value {
+    color: var(--error);
+}
+
+.health-pill.disconnected .dot {
     background: var(--error);
+    box-shadow: none;
+    animation: none;
 }
 
-.stat-dot.yellow {
-    background: var(--warning);
+.health-pill .value.warn {
+    color: var(--error);
+}
+
+.health-pill .spark {
+    width: 60px;
+    height: 18px;
+    color: var(--success);
+}
+
+@keyframes health-pulse {
+    0% {
+        box-shadow: 0 0 0 0 rgba(79, 185, 138, 0.5);
+    }
+
+    100% {
+        box-shadow: 0 0 0 6px rgba(79, 185, 138, 0);
+    }
 }
 
 .header-actions {

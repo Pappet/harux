@@ -20,6 +20,7 @@ and this project follows [Semantic Versioning](https://semver.org/lang/en/).
 ### Changed
 - **Typography** — adopted Inter (sans) and JetBrains Mono (mono) via Google Fonts; first phase of the v0.5.0 UI redesign (#86)
 - **Color palette** — refreshed dark theme: deeper backgrounds (`--bg-primary` `#0b0d12`, `--bg-secondary` `#131620`, `--bg-tertiary` `#1b1f2c`), cooler accent (`--accent` `#7aa2ff`), tuned success/error tones (`--success` `#4fb98a`, `--error` `#ea6363`) for higher contrast against the deeper canvas (#86)
+- **Top-bar health pills** — replaced the dot-and-counter `.stats-bar` with a row of pill-shaped status indicators: `listening :PORT` (green pulsing dot when WebSocket connected, red static when disconnected), `conns N / MAX`, `rate N/min` with a 60-second sparkline, `last Ns ago` (refreshed once per second), `errors N` (red value when nonzero). The previously hidden "rejected" stat is preserved as a hidden pill that surfaces only when `rejected_connections > 0`. The `total messages` counter was removed from the header; the rolling rate pill replaces it as the live-traffic signal (#92)
 
 ---
 
@@ -58,6 +59,7 @@ and this project follows [Semantic Versioning](https://semver.org/lang/en/).
 |--------|-------------|
 | [`a14f0de`](https://github.com/Pappet/harux/commit/a14f0de20053257e6b9cd2b9e6063fc8e2daf8dc) | `fix:` resolve ISO-8859-1 charset encoding issues (#78) |
 | [`a6f1ce7`](https://github.com/Pappet/harux/commit/a6f1ce7e1e8deb5dbead3248e099423231b1cd09) | `feat(a11y):` ARIA labels, native buttons, global focus ring |
+| [`4554d90`](https://github.com/Pappet/harux/commit/4554d90488df2bd604f1017d024013cd08331f72) | `feat(ui):` top-bar health pills replace stats dots (#92) |
 | [`1993bcb`](https://github.com/Pappet/harux/commit/1993bcb07709460bce5d468c046be6e2f1db533c) | `feat(a11y):` keyboard navigation for message list rows |
 | [`f5c650a`](https://github.com/Pappet/harux/commit/f5c650aa025132a5a6e660092957fd3ad69099ec) | `feat(ui):` typography + color foundation for v0.5.0 redesign (#86) |
 

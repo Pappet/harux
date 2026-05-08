@@ -21,15 +21,33 @@
             </svg>
             Harux
         </div>
-        <div class="stats-bar">
-            <div class="stat"><span class="stat-dot green" id="ws-dot"></span><span id="ws-status">Connecting...</span>
+        <div class="health" id="health-pills">
+            <div class="health-pill live" id="pill-listening" title="MLLP listener health">
+                <span class="dot" id="health-dot"></span>
+                <span class="label">listening</span>
+                <span class="value">:<span id="pill-port">2575</span></span>
             </div>
-            <div class="stat"><span class="stat-dot blue"></span>Messages: <span id="stat-total">0</span></div>
-            <div class="stat"><span class="stat-dot yellow"></span>Connections: <span id="stat-connections">0</span>
+            <div class="health-pill" id="pill-conns" title="Active TCP connections">
+                <span class="label">conns</span>
+                <span class="value" id="pill-conns-value">0 / 0</span>
             </div>
-            <div class="stat" style="display:none"><span class="stat-dot"
-                    style="background:var(--warning)"></span>Rejected: <span id="stat-rejected">0</span></div>
-            <div class="stat"><span class="stat-dot red"></span>Errors: <span id="stat-errors">0</span></div>
+            <div class="health-pill" id="pill-rate" style="display:none" title="Messages/min over last 60s">
+                <span class="label">rate</span>
+                <span class="value" id="pill-rate-value">0/min</span>
+                <svg class="spark" id="pill-rate-spark" viewBox="0 0 60 18" preserveAspectRatio="none"></svg>
+            </div>
+            <div class="health-pill" id="pill-last" style="display:none" title="Time since last message">
+                <span class="label">last</span>
+                <span class="value" id="pill-last-value">—</span>
+            </div>
+            <div class="health-pill" id="pill-rejected" style="display:none" title="Connections rejected over capacity">
+                <span class="label">rejected</span>
+                <span class="value" id="pill-rejected-value">0</span>
+            </div>
+            <div class="health-pill" id="pill-errors" title="Parse errors">
+                <span class="label">errors</span>
+                <span class="value" id="pill-errors-value">0</span>
+            </div>
         </div>
         <div class="header-actions">
             <button onclick="togglePause()" id="btn-pause" title="Pause live updates">⏸ Pause</button>
