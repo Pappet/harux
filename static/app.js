@@ -365,7 +365,15 @@ function renderMessageList() {
 
         row.className = rowClass;
         row.dataset.id = msg.id;
+        row.tabIndex = 0;
+        row.setAttribute('role', 'button');
         row.onclick = () => selectMessage(msg.id);
+        row.onkeydown = (e) => {
+            if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault();
+                selectMessage(msg.id);
+            }
+        };
 
         const time = new Date(msg.received_at);
         const yyyy = time.getFullYear();
