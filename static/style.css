@@ -151,10 +151,36 @@ header {
     color: var(--error);
 }
 
+.health-pill.warn-pill {
+    border-color: rgba(229, 165, 75, 0.35);
+    background: rgba(229, 165, 75, 0.08);
+}
+
+.health-pill.warn-pill .value {
+    color: var(--warning);
+}
+
+.health-pill.err-pill {
+    border-color: rgba(234, 99, 99, 0.35);
+    background: rgba(234, 99, 99, 0.08);
+}
+
+.health-pill.err-pill .value {
+    color: var(--error);
+}
+
 .health-pill .spark {
     width: 60px;
     height: 18px;
     color: var(--success);
+}
+
+.topbar-divider {
+    width: 1px;
+    height: 22px;
+    background: var(--border);
+    margin: 0 4px;
+    flex-shrink: 0;
 }
 
 @keyframes health-pulse {
@@ -818,58 +844,82 @@ body.resizing * {
     font-size: 12px;
 }
 
-/* ── Throughput band ───────────────────────────────────────────────── */
-.rate-band {
+/* ── Inbox controls (under search bar) ─────────────────────────────── */
+.inbox-controls {
     display: flex;
     align-items: center;
-    gap: 14px;
-    padding: 8px 14px 10px;
+    gap: 6px;
+    padding: 8px 14px;
     background: var(--bg-secondary);
     border-bottom: 1px solid var(--border);
+    flex-wrap: wrap;
 }
 
-.rate-band .stat {
-    display: flex;
-    flex-direction: column;
-    gap: 2px;
-    min-width: 42px;
+.ctl-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    height: 28px;
+    padding: 0 10px;
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    color: var(--text-secondary);
+    font-family: inherit;
+    font-size: 12px;
+    cursor: pointer;
+    transition: background 0.12s, color 0.12s, border-color 0.12s;
 }
 
-.rate-band .stat .v {
-    font-family: var(--font-mono);
-    font-size: 14px;
-    font-weight: 600;
+.ctl-btn:hover {
+    background: var(--bg-hover);
     color: var(--text-primary);
-    font-variant-numeric: tabular-nums;
 }
 
-.rate-band .stat .v.warn {
+.ctl-btn.on {
+    background: rgba(122, 162, 255, 0.10);
+    border-color: rgba(122, 162, 255, 0.35);
+    color: var(--accent);
+}
+
+.ctl-btn.on.warn-on {
+    background: rgba(229, 165, 75, 0.10);
+    border-color: rgba(229, 165, 75, 0.35);
     color: var(--warning);
 }
 
-.rate-band .stat .v.err {
+.ctl-btn.on.err-on {
+    background: rgba(234, 99, 99, 0.10);
+    border-color: rgba(234, 99, 99, 0.35);
     color: var(--error);
 }
 
-.rate-band .stat .l {
-    font-size: 10px;
+.ctl-btn.on.ok-on {
+    background: rgba(79, 185, 138, 0.10);
+    border-color: rgba(79, 185, 138, 0.35);
+    color: var(--success);
+}
+
+.ctl-btn .count {
+    font-family: var(--font-mono);
+    font-size: 11px;
     color: var(--text-muted);
-    text-transform: uppercase;
-    letter-spacing: 0.06em;
+    background: var(--bg-secondary);
+    padding: 1px 6px;
+    border-radius: 3px;
 }
 
-.rate-band .spark-wrap {
-    flex: 1;
-    height: 30px;
-    position: relative;
-    min-width: 80px;
+.ctl-btn.on .count {
+    color: inherit;
+    background: rgba(255, 255, 255, 0.05);
 }
 
-.rate-band svg.bars {
-    width: 100%;
-    height: 100%;
-    display: block;
-    fill: var(--accent);
+.ctl-divider {
+    width: 1px;
+    height: 18px;
+    background: var(--border);
+    margin: 0 4px;
+    flex-shrink: 0;
 }
 
 /* Custom CSS Toggle Switch */

@@ -18,6 +18,7 @@ and this project follows [Semantic Versioning](https://semver.org/lang/en/).
 - **Pin click leaked to row selection** — clicking the diff-pin icon previously also selected the underlying message row. `toggleDiffPin` now calls `event.stopPropagation()` when invoked from the row.
 
 ### Changed
+- **Chrome cleanup** — restructured the topbar and inbox header for clearer information architecture: list-scoped controls (`Pause`, `Auto`, `Bookmarks`, validation filter) moved out of the topbar into a new `.inbox-controls` row beneath the search bar; the topbar keeps only `Export` and `Clear`. Three new pills join the topbar — `total` (current message buffer), `validation` (sum of warnings + segment errors, amber when nonzero), `parse errors` (renamed from `errors`, server-side MLLP parse failures, red when nonzero). The standalone throughput band between the source rail and message list is removed — the rate sparkline already lives in the `rate` pill.
 - **Performance — HL7 parser allocations** — eliminated multiple redundant `Vec` allocations in the HL7 parsing engine (`parse_segment` and `parse_message`), substantially reducing heap allocations per message and improving throughput (#102)
 - **Performance — frontend search filter** — `matchesSearch` now uses a pre-parsed query (`getParsedQuery`) so the `has:warnings` / `has:errors` prefix stripping and lowercasing happen once per query instead of once per message. Per-message field checks short-circuit on the first hit and skip the lowercasing when the field is empty. Bounded `parsedQueryCache` (max 100 entries) prevents memory growth from many unique searches (#100)
 - **Typography** — adopted Inter (sans) and JetBrains Mono (mono) via Google Fonts; first phase of the v0.5.0 UI redesign (#86)
@@ -82,6 +83,7 @@ and this project follows [Semantic Versioning](https://semver.org/lang/en/).
 |--------|-------------|
 | [`e2d1501`](https://github.com/Pappet/harux/commit/e2d15015cabb8fe3b3c4fa7d8f9e68eda84677ff) | `perf(parser):` eliminate redundant Vec allocations in HL7 parsing |
 | [`c118c5e`](https://github.com/Pappet/harux/commit/c118c5e9cd4646d0c56067112c9e5be9513f39a9) | `perf(ui):` memoize parsed search query + short-circuit field checks (#100) |
+| [`b16cc5c`](https://github.com/Pappet/harux/commit/b16cc5c6f80ec3b93162137cb2688fbfa50a5b5c) | `feat(ui):` chrome cleanup — topbar pills + inbox controls row |
 | [`a14f0de`](https://github.com/Pappet/harux/commit/a14f0de20053257e6b9cd2b9e6063fc8e2daf8dc) | `fix:` resolve ISO-8859-1 charset encoding issues (#78) |
 | [`a6f1ce7`](https://github.com/Pappet/harux/commit/a6f1ce7e1e8deb5dbead3248e099423231b1cd09) | `feat(a11y):` ARIA labels, native buttons, global focus ring |
 | [`4554d90`](https://github.com/Pappet/harux/commit/4554d90488df2bd604f1017d024013cd08331f72) | `feat(ui):` top-bar health pills replace stats dots (#92) |
