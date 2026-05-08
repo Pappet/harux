@@ -66,7 +66,28 @@
             <div class="search-bar">
                 <input type="text" id="search-input" placeholder="Filter: message type, patient, facility, ID..." />
             </div>
-            <div class="source-legend" id="source-legend" style="display:none"></div>
+            <div class="source-rail" id="source-rail"></div>
+            <div class="rate-band" id="rate-band">
+                <div class="stat">
+                    <span class="v" id="rate-total">0</span>
+                    <span class="l">total</span>
+                </div>
+                <div class="stat">
+                    <span class="v" id="rate-permin">0</span>
+                    <span class="l">per min</span>
+                </div>
+                <div class="stat">
+                    <span class="v" id="rate-warnings">0</span>
+                    <span class="l">warnings</span>
+                </div>
+                <div class="stat">
+                    <span class="v" id="rate-errors">0</span>
+                    <span class="l">errors</span>
+                </div>
+                <div class="spark-wrap">
+                    <svg class="bars" id="rate-bars" viewBox="0 0 200 30" preserveAspectRatio="none"></svg>
+                </div>
+            </div>
             <div class="message-list" id="message-list">
                 <div class="empty-state" id="empty-state">
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">

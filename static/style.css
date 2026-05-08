@@ -530,43 +530,201 @@ body.resizing * {
     flex-shrink: 0;
 }
 
-/* Source legend bar */
-.source-legend {
+/* ── Source rail (always visible) ──────────────────────────────────── */
+.source-rail {
     display: flex;
-    flex-wrap: wrap;
+    align-items: center;
     gap: 10px;
-    padding: 6px 16px;
+    padding: 8px 14px;
     background: var(--bg-secondary);
     border-bottom: 1px solid var(--border);
     font-size: 11px;
-    font-family: var(--font-mono);
-    color: var(--text-secondary);
-    align-items: center;
+    color: var(--text-muted);
+    /* overflow stays visible so the overflow popover can escape; chips scroll
+       inside .source-rail-chips instead. */
+    position: relative;
+    z-index: 3;
 }
 
-.source-legend-item {
+.source-rail-chips {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex: 1;
+    min-width: 0;
+    overflow-x: auto;
+    scrollbar-width: none;
+}
+
+.source-rail-chips::-webkit-scrollbar {
+    display: none;
+}
+
+.source-rail .label {
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    font-size: 10px;
+    color: var(--text-muted);
+    opacity: 0.7;
+    white-space: nowrap;
+}
+
+.source-rail .source-rail-empty {
+    font-style: italic;
+    opacity: 0.6;
+}
+
+.source-chip {
     display: inline-flex;
     align-items: center;
-    gap: 5px;
-    white-space: nowrap;
+    gap: 6px;
+    padding: 3px 8px;
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--text-secondary);
     cursor: pointer;
-    transition: opacity 0.15s, background-color 0.15s, border-color 0.15s;
-    padding: 2px 6px;
-    border-radius: 4px;
-    border: 1px solid transparent;
+    white-space: nowrap;
+    transition: background 0.12s, color 0.12s, border-color 0.12s, opacity 0.12s;
 }
 
-.source-legend-item:hover {
-    background-color: var(--bg-tertiary);
+.source-chip:hover {
+    background: var(--bg-hover);
+    color: var(--text-primary);
 }
 
-.source-legend-item.dimmed {
+.source-chip.active {
+    background: var(--bg-hover);
+    border-color: var(--text-muted);
+    color: var(--text-primary);
+}
+
+.source-chip.dimmed {
     opacity: 0.4;
 }
 
-.source-legend-item.highlighted {
-    background-color: var(--bg-tertiary);
-    border-color: var(--border);
+.source-chip .dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    box-shadow: 0 0 6px currentColor;
+}
+
+.source-chip .num {
+    color: var(--text-muted);
+    font-size: 10px;
+}
+
+/* Overflow menu (Color by Port toggle) */
+.source-rail-overflow {
+    position: relative;
+    flex-shrink: 0;
+}
+
+.source-rail-overflow > summary {
+    list-style: none;
+    cursor: pointer;
+    width: 24px;
+    height: 22px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 4px;
+    color: var(--text-muted);
+    font-size: 14px;
+    user-select: none;
+}
+
+.source-rail-overflow > summary::-webkit-details-marker {
+    display: none;
+}
+
+.source-rail-overflow > summary:hover {
+    background: var(--bg-hover);
+    color: var(--text-primary);
+}
+
+.source-rail-overflow[open] > summary {
+    background: var(--bg-hover);
+    color: var(--text-primary);
+}
+
+.source-rail-overflow .popover {
+    position: absolute;
+    right: 0;
+    top: calc(100% + 4px);
+    background: var(--bg-secondary);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 8px 10px;
+    box-shadow: 0 6px 18px rgba(0, 0, 0, 0.4);
+    z-index: 50;
+    white-space: nowrap;
+}
+
+.source-rail-overflow .popover label {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    cursor: pointer;
+    color: var(--text-secondary);
+    font-size: 12px;
+}
+
+/* ── Throughput band ───────────────────────────────────────────────── */
+.rate-band {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    padding: 8px 14px 10px;
+    background: var(--bg-secondary);
+    border-bottom: 1px solid var(--border);
+}
+
+.rate-band .stat {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 42px;
+}
+
+.rate-band .stat .v {
+    font-family: var(--font-mono);
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--text-primary);
+    font-variant-numeric: tabular-nums;
+}
+
+.rate-band .stat .v.warn {
+    color: var(--warning);
+}
+
+.rate-band .stat .v.err {
+    color: var(--error);
+}
+
+.rate-band .stat .l {
+    font-size: 10px;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+}
+
+.rate-band .spark-wrap {
+    flex: 1;
+    height: 30px;
+    position: relative;
+    min-width: 80px;
+}
+
+.rate-band svg.bars {
+    width: 100%;
+    height: 100%;
+    display: block;
+    fill: var(--accent);
 }
 
 /* Custom CSS Toggle Switch */
