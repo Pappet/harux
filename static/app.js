@@ -103,7 +103,9 @@ function renderSourceLegend() {
     if (seenSources.size === 0) {
         container.innerHTML = `
             <span class="label">Sources</span>
-            <span class="source-rail-empty">none yet</span>
+            <div class="source-rail-chips">
+                <span class="source-rail-empty">none yet</span>
+            </div>
             <details class="source-rail-overflow">
                 <summary title="Source options">⋯</summary>
                 <div class="popover">
@@ -144,7 +146,7 @@ function renderSourceLegend() {
 
     container.innerHTML = `
         <span class="label">Sources</span>
-        ${chipsHtml}
+        <div class="source-rail-chips">${chipsHtml}</div>
         <details class="source-rail-overflow">
             <summary title="Source options">⋯</summary>
             <div class="popover">

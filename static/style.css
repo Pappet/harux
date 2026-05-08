@@ -540,11 +540,23 @@ body.resizing * {
     border-bottom: 1px solid var(--border);
     font-size: 11px;
     color: var(--text-muted);
+    /* overflow stays visible so the overflow popover can escape; chips scroll
+       inside .source-rail-chips instead. */
+    position: relative;
+    z-index: 3;
+}
+
+.source-rail-chips {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex: 1;
+    min-width: 0;
     overflow-x: auto;
     scrollbar-width: none;
 }
 
-.source-rail::-webkit-scrollbar {
+.source-rail-chips::-webkit-scrollbar {
     display: none;
 }
 
@@ -607,8 +619,8 @@ body.resizing * {
 
 /* Overflow menu (Color by Port toggle) */
 .source-rail-overflow {
-    margin-left: auto;
     position: relative;
+    flex-shrink: 0;
 }
 
 .source-rail-overflow > summary {
@@ -648,7 +660,7 @@ body.resizing * {
     border-radius: 6px;
     padding: 8px 10px;
     box-shadow: 0 6px 18px rgba(0, 0, 0, 0.4);
-    z-index: 5;
+    z-index: 50;
     white-space: nowrap;
 }
 
