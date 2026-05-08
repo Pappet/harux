@@ -44,28 +44,21 @@
                 <span class="label">rejected</span>
                 <span class="value" id="pill-rejected-value">0</span>
             </div>
-            <div class="health-pill" id="pill-errors" title="Parse errors">
-                <span class="label">errors</span>
+            <div class="topbar-divider" aria-hidden="true"></div>
+            <div class="health-pill" id="pill-total" title="Total messages currently held in the inbox">
+                <span class="label">total</span>
+                <span class="value" id="pill-total-value">0</span>
+            </div>
+            <div class="health-pill" id="pill-validation" title="Validation warnings + segment errors across all messages">
+                <span class="label">validation</span>
+                <span class="value" id="pill-validation-value">0</span>
+            </div>
+            <div class="health-pill" id="pill-parse-errors" title="MLLP frames the parser rejected (server-side)">
+                <span class="label">parse errors</span>
                 <span class="value" id="pill-errors-value">0</span>
             </div>
         </div>
         <div class="header-actions">
-            <button onclick="togglePause()" id="btn-pause" title="Pause live updates">
-                <svg class="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg>
-                <span class="btn-label">Pause</span>
-            </button>
-            <button onclick="toggleAutoscroll()" id="btn-autoscroll" title="Auto-scroll">
-                <svg class="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><polyline points="19 12 12 19 5 12"/></svg>
-                <span class="btn-label">Auto</span>
-            </button>
-            <button onclick="toggleBookmarkFilter()" id="btn-bookmarks" title="Show bookmarked only">
-                <svg class="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>
-                <span class="btn-label">Bookmarks</span>
-            </button>
-            <button onclick="toggleValidationFilter()" id="btn-validation" title="Filter by validation state">
-                <svg class="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
-                <span class="btn-label">All</span>
-            </button>
             <button onclick="exportMessages()" title="Export JSON">
                 <svg class="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
                 Export
@@ -84,28 +77,26 @@
                 <input type="text" id="search-input" placeholder="Filter: type, patient, facility, ID, has:errors…" />
                 <kbd class="search-tip" id="search-tip">⌘K</kbd>
             </div>
-            <div class="source-rail" id="source-rail"></div>
-            <div class="rate-band" id="rate-band">
-                <div class="stat">
-                    <span class="v" id="rate-total">0</span>
-                    <span class="l">total</span>
-                </div>
-                <div class="stat">
-                    <span class="v" id="rate-permin">0</span>
-                    <span class="l">per min</span>
-                </div>
-                <div class="stat">
-                    <span class="v" id="rate-warnings">0</span>
-                    <span class="l">warnings</span>
-                </div>
-                <div class="stat">
-                    <span class="v" id="rate-errors">0</span>
-                    <span class="l">errors</span>
-                </div>
-                <div class="spark-wrap">
-                    <svg class="bars" id="rate-bars" viewBox="0 0 200 30" preserveAspectRatio="none"></svg>
-                </div>
+            <div class="inbox-controls">
+                <button class="ctl-btn" id="btn-pause" onclick="togglePause()" title="Pause live updates">
+                    <svg class="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg>
+                    <span class="btn-label">Pause</span>
+                </button>
+                <button class="ctl-btn" id="btn-autoscroll" onclick="toggleAutoscroll()" title="Auto-scroll to newest">
+                    <svg class="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><polyline points="19 12 12 19 5 12"/></svg>
+                    <span class="btn-label">Auto</span>
+                </button>
+                <div class="ctl-divider" aria-hidden="true"></div>
+                <button class="ctl-btn" id="btn-bookmarks" onclick="toggleBookmarkFilter()" title="Show bookmarked only">
+                    <svg class="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>
+                    <span class="btn-label">Bookmarks</span>
+                </button>
+                <button class="ctl-btn" id="btn-validation" onclick="toggleValidationFilter()" title="Filter by validation state">
+                    <svg class="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+                    <span class="btn-label">All</span>
+                </button>
             </div>
+            <div class="source-rail" id="source-rail"></div>
             <div class="message-list" id="message-list">
                 <div class="empty-state" id="empty-state">
                     <div class="empty-card">

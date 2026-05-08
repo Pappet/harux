@@ -63,11 +63,6 @@ let totalMessagesCount = 0;
 const rateWindow = [];               // Date.now() timestamps within last 60 s
 let lastMessageReceivedAt = null;    // Date.now() of most recent addMessage
 
-// Throughput-band state: 60-second ring buffer of message counts (one per second).
-// The rightmost bucket is "now"; it is incremented by addMessage and rotated
-// every second by rotateRateBuckets.
-const rateBuckets = new Array(60).fill(0);
-
 // Segment diff state
 let diffPinnedMessage = null; // the reference message pinned for comparison
 let diffIgnoreDynamic = false;
@@ -282,14 +277,13 @@ function connectWs() {
             pendingMessages = [];
             totalMessagesCount = 0;
             rateWindow.length = 0;
-            rateBuckets.fill(0);
             lastMessageReceivedAt = null;
             selectedId = null;
             selectedMessage = null;
             renderMessageList();
             renderSourceLegend();
             renderHealthPills();
-            renderThroughputBand();
+            updateHeaderCounters();
             resetDetailHeader();
             document.getElementById('detail-content').innerHTML = DETAIL_EMPTY_HTML;
         }
@@ -334,7 +328,6 @@ function addMessage(summary) {
     totalMessagesCount++;
     const now = Date.now();
     rateWindow.push(now);
-    rateBuckets[rateBuckets.length - 1]++;
     lastMessageReceivedAt = now;
     if (!paused) {
         scheduleRender();
@@ -357,7 +350,7 @@ function flushAndRender() {
     }
     renderMessageList();
     renderSourceLegend();
-    renderThroughputBand();
+    updateHeaderCounters();
 }
 
 async function loadMessages() {
@@ -372,7 +365,7 @@ async function loadMessages() {
         }
         renderMessageList();
         renderSourceLegend();
-        renderThroughputBand();
+        updateHeaderCounters();
     } catch (e) {
         console.error('Failed to load messages:', e);
     }
@@ -390,10 +383,13 @@ async function pollStats() {
         document.getElementById('pill-conns-value').textContent =
             `${stats.active_connections} / ${stats.max_connections}`;
 
-        // errors pill — paint value red when nonzero
+        // parse errors pill — paint pill red when nonzero (server-side MLLP parse failures)
+        const parseErrorsPill = document.getElementById('pill-parse-errors');
         const errorsValue = document.getElementById('pill-errors-value');
         errorsValue.textContent = stats.parse_errors;
-        errorsValue.classList.toggle('warn', stats.parse_errors > 0);
+        if (parseErrorsPill) {
+            parseErrorsPill.classList.toggle('err-pill', stats.parse_errors > 0);
+        }
 
         // rejected pill — hidden when zero
         const rejectedPill = document.getElementById('pill-rejected');
@@ -402,9 +398,10 @@ async function pollStats() {
             if (stats.rejected_connections > 0) {
                 rejectedPill.style.display = '';
                 rejectedValue.textContent = stats.rejected_connections;
-                rejectedValue.classList.add('warn');
+                rejectedPill.classList.add('warn-pill');
             } else {
                 rejectedPill.style.display = 'none';
+                rejectedPill.classList.remove('warn-pill');
             }
         }
 
@@ -466,52 +463,45 @@ function renderRateSpark() {
     return `<polyline points="${points}" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round" />`;
 }
 
-// --- Throughput band ---
-function rotateRateBuckets() {
-    rateBuckets.shift();
-    rateBuckets.push(0);
-}
+// --- Header counters (total / validation / parse errors) ---
+// `parse errors` is updated by pollStats from the server stat. The other two
+// counters are derived from the in-memory message buffer.
+function updateHeaderCounters() {
+    const totalEl = document.getElementById('pill-total-value');
+    if (totalEl) {
+        totalEl.textContent = messages.length + pendingMessages.length;
+    }
 
-function renderThroughputBand() {
-    const totalEl = document.getElementById('rate-total');
-    const perminEl = document.getElementById('rate-permin');
-    const warnEl = document.getElementById('rate-warnings');
-    const errEl = document.getElementById('rate-errors');
-    const bars = document.getElementById('rate-bars');
-    if (!totalEl || !bars) return;
-
-    const total = messages.length + pendingMessages.length;
-    const perMin = rateWindow.length;
-
-    let warnings = 0;
-    let errors = 0;
+    let validationCount = 0;
     for (const m of messages) {
-        if (m.has_segment_errors) errors++;
-        else if ((m.validation_warning_count || 0) > 0) warnings++;
+        validationCount += (m.validation_warning_count || 0);
+        if (m.has_segment_errors) validationCount++;
+    }
+    const validationPill = document.getElementById('pill-validation');
+    const validationValue = document.getElementById('pill-validation-value');
+    if (validationValue) validationValue.textContent = validationCount;
+    if (validationPill) {
+        validationPill.classList.toggle('warn-pill', validationCount > 0);
     }
 
-    totalEl.textContent = total;
-    perminEl.textContent = perMin;
-    warnEl.textContent = warnings;
-    warnEl.classList.toggle('warn', warnings > 0);
-    errEl.textContent = errors;
-    errEl.classList.toggle('err', errors > 0);
-
-    const n = rateBuckets.length;
-    const w = 200;
-    const h = 30;
-    const barW = w / n;
-    const max = Math.max(...rateBuckets, 1);
-    let html = '';
-    for (let i = 0; i < n; i++) {
-        const v = rateBuckets[i];
-        const barH = (v / max) * (h - 2);
-        const x = i * barW + 0.25;
-        const y = h - barH;
-        const opacity = 0.4 + (i / (n - 1 || 1)) * 0.6;
-        html += `<rect x="${x.toFixed(2)}" y="${y.toFixed(2)}" width="${(barW - 0.5).toFixed(2)}" height="${barH.toFixed(2)}" rx="0.5" opacity="${opacity.toFixed(2)}"/>`;
+    // Bookmarks button count — keep in sync with current message buffer.
+    const bookmarkCount = messages.reduce((n, m) => n + (m.bookmarked ? 1 : 0), 0);
+    const bookmarkBtn = document.getElementById('btn-bookmarks');
+    if (bookmarkBtn) {
+        const existing = bookmarkBtn.querySelector('.count');
+        if (bookmarkCount > 0) {
+            if (existing) {
+                existing.textContent = bookmarkCount;
+            } else {
+                const span = document.createElement('span');
+                span.className = 'count';
+                span.textContent = bookmarkCount;
+                bookmarkBtn.appendChild(span);
+            }
+        } else if (existing) {
+            existing.remove();
+        }
     }
-    bars.innerHTML = html;
 }
 
 function tickRowRelativeTimes() {
@@ -1293,8 +1283,9 @@ function toggleSegment(key) {
 function toggleAutoscroll() {
     autoscroll = !autoscroll;
     const btn = document.getElementById('btn-autoscroll');
-    btn.style.borderColor = autoscroll ? 'var(--success)' : 'var(--border)';
-    btn.style.color = autoscroll ? 'var(--success)' : 'var(--text-primary)';
+    if (!btn) return;
+    btn.classList.toggle('on', autoscroll);
+    btn.classList.toggle('ok-on', autoscroll);
     saveSession();
 }
 
@@ -1302,14 +1293,13 @@ function toggleAutoscroll() {
 function togglePause() {
     paused = !paused;
     const btn = document.getElementById('btn-pause');
+    if (!btn) return;
+    btn.classList.toggle('on', paused);
+    btn.classList.toggle('warn-on', paused);
     if (paused) {
         btn.innerHTML = `${ICONS.play}<span class="btn-label">Live</span>`;
-        btn.style.borderColor = 'var(--warning)';
-        btn.style.color = 'var(--warning)';
     } else {
         btn.innerHTML = `${ICONS.pause}<span class="btn-label">Pause</span>`;
-        btn.style.borderColor = '';
-        btn.style.color = '';
         flushAndRender();
     }
     saveSession();
@@ -1340,14 +1330,13 @@ async function clearMessages() {
         messages = [];
         pendingMessages = [];
         rateWindow.length = 0;
-        rateBuckets.fill(0);
         lastMessageReceivedAt = null;
         selectedId = null;
         selectedMessage = null;
         renderMessageList();
         renderSourceLegend();
         renderHealthPills();
-        renderThroughputBand();
+        updateHeaderCounters();
         resetDetailHeader();
         document.getElementById('detail-content').innerHTML = DETAIL_EMPTY_HTML;
     } catch (e) {
@@ -1393,15 +1382,13 @@ async function toggleBookmark(id, event) {
 function toggleBookmarkFilter() {
     showBookmarkedOnly = !showBookmarkedOnly;
     const btn = document.getElementById('btn-bookmarks');
-    if (showBookmarkedOnly) {
-        btn.innerHTML = `${ICONS.starFilled}<span class="btn-label">Bookmarks</span>`;
-        btn.style.borderColor = 'var(--warning)';
-        btn.style.color = 'var(--warning)';
-    } else {
-        btn.innerHTML = `${ICONS.starOutline}<span class="btn-label">Bookmarks</span>`;
-        btn.style.borderColor = '';
-        btn.style.color = '';
-    }
+    if (!btn) return;
+    btn.classList.toggle('on', showBookmarkedOnly);
+    btn.classList.toggle('warn-on', showBookmarkedOnly);
+    const labelHtml = `<span class="btn-label">Bookmarks</span>`;
+    const icon = showBookmarkedOnly ? ICONS.starFilled : ICONS.starOutline;
+    const existingCount = btn.querySelector('.count');
+    btn.innerHTML = `${icon}${labelHtml}` + (existingCount ? existingCount.outerHTML : '');
     renderMessageList();
     saveSession();
 }
@@ -1409,18 +1396,16 @@ function toggleBookmarkFilter() {
 function syncValidationFilterUI() {
     const btn = document.getElementById('btn-validation');
     if (!btn) return;
+    btn.classList.remove('on', 'warn-on', 'err-on');
+    const baseHtml = `${ICONS.warning}<span class="btn-label">`;
     if (validationFilter === 0) {
-        btn.innerHTML = `${ICONS.warning}<span class="btn-label">All</span>`;
-        btn.style.borderColor = '';
-        btn.style.color = '';
+        btn.innerHTML = `${baseHtml}All</span>`;
     } else if (validationFilter === 1) {
-        btn.innerHTML = `${ICONS.warning}<span class="btn-label">Warn</span>`;
-        btn.style.borderColor = 'var(--warning)';
-        btn.style.color = 'var(--warning)';
+        btn.innerHTML = `${baseHtml}Warn</span>`;
+        btn.classList.add('on', 'warn-on');
     } else if (validationFilter === 2) {
-        btn.innerHTML = `${ICONS.warning}<span class="btn-label">Error</span>`;
-        btn.style.borderColor = 'var(--error)';
-        btn.style.color = 'var(--error)';
+        btn.innerHTML = `${baseHtml}Error</span>`;
+        btn.classList.add('on', 'err-on');
     }
 }
 
@@ -1609,16 +1594,14 @@ document.addEventListener('click', (e) => {
 
     if (paused) {
         const btn = document.getElementById('btn-pause');
+        btn.classList.add('on', 'warn-on');
         btn.innerHTML = `${ICONS.play}<span class="btn-label">Live</span>`;
-        btn.style.borderColor = 'var(--warning)';
-        btn.style.color = 'var(--warning)';
     }
 
     if (showBookmarkedOnly) {
         const btn = document.getElementById('btn-bookmarks');
+        btn.classList.add('on', 'warn-on');
         btn.innerHTML = `${ICONS.starFilled}<span class="btn-label">Bookmarks</span>`;
-        btn.style.borderColor = 'var(--warning)';
-        btn.style.color = 'var(--warning)';
     }
 
     syncValidationFilterUI();
@@ -1631,14 +1614,12 @@ toggleAutoscroll();
 connectWs();
 setInterval(pollStats, 3000);
 setInterval(() => {
-    rotateRateBuckets();
     renderHealthPills();
     tickRowRelativeTimes();
-    renderThroughputBand();
 }, 1000);
 renderHealthPills();
 renderSourceLegend();
-renderThroughputBand();
+updateHeaderCounters();
 pollStats();
 
 // Search shortcut: Cmd/Ctrl+K focuses the filter input. The hint chip
