@@ -28,6 +28,11 @@ and this project follows [Semantic Versioning](https://semver.org/lang/en/).
 - **Always-visible source rail** — the source legend (previously hidden until toggled) is now a permanent rail above the message list. Each source renders as a `.source-chip` with colored dot, host (or `host:port`), and per-source message count. Click toggles `highlightedSource` and dims non-matching rows. The rail scrolls horizontally when chips overflow, with hidden scrollbars (#96)
 - **Color by Port moved to overflow menu** — the `Color by Port` toggle is no longer inline with the source chips. It lives in a `<details>` overflow popover (⋯) at the right edge of the rail, freeing the rail for scannable source identification (#96)
 - **Throughput band** — a new row between the source rail and the message list shows four counters (`total`, `per min`, `warnings`, `errors`) plus a 60-bar histogram representing the last 60 seconds of message arrivals. Bars rotate every second; opacity ramps from 0.4 (oldest) to 1.0 (newest). `warnings` paints amber when nonzero, `errors` paints red. Backed by a `rateBuckets` ring buffer that is incremented by `addMessage` and rotated by a 1-second interval (#96)
+- **Detail header restructure** — replaced the single-row `[h2 + meta + tag controls]` header with a layered structure: type chip + human title on row 1, optional description on row 2, monospace metadata row (`patient · MRN · control · v · received`) with click-to-copy on the control ID, plus a tags row. Bookmark and Pin-for-diff are promoted to text+icon `.action-btn` buttons in a dedicated actions column on the right (#98)
+- **Detail tabs — larger, with segment badge** — bumped tab padding to `11px 14px`. Segments tab now carries a `(N)` badge equal to the message's segment count. Diff tab is `margin-left: auto` so it visually separates from the "view this message" tabs (#98)
+- **Typical segments checklist** — wrapped in a card (`.seg-checklist`) and each pill carries an explicit symbol: `✓` present, `⚠` flagged, `✕` required-but-missing, blank for absent-and-optional (#98)
+- **Validation summary banner** — replaced the bulleted `.validation-warnings-panel` with a one-line summary banner at the top of the segments view: `⚠ 2 validation warnings · required field missing in PD1-3, expected segment not sent: OBX`. The full bulleted list is preserved as a collapsible `<details>` body (#98)
+- **Field rows show description inline** — the field-dictionary description is no longer hover-only. It renders as a `.desc-text` sub-line under the field index (e.g. `PID-5 / Patient name`). Rows that triggered a `MISSING_FIELD` warning are tinted amber and gain a `⚠ required` suffix on the value cell. The hover-tooltip CSS for `.field-idx.has-tooltip` is removed in favor of the inline line (#98)
 
 ---
 
@@ -69,6 +74,7 @@ and this project follows [Semantic Versioning](https://semver.org/lang/en/).
 | [`4554d90`](https://github.com/Pappet/harux/commit/4554d90488df2bd604f1017d024013cd08331f72) | `feat(ui):` top-bar health pills replace stats dots (#92) |
 | [`e658905`](https://github.com/Pappet/harux/commit/e658905e9faf919031eb267d8179c720d857e468) | `feat(ui):` two-line message rows with time grouping + ACK chips (#94) |
 | [`3e49222`](https://github.com/Pappet/harux/commit/3e49222e15524144e94b7c780cf1cb03e2a0b21a) | `feat(ui):` always-visible source rail + 60-bar throughput band (#96) |
+| [`c353274`](https://github.com/Pappet/harux/commit/c35327476243aecfd9c5763052ef890b6216fd38) | `feat(ui):` detail panel restructure — header / tabs / validation / fields (#98) |
 | [`1993bcb`](https://github.com/Pappet/harux/commit/1993bcb07709460bce5d468c046be6e2f1db533c) | `feat(a11y):` keyboard navigation for message list rows |
 | [`f5c650a`](https://github.com/Pappet/harux/commit/f5c650aa025132a5a6e660092957fd3ad69099ec) | `feat(ui):` typography + color foundation for v0.5.0 redesign (#86) |
 

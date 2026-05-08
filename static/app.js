@@ -255,9 +255,8 @@ function connectWs() {
             renderSourceLegend();
             renderHealthPills();
             renderThroughputBand();
+            resetDetailHeader();
             document.getElementById('detail-content').innerHTML = '<div class="empty-state"><p>No message selected</p></div>';
-            document.getElementById('detail-title').textContent = 'Select a message';
-            document.getElementById('detail-meta').textContent = '';
         }
     };
 }
@@ -747,39 +746,120 @@ async function selectMessage(id) {
     }
 }
 
+function resetDetailHeader() {
+    const typeEl = document.getElementById('detail-type');
+    if (typeEl) {
+        typeEl.style.display = 'none';
+        typeEl.textContent = '';
+    }
+    const titleEl = document.getElementById('detail-title');
+    if (titleEl) titleEl.textContent = 'Select a message';
+    const descEl = document.getElementById('detail-desc');
+    if (descEl) {
+        descEl.style.display = 'none';
+        descEl.textContent = '';
+    }
+    const metaEl = document.getElementById('detail-meta');
+    if (metaEl) metaEl.innerHTML = '';
+    const actionsEl = document.getElementById('detail-actions');
+    if (actionsEl) actionsEl.innerHTML = '';
+    const tagsEl = document.getElementById('detail-tags');
+    if (tagsEl) tagsEl.innerHTML = '';
+    const segBadge = document.getElementById('tab-segments-badge');
+    if (segBadge) segBadge.style.display = 'none';
+}
+
+function formatDetailReceived(received) {
+    if (!received) return '';
+    const t = new Date(received);
+    if (isNaN(t.getTime())) return received;
+    const yyyy = t.getFullYear();
+    const mm = String(t.getMonth() + 1).padStart(2, '0');
+    const dd = String(t.getDate()).padStart(2, '0');
+    const hh = String(t.getHours()).padStart(2, '0');
+    const min = String(t.getMinutes()).padStart(2, '0');
+    const ss = String(t.getSeconds()).padStart(2, '0');
+    return `${yyyy}-${mm}-${dd} ${hh}:${min}:${ss}`;
+}
+
+function buildDetailMeta(msg) {
+    const items = [];
+    const patient = msg.patient_name || msg.patient_id;
+    if (patient) {
+        items.push(`<span class="item"><span class="k">patient</span><span class="v">${esc(patient)}</span></span>`);
+    }
+    if (msg.patient_id && msg.patient_name) {
+        // Only show MRN separately if both name and ID exist (otherwise patient covers it).
+        items.push(`<span class="item"><span class="k">MRN</span><span class="v">${esc(msg.patient_id)}</span></span>`);
+    }
+    if (msg.message_control_id) {
+        items.push(`<span class="item">
+            <span class="k">control</span>
+            <span class="v">${esc(msg.message_control_id)}</span>
+            <span class="copy" title="Copy control ID" onclick="copyToClipboard('${escAttr(escJS(msg.message_control_id))}', this)">📋</span>
+        </span>`);
+    }
+    if (msg.version) {
+        items.push(`<span class="item"><span class="k">v</span><span class="v">${esc(msg.version)}</span></span>`);
+    }
+    if (msg.source_addr) {
+        items.push(`<span class="item"><span class="k">from</span><span class="v">${esc(msg.source_addr)}</span></span>`);
+    }
+    if (msg.charset) {
+        items.push(`<span class="item"><span class="k">charset</span><span class="v">${esc(msg.charset)}</span></span>`);
+    }
+    const received = formatDetailReceived(msg.received_at);
+    if (received) {
+        items.push(`<span class="item"><span class="k">received</span><span class="v">${esc(received)}</span></span>`);
+    }
+    return items.join('<span class="sep">·</span>');
+}
+
 function renderDetail() {
     if (!selectedMessage) return;
     const msg = selectedMessage;
 
+    // Title row: type chip + human title.
+    const typeEl = document.getElementById('detail-type');
+    if (msg.message_type) {
+        typeEl.textContent = msg.message_type;
+        typeEl.style.display = '';
+    } else {
+        typeEl.style.display = 'none';
+    }
     document.getElementById('detail-title').textContent =
-        `${msg.message_type} — ${msg.patient_name || msg.patient_id || 'Unknown'}`;
+        msg.message_type_description || msg.patient_name || msg.patient_id || 'Message';
 
-    const descEl = document.getElementById('detail-type-desc');
-    if (descEl) {
-        if (msg.message_type_description) {
-            descEl.textContent = msg.message_type_description;
-            descEl.style.display = '';
-        } else {
-            descEl.style.display = 'none';
-        }
+    // Description row.
+    const descEl = document.getElementById('detail-desc');
+    if (msg.message_type_description && (msg.patient_name || msg.patient_id)) {
+        // The description has been promoted to the title — keep desc row hidden when title already shows it.
+        descEl.style.display = 'none';
+    } else if (msg.message_type_description) {
+        descEl.textContent = msg.message_type_description;
+        descEl.style.display = '';
+    } else {
+        descEl.style.display = 'none';
     }
 
-    document.getElementById('detail-meta').textContent =
-        `${msg.source_addr} | ${msg.message_control_id} | v${msg.version}${msg.charset ? ` | ${msg.charset}` : ''}`;
+    // Metadata row.
+    document.getElementById('detail-meta').innerHTML = buildDetailMeta(msg);
 
-    const tagsContainer = document.getElementById('detail-tags');
-
-    const bookmarkBtnClass = msg.bookmarked ? 'detail-bookmark-btn active' : 'detail-bookmark-btn';
-    const bookmarkBtnIcon = msg.bookmarked ? '★' : '☆';
-
+    // Actions: bookmark + pin.
     const isPinned = diffPinnedMessage && diffPinnedMessage.id === msg.id;
-    const pinBtnClass = isPinned ? 'detail-pin-btn active' : 'detail-pin-btn';
-    const pinBtnLabel = isPinned ? '📌 Pinned' : '📌 Pin for Diff';
+    const bookmarkClass = msg.bookmarked ? 'action-btn bookmark active' : 'action-btn bookmark';
+    const bookmarkIcon = msg.bookmarked ? '★' : '☆';
+    const bookmarkLabel = msg.bookmarked ? 'Bookmarked' : 'Bookmark';
+    const pinClass = isPinned ? 'action-btn pin active' : 'action-btn pin';
+    const pinLabel = isPinned ? '📌 Pinned' : '📌 Pin diff';
+    document.getElementById('detail-actions').innerHTML = `
+        <button class="${bookmarkClass}" aria-label="${bookmarkLabel}" onclick="toggleBookmark('${msg.id}', event)" title="Toggle bookmark">${bookmarkIcon} ${bookmarkLabel}</button>
+        <button class="${pinClass}" aria-label="${pinLabel}" onclick="toggleDiffPin('${msg.id}', event)" title="Pin this message as the diff reference">${pinLabel}</button>
+    `;
 
-    tagsContainer.innerHTML = `
-        <button class="${bookmarkBtnClass}" onclick="toggleBookmark('${msg.id}', event)" title="Toggle bookmark">${bookmarkBtnIcon} Bookmark</button>
-        <button class="${pinBtnClass}" onclick="toggleDiffPin('${msg.id}')" title="Pin this message as the diff reference">${pinBtnLabel}</button>
-    ` + (msg.tags || []).map(t =>
+    // Tags row.
+    const tagsRow = document.getElementById('detail-tags');
+    tagsRow.innerHTML = (msg.tags || []).map(t =>
         `<span class="msg-tag">${esc(t)} <span class="msg-tag-remove" onclick="removeTag('${msg.id}', '${escAttr(escJS(t))}')">×</span></span>`
     ).join('') + `
         <div class="msg-tag-add">
@@ -787,6 +867,18 @@ function renderDetail() {
             <button onclick="addTag('${msg.id}', document.getElementById('add-tag-input').value)">+</button>
         </div>
     `;
+
+    // Segments tab badge — segment count.
+    const segBadge = document.getElementById('tab-segments-badge');
+    if (segBadge) {
+        const count = (msg.segments && msg.segments.length) || 0;
+        if (count > 0) {
+            segBadge.textContent = count;
+            segBadge.style.display = '';
+        } else {
+            segBadge.style.display = 'none';
+        }
+    }
 
     // Show/hide Diff tab based on whether a pinned message exists and it's a different message
     const diffTabBtn = document.getElementById('tab-btn-diff');
@@ -856,38 +948,73 @@ function renderTab() {
             else if (w.code === 'MISSING_FIELD') fieldWarningSegs[w.segment] = true;
         }
 
-        const typicalBanner = (msg.typical_segments && msg.typical_segments.length)
-            ? `<div class="typical-segments-bar">
-                <span class="typical-segments-label">Typical segments:</span>
+        const typicalChecklist = (msg.typical_segments && msg.typical_segments.length)
+            ? `<div class="seg-checklist">
+                <span class="seg-checklist-label">Typical segments</span>
                 ${msg.typical_segments.map(s => {
                 const present = msg.segments.some(seg => seg.name === s);
                 const desc = (msg.typical_segment_descriptions || {})[s];
-                let cls, titleText;
+                let cls, symbol, titleText;
                 if (missingSegWarnings[s]) {
                     cls = 'missing';
+                    symbol = '✕';
                     titleText = missingSegWarnings[s];
                 } else if (fieldWarningSegs[s]) {
                     cls = 'warn';
+                    symbol = '⚠';
                     titleText = (desc ? desc + ' — ' : '') + 'has required fields missing';
                 } else if (present) {
                     cls = 'present';
+                    symbol = '✓';
                     titleText = desc || null;
                 } else {
                     cls = 'absent';
+                    symbol = '';
                     titleText = desc || null;
                 }
                 const titleAttr = titleText ? ` title="${escAttr(titleText)}"` : '';
-                return `<span class="typical-seg ${cls}"${titleAttr}>${esc(s)}</span>`;
+                const symbolHtml = symbol ? ` ${symbol}` : '';
+                return `<span class="seg-pill ${cls}"${titleAttr}>${esc(s)}${symbolHtml}</span>`;
             }).join('')}
                </div>`
             : '';
-        const hasSegErrors = warnings.some(w => w.code === 'MISSING_SEGMENT');
-        const panelCls = hasSegErrors ? 'validation-warnings-panel error' : 'validation-warnings-panel';
-        const validationBanner = (msg.validation_warnings && msg.validation_warnings.length)
-            ? `<div class="${panelCls}">
-                <div class="validation-warnings-title">&#9888; Validation ${hasSegErrors ? 'Errors' : 'Warnings'} (${msg.validation_warnings.length})</div>
+
+        // Validation summary banner — one-line aggregate + collapsible full list.
+        let validationBanner = '';
+        if (warnings.length) {
+            const hasSegErrors = warnings.some(w => w.code === 'MISSING_SEGMENT');
+            const summaryClass = hasSegErrors ? 'validation-summary error' : 'validation-summary';
+
+            const segMissing = warnings.filter(w => w.code === 'MISSING_SEGMENT').map(w => w.segment);
+            const fieldMissing = warnings.filter(w => w.code === 'MISSING_FIELD').map(w => `${w.segment}-${w.field}`);
+            const datatype = warnings.filter(w => w.code === 'INVALID_DATATYPE').map(w => `${w.segment}-${w.field}`);
+
+            const fmtList = (items, max) => {
+                const head = items.slice(0, max).map(x => esc(x)).join(', ');
+                const rest = items.length > max ? ` +${items.length - max} more` : '';
+                return head + rest;
+            };
+
+            const parts = [];
+            if (fieldMissing.length) {
+                parts.push(`required field missing in <span class="seg-list">${fmtList(fieldMissing, 3)}</span>`);
+            }
+            if (segMissing.length) {
+                parts.push(`expected segment not sent: <span class="seg-list">${fmtList(segMissing, 3)}</span>`);
+            }
+            if (datatype.length) {
+                parts.push(`invalid datatype in <span class="seg-list-type">${fmtList(datatype, 3)}</span>`);
+            }
+            const summaryLine = parts.join(' · ');
+            const headline = `${warnings.length} validation ${warnings.length === 1 ? 'warning' : 'warnings'}`;
+
+            validationBanner = `<details class="${summaryClass}">
+                <summary>
+                    <span class="summary-icon">⚠</span>
+                    <span class="summary-text"><strong>${headline}</strong> · ${summaryLine}</span>
+                </summary>
                 <ul class="validation-warnings-list">
-                ${msg.validation_warnings.map(w => {
+                    ${warnings.map(w => {
                 const badgeCls = w.code === 'MISSING_SEGMENT' ? 'validation-seg error'
                     : w.code === 'INVALID_DATATYPE' ? 'validation-seg type'
                     : 'validation-seg';
@@ -895,12 +1022,23 @@ function renderTab() {
                 return `<li><span class="${badgeCls}">${esc(label)}</span> ${esc(w.message)}</li>`;
             }).join('')}
                 </ul>
-               </div>`
-            : '';
-        content.innerHTML = typicalBanner + validationBanner + msg.segments.map((seg, segIdx) => {
+            </details>`;
+        }
+
+        // Field-level warning lookup: segName → Set of field indices flagged as MISSING_FIELD.
+        const missingFieldByseg = new Map();
+        for (const w of warnings) {
+            if (w.code === 'MISSING_FIELD' && w.segment != null && w.field != null) {
+                if (!missingFieldByseg.has(w.segment)) missingFieldByseg.set(w.segment, new Set());
+                missingFieldByseg.get(w.segment).add(w.field);
+            }
+        }
+
+        content.innerHTML = typicalChecklist + validationBanner + msg.segments.map((seg, segIdx) => {
             const key = `${msg.id}-${segIdx}`;
             const collapsed = collapsedSegments.has(key);
             const icon = collapsed ? '▸' : '▾';
+            const warnFields = missingFieldByseg.get(seg.name);
             return `
             <div class="segment-block">
                 <div class="segment-name ${seg.description ? 'has-seg-tooltip' : ''}" data-seg-key="${key}"${seg.description ? ` data-desc="${escAttr(seg.name + ': ' + seg.description)}"` : ''}>
@@ -910,18 +1048,20 @@ function renderTab() {
                     <span class="copy-btn" onclick="event.stopPropagation(); copySegment(${segIdx}, this)" title="Copy segment">📋</span>
                 </div>
                 ${collapsed ? '' : `<table class="field-table">
-                    <thead><tr><th style="width:70px">Field</th><th>Value</th><th>Components</th></tr></thead>
                     <tbody>
-                    ${seg.fields.map(f => `
-                        <tr>
-                            <td class="field-idx ${f.description ? 'has-tooltip' : ''}" ${f.description ? `data-desc="${escAttr(seg.name + '-' + f.index + ': ' + f.description)}"` : ''}>${esc(seg.name)}-${f.index}</td>
+                    ${seg.fields.map(f => {
+                const trCls = warnFields && warnFields.has(f.index) ? ' class="warn"' : '';
+                const descLine = f.description ? `<span class="desc-text">${esc(f.description)}</span>` : '';
+                return `
+                        <tr${trCls}>
+                            <td class="field-idx">${esc(seg.name)}-${f.index}${descLine}</td>
                             <td class="field-val">${esc(f.value) || '<span class="field-empty">empty</span>'}</td>
                             <td class="field-components">${f.components.length > 1
-                    ? f.components.map((c, i) => `<span title="${escAttr(seg.name + '-' + f.index + '.' + (i + 1))}">${esc(c)}</span>`).join(' <span style="color:var(--text-muted)">^</span> ')
-                    : ''
-                }</td>
-                        </tr>
-                    `).join('')}
+                        ? f.components.map((c, i) => `<span title="${escAttr(seg.name + '-' + f.index + '.' + (i + 1))}">${esc(c)}</span>`).join(' <span style="color:var(--text-muted)">^</span> ')
+                        : ''
+                    }</td>
+                        </tr>`;
+            }).join('')}
                     </tbody>
                 </table>`}
             </div>`;
@@ -1137,12 +1277,17 @@ async function clearMessages() {
         if (!resp.ok) throw new Error(`Server error: ${resp.status}`);
         messages = [];
         pendingMessages = [];
+        rateWindow.length = 0;
+        rateBuckets.fill(0);
+        lastMessageReceivedAt = null;
         selectedId = null;
         selectedMessage = null;
         renderMessageList();
+        renderSourceLegend();
+        renderHealthPills();
+        renderThroughputBand();
+        resetDetailHeader();
         document.getElementById('detail-content').innerHTML = '<div class="empty-state"><p>No message selected</p></div>';
-        document.getElementById('detail-title').textContent = 'Select a message';
-        document.getElementById('detail-meta').textContent = '';
     } catch (e) {
         console.error('Failed to clear messages:', e);
     }

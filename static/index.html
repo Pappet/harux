@@ -102,17 +102,22 @@
         <div class="panel-splitter" id="panel-splitter" title="Drag to resize, double-click to reset"></div>
 
         <div class="detail-panel">
-            <div class="detail-header">
-                <div class="detail-header-info">
-                    <h2 id="detail-title">Select a message</h2>
-                    <span id="detail-type-desc" class="detail-type-desc" style="display:none"></span>
-                    <span id="detail-meta"
-                        style="font-size: 11px; color: var(--text-muted); font-family: var(--font-mono);"></span>
+            <div class="detail-header" id="detail-header">
+                <div class="detail-header-main">
+                    <div class="detail-title-line">
+                        <span id="detail-type" class="detail-type" style="display:none"></span>
+                        <span id="detail-title" class="detail-title">Select a message</span>
+                    </div>
+                    <div id="detail-desc" class="detail-desc" style="display:none"></div>
+                    <div id="detail-meta" class="detail-meta"></div>
+                    <div id="detail-tags" class="detail-tags-row"></div>
                 </div>
-                <div id="detail-tags" class="detail-tags-container"></div>
+                <div id="detail-actions" class="detail-actions"></div>
             </div>
             <div class="detail-tabs">
-                <button class="detail-tab active" data-tab="parsed" onclick="switchTab('parsed')">Segments</button>
+                <button class="detail-tab active" data-tab="parsed" onclick="switchTab('parsed')">
+                    Segments <span class="badge" id="tab-segments-badge" style="display:none">0</span>
+                </button>
                 <button class="detail-tab" data-tab="raw" onclick="switchTab('raw')">Raw</button>
                 <button class="detail-tab" data-tab="ack" onclick="switchTab('ack')">ACK</button>
                 <button class="detail-tab" data-tab="json" onclick="switchTab('json')">JSON</button>
