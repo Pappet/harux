@@ -365,7 +365,18 @@ function renderMessageList() {
 
         row.className = rowClass;
         row.dataset.id = msg.id;
-        row.onclick = () => selectMessage(msg.id);
+        row.tabIndex = 0;
+        row.setAttribute('role', 'button');
+        row.setAttribute('aria-label', `Message from ${msg.sending_facility}, type ${msg.message_type}, received at ${msg.received_at}`);
+
+        const handleClick = () => selectMessage(msg.id);
+        row.onclick = handleClick;
+        row.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault();
+                handleClick();
+            }
+        });
 
         const time = new Date(msg.received_at);
         const yyyy = time.getFullYear();
@@ -403,6 +414,7 @@ function renderMessageList() {
 
         const bookmarkClass = msg.bookmarked ? 'msg-bookmark active' : 'msg-bookmark';
         const bookmarkIcon = msg.bookmarked ? '★' : '☆';
+        const bookmarkLabel = msg.bookmarked ? 'Remove bookmark' : 'Add bookmark';
 
         const isPinned = diffPinnedMessage && diffPinnedMessage.id === msg.id;
         const pinClass = isPinned ? 'msg-pin active' : 'msg-pin';
@@ -420,8 +432,8 @@ function renderMessageList() {
             <span class="msg-time">${timeStr}</span>
             <span class="msg-segs">${msg.segment_count}</span>
             ${ackHtml}
-            <span class="${bookmarkClass}" onclick="toggleBookmark('${msg.id}', event)" title="Bookmark">${bookmarkIcon}</span>
-            <span class="${pinClass}" onclick="toggleDiffPin('${msg.id}')" title="${pinTitle}">${pinIcon}</span>
+            <button class="${bookmarkClass}" aria-label="${bookmarkLabel}" onclick="toggleBookmark('${msg.id}', event)" title="Bookmark">${bookmarkIcon}</button>
+            <button class="${pinClass}" aria-label="${pinTitle}" onclick="toggleDiffPin('${msg.id}', event)" title="${pinTitle}">${pinIcon}</button>
         `;
         fragment.appendChild(row);
     }
@@ -525,7 +537,8 @@ function renderDetail() {
     renderTab();
 }
 
-async function toggleDiffPin(id) {
+async function toggleDiffPin(id, event) {
+    if (event) event.stopPropagation();
     if (diffPinnedMessage && diffPinnedMessage.id === id) {
         diffPinnedMessage = null;
         renderMessageList();
