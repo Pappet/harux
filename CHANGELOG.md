@@ -21,6 +21,10 @@ and this project follows [Semantic Versioning](https://semver.org/lang/en/).
 - **Typography** — adopted Inter (sans) and JetBrains Mono (mono) via Google Fonts; first phase of the v0.5.0 UI redesign (#86)
 - **Color palette** — refreshed dark theme: deeper backgrounds (`--bg-primary` `#0b0d12`, `--bg-secondary` `#131620`, `--bg-tertiary` `#1b1f2c`), cooler accent (`--accent` `#7aa2ff`), tuned success/error tones (`--success` `#4fb98a`, `--error` `#ea6363`) for higher contrast against the deeper canvas (#86)
 - **Top-bar health pills** — replaced the dot-and-counter `.stats-bar` with a row of pill-shaped status indicators: `listening :PORT` (green pulsing dot when WebSocket connected, red static when disconnected), `conns N / MAX`, `rate N/min` with a 60-second sparkline, `last Ns ago` (refreshed once per second), `errors N` (red value when nonzero). The previously hidden "rejected" stat is preserved as a hidden pill that surfaces only when `rejected_connections > 0`. The `total messages` counter was removed from the header; the rolling rate pill replaces it as the live-traffic signal (#92)
+- **Message rows — two-line layout** — dropped the dense 9-column grid (`12px 100px 90px 1fr 140px 60px 40px 24px 24px`) for a `[3 px source bar] [body] [actions]` layout. Row 1 carries `[type] [patient] [validation badge] [tags] [ACK chip]`; row 2 carries monospace `facility · source · N segs` with right-aligned time. The `Type / Facility / Patient / Date / Time / Segs / ACK` `.list-header` is removed (column titles are no longer needed). Actions column now shows the bookmark star only — the pin-for-diff icon was removed from the row and lives in the detail panel instead (#94)
+- **Time-bucket group headers** — messages are grouped under sticky headers: `Live` (last 30 s), `Last few minutes` (30 s – 5 min), `Earlier today`, `Yesterday`, and `MMM D` for older days. The header sticks to the top of the message list while scrolling so the bucket label stays visible (#94)
+- **ACK chips** — replaced the inline-styled `color:` ACK rendering with colored chip pills: `.msg-ack.aa` green, `.msg-ack.ae` red, `.msg-ack.ar` amber, `.msg-ack.none` muted. Easier to scan a column of failures at a glance (#94)
+- **Relative time on row 2** — messages in the `Live` and `Last few minutes` buckets show `Ns ago` / `Nm ago`; `Earlier today` shows `HH:mm:ss`; older messages show `MMM D HH:mm`. A 1-second tick refreshes the time labels in place without re-rendering the whole list (#94)
 
 ---
 
@@ -60,6 +64,7 @@ and this project follows [Semantic Versioning](https://semver.org/lang/en/).
 | [`a14f0de`](https://github.com/Pappet/harux/commit/a14f0de20053257e6b9cd2b9e6063fc8e2daf8dc) | `fix:` resolve ISO-8859-1 charset encoding issues (#78) |
 | [`a6f1ce7`](https://github.com/Pappet/harux/commit/a6f1ce7e1e8deb5dbead3248e099423231b1cd09) | `feat(a11y):` ARIA labels, native buttons, global focus ring |
 | [`4554d90`](https://github.com/Pappet/harux/commit/4554d90488df2bd604f1017d024013cd08331f72) | `feat(ui):` top-bar health pills replace stats dots (#92) |
+| [`e658905`](https://github.com/Pappet/harux/commit/e658905e9faf919031eb267d8179c720d857e468) | `feat(ui):` two-line message rows with time grouping + ACK chips (#94) |
 | [`1993bcb`](https://github.com/Pappet/harux/commit/1993bcb07709460bce5d468c046be6e2f1db533c) | `feat(a11y):` keyboard navigation for message list rows |
 | [`f5c650a`](https://github.com/Pappet/harux/commit/f5c650aa025132a5a6e660092957fd3ad69099ec) | `feat(ui):` typography + color foundation for v0.5.0 redesign (#86) |
 
