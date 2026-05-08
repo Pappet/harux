@@ -12,6 +12,10 @@ and this project follows [Semantic Versioning](https://semver.org/lang/en/).
 ### Added
 - **Keyboard accessibility for message rows** — message list rows now support `Tab` focus navigation and `Enter`/`Space` to select; a 2px accent outline appears on `:focus-visible`. Improves screen-reader and keyboard-only workflows.
 
+### Changed
+- **Typography** — adopted Inter (sans) and JetBrains Mono (mono) via Google Fonts; first phase of the v0.5.0 UI redesign (#86)
+- **Color palette** — refreshed dark theme: deeper backgrounds (`--bg-primary` `#0b0d12`, `--bg-secondary` `#131620`, `--bg-tertiary` `#1b1f2c`), cooler accent (`--accent` `#7aa2ff`), tuned success/error tones (`--success` `#4fb98a`, `--error` `#ea6363`) for higher contrast against the deeper canvas (#86)
+
 ---
 
 ## [0.4.0] – 2026-03-08 – Message Analysis
@@ -49,6 +53,7 @@ and this project follows [Semantic Versioning](https://semver.org/lang/en/).
 |--------|-------------|
 | [`a14f0de`](https://github.com/Pappet/harux/commit/a14f0de20053257e6b9cd2b9e6063fc8e2daf8dc) | `fix:` resolve ISO-8859-1 charset encoding issues (#78) |
 | [`1993bcb`](https://github.com/Pappet/harux/commit/1993bcb07709460bce5d468c046be6e2f1db533c) | `feat(a11y):` keyboard navigation for message list rows |
+| [`f5c650a`](https://github.com/Pappet/harux/commit/f5c650aa025132a5a6e660092957fd3ad69099ec) | `feat(ui):` typography + color foundation for v0.5.0 redesign (#86) |
 
 #### 2026-03-08
 
