@@ -9,6 +9,9 @@ and this project follows [Semantic Versioning](https://semver.org/lang/en/).
 
 ## [Unreleased]
 
+### Added
+- **Keyboard accessibility for message rows** — message list rows now support `Tab` focus navigation and `Enter`/`Space` to select; a 2px accent outline appears on `:focus-visible`. Improves screen-reader and keyboard-only workflows.
+
 ---
 
 ## [0.4.0] – 2026-03-08 – Message Analysis
@@ -45,6 +48,7 @@ and this project follows [Semantic Versioning](https://semver.org/lang/en/).
 | Commit | Description |
 |--------|-------------|
 | [`a14f0de`](https://github.com/Pappet/harux/commit/a14f0de20053257e6b9cd2b9e6063fc8e2daf8dc) | `fix:` resolve ISO-8859-1 charset encoding issues (#78) |
+| [`310a909`](https://github.com/Pappet/harux/commit/310a9095c94ebd7ad1f773ead15ed311eb1eff58) | `feat(a11y):` keyboard navigation for message list rows |
 
 #### 2026-03-08
 
