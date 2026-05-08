@@ -976,7 +976,9 @@ function escJS(str) {
     if (!str) return '';
     return str.replace(/\\/g, '\\\\')
         .replace(/'/g, '\\\'')
-        .replace(/"/g, '\\"');
+        .replace(/"/g, '\\"')
+        .replace(/\n/g, '\\n')
+        .replace(/\r/g, '\\r');
 }
 
 // --- Copy to Clipboard ---

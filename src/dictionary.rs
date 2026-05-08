@@ -38,8 +38,18 @@ pub fn get_field_description(version: &str, segment: &str, field_seq: usize) -> 
     let dict = get_v251();
 
     if let Some(seg_def) = dict.segments.get(segment) {
-        // Find field definition by sequence number (1-based)
-        if let Some(field_def) = seg_def.fields.iter().find(|f| f.seq == field_seq) {
+        // Try O(1) fast-path first assuming perfect sequence, fallback to O(N) search.
+        let field_def = if field_seq > 0 {
+            seg_def.fields.get(field_seq - 1)
+        } else {
+            None
+        };
+
+        let field_def = field_def
+            .filter(|f| f.seq == field_seq)
+            .or_else(|| seg_def.fields.iter().find(|f| f.seq == field_seq));
+
+        if let Some(field_def) = field_def {
             return Some(field_def.desc.clone());
         }
     }
@@ -58,7 +68,17 @@ pub fn inject_descriptions(segments: &mut [crate::hl7::types::Hl7Segment], versi
         if let Some(seg_def) = dict.segments.get(&seg_name) {
             segment.description = Some(seg_def.desc.clone());
             for field in segment.fields.iter_mut() {
-                if let Some(field_def) = seg_def.fields.iter().find(|f| f.seq == field.index) {
+                let field_def = if field.index > 0 {
+                    seg_def.fields.get(field.index - 1)
+                } else {
+                    None
+                };
+
+                let field_def = field_def
+                    .filter(|f| f.seq == field.index)
+                    .or_else(|| seg_def.fields.iter().find(|f| f.seq == field.index));
+
+                if let Some(field_def) = field_def {
                     field.description = Some(field_def.desc.clone());
                 }
             }
