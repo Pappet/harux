@@ -817,7 +817,7 @@ function renderDetail() {
     if (!selectedMessage) return;
     const msg = selectedMessage;
 
-    // Title row: type chip + human title.
+    // Title row: type chip + human title (patient when available, else message type).
     const typeEl = document.getElementById('detail-type');
     if (msg.message_type) {
         typeEl.textContent = msg.message_type;
@@ -826,14 +826,11 @@ function renderDetail() {
         typeEl.style.display = 'none';
     }
     document.getElementById('detail-title').textContent =
-        msg.message_type_description || msg.patient_name || msg.patient_id || 'Message';
+        msg.patient_name || msg.patient_id || msg.message_type || 'Message';
 
-    // Description row.
+    // Description row — always populate when message_type_description is available.
     const descEl = document.getElementById('detail-desc');
-    if (msg.message_type_description && (msg.patient_name || msg.patient_id)) {
-        // The description has been promoted to the title — keep desc row hidden when title already shows it.
-        descEl.style.display = 'none';
-    } else if (msg.message_type_description) {
+    if (msg.message_type_description) {
         descEl.textContent = msg.message_type_description;
         descEl.style.display = '';
     } else {

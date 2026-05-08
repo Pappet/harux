@@ -782,20 +782,34 @@ body.resizing * {
     border-bottom: 1px solid var(--border);
     display: grid;
     grid-template-columns: 1fr auto;
-    gap: 16px;
+    grid-template-areas:
+        "title   actions"
+        "desc    desc"
+        "meta    meta";
+    column-gap: 16px;
+    row-gap: 6px;
     align-items: start;
 }
 
-.detail-header-main {
-    min-width: 0;
-}
-
 .detail-title-line {
+    grid-area: title;
     display: flex;
     align-items: center;
     gap: 10px;
-    margin-bottom: 6px;
     flex-wrap: wrap;
+    min-width: 0;
+}
+
+.detail-actions {
+    grid-area: actions;
+}
+
+.detail-desc {
+    grid-area: desc;
+}
+
+.detail-meta {
+    grid-area: meta;
 }
 
 .detail-type {
