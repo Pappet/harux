@@ -21,12 +21,7 @@ pub fn parse_message(raw: &str, source_addr: &str) -> Result<Hl7Message, String>
     let mut msg = Hl7Message::new_empty(raw.to_string(), source_addr.to_string());
 
     // Split into segments (HL7 uses \r as segment terminator, but be lenient)
-    let segment_strs: Vec<&str> = raw
-        .split(['\r', '\n'])
-        .filter(|s| !s.trim().is_empty())
-        .collect();
-
-    for seg_str in &segment_strs {
+    for seg_str in raw.split(['\r', '\n']).filter(|s| !s.trim().is_empty()) {
         let segment = parse_segment(seg_str, delimiters);
         msg.segments.push(segment);
     }
@@ -41,15 +36,13 @@ pub fn parse_message(raw: &str, source_addr: &str) -> Result<Hl7Message, String>
 
         // MSH-9: Message Type (e.g. ADT^A01^ADT_A01)
         let msg_type_field = get_field_value(msh, 9);
-        let type_components: Vec<&str> = msg_type_field.split(delimiters.component).collect();
-        if !type_components.is_empty() {
-            msg.message_type = if type_components.len() >= 2 {
-                format!("{}^{}", type_components[0], type_components[1])
+        let mut type_components = msg_type_field.split(delimiters.component);
+        if let Some(c0) = type_components.next() {
+            if let Some(c1) = type_components.next() {
+                msg.message_type = format!("{}^{}", c0, c1);
+                msg.trigger_event = c1.to_string();
             } else {
-                type_components[0].to_string()
-            };
-            if type_components.len() >= 2 {
-                msg.trigger_event = type_components[1].to_string();
+                msg.message_type = c0.to_string();
             }
         }
 
@@ -150,20 +143,20 @@ fn parse_delimiters(raw: &str) -> Result<Delimiters, String> {
 
 fn parse_segment(raw: &str, delimiters: Delimiters) -> Hl7Segment {
     let sep = delimiters.field;
-    let parts: Vec<&str> = raw.split(sep).collect();
-    let name = parts.first().unwrap_or(&"???").to_string();
+    let mut parts = raw.split(sep);
+    let name = parts.next().unwrap_or("???").to_string();
 
     let mut fields = Vec::new();
 
     // For MSH, field indexing is special: MSH-1 is the separator itself
-    for (i, &part) in parts.iter().enumerate().skip(1) {
+    for (i, part) in parts.enumerate() {
         let components: Vec<String> = part
             .split(delimiters.component)
             .map(|c| c.to_string())
             .collect();
 
         fields.push(Hl7Field {
-            index: i,
+            index: i + 1,
             value: part.to_string(),
             components,
             description: None,
