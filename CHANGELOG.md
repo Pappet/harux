@@ -25,6 +25,9 @@ and this project follows [Semantic Versioning](https://semver.org/lang/en/).
 - **Time-bucket group headers** — messages are grouped under sticky headers: `Live` (last 30 s), `Last few minutes` (30 s – 5 min), `Earlier today`, `Yesterday`, and `MMM D` for older days. The header sticks to the top of the message list while scrolling so the bucket label stays visible (#94)
 - **ACK chips** — replaced the inline-styled `color:` ACK rendering with colored chip pills: `.msg-ack.aa` green, `.msg-ack.ae` red, `.msg-ack.ar` amber, `.msg-ack.none` muted. Easier to scan a column of failures at a glance (#94)
 - **Relative time on row 2** — messages in the `Live` and `Last few minutes` buckets show `Ns ago` / `Nm ago`; `Earlier today` shows `HH:mm:ss`; older messages show `MMM D HH:mm`. A 1-second tick refreshes the time labels in place without re-rendering the whole list (#94)
+- **Always-visible source rail** — the source legend (previously hidden until toggled) is now a permanent rail above the message list. Each source renders as a `.source-chip` with colored dot, host (or `host:port`), and per-source message count. Click toggles `highlightedSource` and dims non-matching rows. The rail scrolls horizontally when chips overflow, with hidden scrollbars (#96)
+- **Color by Port moved to overflow menu** — the `Color by Port` toggle is no longer inline with the source chips. It lives in a `<details>` overflow popover (⋯) at the right edge of the rail, freeing the rail for scannable source identification (#96)
+- **Throughput band** — a new row between the source rail and the message list shows four counters (`total`, `per min`, `warnings`, `errors`) plus a 60-bar histogram representing the last 60 seconds of message arrivals. Bars rotate every second; opacity ramps from 0.4 (oldest) to 1.0 (newest). `warnings` paints amber when nonzero, `errors` paints red. Backed by a `rateBuckets` ring buffer that is incremented by `addMessage` and rotated by a 1-second interval (#96)
 
 ---
 
@@ -65,6 +68,7 @@ and this project follows [Semantic Versioning](https://semver.org/lang/en/).
 | [`a6f1ce7`](https://github.com/Pappet/harux/commit/a6f1ce7e1e8deb5dbead3248e099423231b1cd09) | `feat(a11y):` ARIA labels, native buttons, global focus ring |
 | [`4554d90`](https://github.com/Pappet/harux/commit/4554d90488df2bd604f1017d024013cd08331f72) | `feat(ui):` top-bar health pills replace stats dots (#92) |
 | [`e658905`](https://github.com/Pappet/harux/commit/e658905e9faf919031eb267d8179c720d857e468) | `feat(ui):` two-line message rows with time grouping + ACK chips (#94) |
+| [`3e49222`](https://github.com/Pappet/harux/commit/3e49222e15524144e94b7c780cf1cb03e2a0b21a) | `feat(ui):` always-visible source rail + 60-bar throughput band (#96) |
 | [`1993bcb`](https://github.com/Pappet/harux/commit/1993bcb07709460bce5d468c046be6e2f1db533c) | `feat(a11y):` keyboard navigation for message list rows |
 | [`f5c650a`](https://github.com/Pappet/harux/commit/f5c650aa025132a5a6e660092957fd3ad69099ec) | `feat(ui):` typography + color foundation for v0.5.0 redesign (#86) |
 

@@ -28,6 +28,11 @@ let totalMessagesCount = 0;
 const rateWindow = [];               // Date.now() timestamps within last 60 s
 let lastMessageReceivedAt = null;    // Date.now() of most recent addMessage
 
+// Throughput-band state: 60-second ring buffer of message counts (one per second).
+// The rightmost bucket is "now"; it is incremented by addMessage and rotated
+// every second by rotateRateBuckets.
+const rateBuckets = new Array(60).fill(0);
+
 // Segment diff state
 let diffPinnedMessage = null; // the reference message pinned for comparison
 let diffIgnoreDynamic = false;
@@ -86,42 +91,70 @@ function toggleHighlightSource(label) {
     saveSession();
 }
 
+function srcLabelFor(addr) {
+    if (!addr) return '';
+    return colorByPort ? addr : addr.split(':')[0];
+}
+
 function renderSourceLegend() {
-    const container = document.getElementById('source-legend');
+    const container = document.getElementById('source-rail');
     if (!container) return;
+
     if (seenSources.size === 0) {
-        container.style.display = 'none';
+        container.innerHTML = `
+            <span class="label">Sources</span>
+            <span class="source-rail-empty">none yet</span>
+            <details class="source-rail-overflow">
+                <summary title="Source options">⋯</summary>
+                <div class="popover">
+                    <label>
+                        <input type="checkbox" onchange="toggleColorByPort(event)" ${colorByPort ? 'checked' : ''}>
+                        Color by Port
+                    </label>
+                </div>
+            </details>
+        `;
         return;
     }
-    container.style.display = 'flex';
+
+    // Build per-source counts from the messages array.
+    const counts = new Map();
+    for (const m of messages) {
+        const label = srcLabelFor(m.source_addr);
+        if (!label) continue;
+        counts.set(label, (counts.get(label) || 0) + 1);
+    }
 
     const uniqueLabels = new Set();
-    seenSources.forEach(addr => {
-        uniqueLabels.add(colorByPort ? addr : addr.split(':')[0]);
-    });
-
+    seenSources.forEach(addr => uniqueLabels.add(srcLabelFor(addr)));
     const sortedLabels = Array.from(uniqueLabels).sort();
 
-    let html = sortedLabels.map(label => {
+    const chipsHtml = sortedLabels.map(label => {
         const color = SOURCE_PALETTE[hashString(label) % SOURCE_PALETTE.length];
-        const isHighlighted = highlightedSource === label;
+        const isActive = highlightedSource === label;
         const isDimmed = highlightedSource && highlightedSource !== label;
-        const classes = `source-legend-item${isHighlighted ? ' highlighted' : ''}${isDimmed ? ' dimmed' : ''}`;
-
+        const classes = `source-chip${isActive ? ' active' : ''}${isDimmed ? ' dimmed' : ''}`;
+        const num = counts.get(label) || 0;
         return `<span class="${classes}" onclick="toggleHighlightSource('${escAttr(escJS(label))}')">
-            <span class="source-dot" style="background:${color};box-shadow:0 0 4px ${color}"></span>
+            <span class="dot" style="background:${color};color:${color}"></span>
             ${esc(label)}
+            <span class="num">${num}</span>
         </span>`;
     }).join('');
 
-    html += `
-        <label class="theme-toggle" style="margin-left:auto; cursor:pointer; display:flex; align-items:center; gap:8px; color:var(--text-muted)">
-            <input type="checkbox" onchange="toggleColorByPort(event)" style="display:none" ${colorByPort ? 'checked' : ''}>
-            <span class="toggle-slider"></span>
-            Color by Port
-        </label>
+    container.innerHTML = `
+        <span class="label">Sources</span>
+        ${chipsHtml}
+        <details class="source-rail-overflow">
+            <summary title="Source options">⋯</summary>
+            <div class="popover">
+                <label>
+                    <input type="checkbox" onchange="toggleColorByPort(event)" ${colorByPort ? 'checked' : ''}>
+                    Color by Port
+                </label>
+            </div>
+        </details>
     `;
-    container.innerHTML = html;
 }
 
 // --- Session Persistence ---
@@ -212,11 +245,14 @@ function connectWs() {
             pendingMessages = [];
             totalMessagesCount = 0;
             rateWindow.length = 0;
+            rateBuckets.fill(0);
             lastMessageReceivedAt = null;
             selectedId = null;
             selectedMessage = null;
             renderMessageList();
+            renderSourceLegend();
             renderHealthPills();
+            renderThroughputBand();
             document.getElementById('detail-content').innerHTML = '<div class="empty-state"><p>No message selected</p></div>';
             document.getElementById('detail-title').textContent = 'Select a message';
             document.getElementById('detail-meta').textContent = '';
@@ -262,6 +298,7 @@ function addMessage(summary) {
     totalMessagesCount++;
     const now = Date.now();
     rateWindow.push(now);
+    rateBuckets[rateBuckets.length - 1]++;
     lastMessageReceivedAt = now;
     if (!paused) {
         scheduleRender();
@@ -284,6 +321,7 @@ function flushAndRender() {
     }
     renderMessageList();
     renderSourceLegend();
+    renderThroughputBand();
 }
 
 async function loadMessages() {
@@ -298,6 +336,7 @@ async function loadMessages() {
         }
         renderMessageList();
         renderSourceLegend();
+        renderThroughputBand();
     } catch (e) {
         console.error('Failed to load messages:', e);
     }
@@ -387,6 +426,54 @@ function renderRateSpark() {
         return `${x.toFixed(1)},${y.toFixed(1)}`;
     }).join(' ');
     return `<polyline points="${points}" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round" />`;
+}
+
+// --- Throughput band ---
+function rotateRateBuckets() {
+    rateBuckets.shift();
+    rateBuckets.push(0);
+}
+
+function renderThroughputBand() {
+    const totalEl = document.getElementById('rate-total');
+    const perminEl = document.getElementById('rate-permin');
+    const warnEl = document.getElementById('rate-warnings');
+    const errEl = document.getElementById('rate-errors');
+    const bars = document.getElementById('rate-bars');
+    if (!totalEl || !bars) return;
+
+    const total = messages.length + pendingMessages.length;
+    const perMin = rateWindow.length;
+
+    let warnings = 0;
+    let errors = 0;
+    for (const m of messages) {
+        if (m.has_segment_errors) errors++;
+        else if ((m.validation_warning_count || 0) > 0) warnings++;
+    }
+
+    totalEl.textContent = total;
+    perminEl.textContent = perMin;
+    warnEl.textContent = warnings;
+    warnEl.classList.toggle('warn', warnings > 0);
+    errEl.textContent = errors;
+    errEl.classList.toggle('err', errors > 0);
+
+    const n = rateBuckets.length;
+    const w = 200;
+    const h = 30;
+    const barW = w / n;
+    const max = Math.max(...rateBuckets, 1);
+    let html = '';
+    for (let i = 0; i < n; i++) {
+        const v = rateBuckets[i];
+        const barH = (v / max) * (h - 2);
+        const x = i * barW + 0.25;
+        const y = h - barH;
+        const opacity = 0.4 + (i / (n - 1 || 1)) * 0.6;
+        html += `<rect x="${x.toFixed(2)}" y="${y.toFixed(2)}" width="${(barW - 0.5).toFixed(2)}" height="${barH.toFixed(2)}" rx="0.5" opacity="${opacity.toFixed(2)}"/>`;
+    }
+    bars.innerHTML = html;
 }
 
 function tickRowRelativeTimes() {
@@ -1328,8 +1415,12 @@ toggleAutoscroll();
 connectWs();
 setInterval(pollStats, 3000);
 setInterval(() => {
+    rotateRateBuckets();
     renderHealthPills();
     tickRowRelativeTimes();
+    renderThroughputBand();
 }, 1000);
 renderHealthPills();
+renderSourceLegend();
+renderThroughputBand();
 pollStats();
