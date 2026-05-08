@@ -699,11 +699,40 @@ function buildMessageRow(msg) {
     return row;
 }
 
+// Memoize parsed search queries so the `has:warnings` / `has:errors` prefix
+// stripping and the lowercasing of the residual query happen once per query
+// instead of once per message during each filter pass. Bounded at 100 entries
+// so an attacker (or a developer typing fast) cannot grow the cache without
+// limit.
+const parsedQueryCache = new Map();
+const PARSED_QUERY_CACHE_MAX = 100;
+
+function getParsedQuery(query) {
+    const cached = parsedQueryCache.get(query);
+    if (cached) return cached;
+
+    let q = query.toLowerCase().trim();
+    let hasWarnings = false;
+    let hasErrors = false;
+    if (q.startsWith('has:warnings')) {
+        hasWarnings = true;
+        q = q.slice('has:warnings'.length).trim();
+    } else if (q.startsWith('has:errors')) {
+        hasErrors = true;
+        q = q.slice('has:errors'.length).trim();
+    }
+
+    const result = { q, hasWarnings, hasErrors };
+    if (parsedQueryCache.size >= PARSED_QUERY_CACHE_MAX) parsedQueryCache.clear();
+    parsedQueryCache.set(query, result);
+    return result;
+}
+
 function renderMessageList() {
     const list = document.getElementById('message-list');
     const empty = document.getElementById('empty-state');
     let filtered = searchQuery
-        ? messages.filter(m => matchesSearch(m, searchQuery))
+        ? messages.filter(m => matchesSearch(m, getParsedQuery(searchQuery)))
         : messages;
     if (showBookmarkedOnly) {
         filtered = filtered.filter(m => m.bookmarked);
@@ -746,26 +775,29 @@ function renderMessageList() {
     }
 }
 
-function matchesSearch(msg, query) {
-    let q = query.toLowerCase().trim();
-    if (q.startsWith('has:warnings')) {
+// Filter check using a pre-parsed query (see getParsedQuery). Each `if` is a
+// short-circuit early return so no further `.toLowerCase()` runs once a field
+// matches. Empty-string fields are skipped before the lowercasing — saves a
+// no-op call per absent property.
+function matchesSearch(msg, parsedQuery) {
+    if (parsedQuery.hasWarnings) {
         if ((msg.validation_warning_count || 0) === 0 && !msg.has_segment_errors) return false;
-        q = q.replace('has:warnings', '').trim();
-        if (!q) return true;
-    } else if (q.startsWith('has:errors')) {
+    } else if (parsedQuery.hasErrors) {
         if (!msg.has_segment_errors) return false;
-        q = q.replace('has:errors', '').trim();
-        if (!q) return true;
     }
-    return (
-        (msg.message_type || '').toLowerCase().includes(q) ||
-        (msg.sending_facility || '').toLowerCase().includes(q) ||
-        (msg.patient_name || '').toLowerCase().includes(q) ||
-        (msg.patient_id || '').toLowerCase().includes(q) ||
-        (msg.message_control_id || '').toLowerCase().includes(q) ||
-        (msg.source_addr || '').toLowerCase().includes(q) ||
-        (msg.tags || []).some(t => t.toLowerCase().includes(q))
-    );
+
+    const q = parsedQuery.q;
+    if (!q) return true;
+
+    if (msg.patient_name && msg.patient_name.toLowerCase().includes(q)) return true;
+    if (msg.message_type && msg.message_type.toLowerCase().includes(q)) return true;
+    if (msg.sending_facility && msg.sending_facility.toLowerCase().includes(q)) return true;
+    if (msg.patient_id && msg.patient_id.toLowerCase().includes(q)) return true;
+    if (msg.message_control_id && msg.message_control_id.toLowerCase().includes(q)) return true;
+    if (msg.source_addr && msg.source_addr.toLowerCase().includes(q)) return true;
+    if (msg.tags && msg.tags.some(t => t.toLowerCase().includes(q))) return true;
+
+    return false;
 }
 
 async function selectMessage(id) {
