@@ -1,3 +1,19 @@
+// --- Icons (lucide-style outlines, currentColor stroke) ---
+const ICONS = {
+    pause: '<svg class="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg>',
+    play: '<svg class="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"/></svg>',
+    download: '<svg class="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>',
+    arrowDown: '<svg class="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><polyline points="19 12 12 19 5 12"/></svg>',
+    starOutline: '<svg class="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>',
+    starFilled: '<svg class="i" viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>',
+    pin: '<svg class="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="17" x2="12" y2="22"/><path d="M5 17h14V8a3 3 0 0 0-3-3H8a3 3 0 0 0-3 3v9z"/></svg>',
+    warning: '<svg class="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>',
+    trash: '<svg class="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/><path d="M9 6V4a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2v2"/></svg>',
+    copy: '<svg class="i-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>',
+    chevronRight: '<svg class="i-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>',
+    chevronDown: '<svg class="i-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>',
+};
+
 // --- State ---
 let messages = [];
 let selectedId = null;
@@ -631,7 +647,7 @@ function buildMessageRow(msg) {
     const patient = esc(msg.patient_name || msg.patient_id || '—');
 
     const bookmarkClass = msg.bookmarked ? 'msg-bookmark active' : 'msg-bookmark';
-    const bookmarkIcon = msg.bookmarked ? '★' : '☆';
+    const bookmarkSvg = msg.bookmarked ? ICONS.starFilled : ICONS.starOutline;
     const bookmarkLabel = msg.bookmarked ? 'Remove bookmark' : 'Add bookmark';
 
     row.dataset.received = msg.received_at || '';
@@ -656,7 +672,7 @@ function buildMessageRow(msg) {
             </div>
         </div>
         <div class="msg-actions">
-            <button class="${bookmarkClass}" aria-label="${bookmarkLabel}" onclick="toggleBookmark('${msg.id}', event)" title="Bookmark">${bookmarkIcon}</button>
+            <button class="${bookmarkClass}" aria-label="${bookmarkLabel}" onclick="toggleBookmark('${msg.id}', event)" title="Bookmark">${bookmarkSvg}</button>
         </div>
     `;
     return row;
@@ -839,10 +855,10 @@ function renderDetail() {
     // Actions row: tag chips + add-tag input + Bookmark + Pin diff (all on the right).
     const isPinned = diffPinnedMessage && diffPinnedMessage.id === msg.id;
     const bookmarkClass = msg.bookmarked ? 'action-btn bookmark active' : 'action-btn bookmark';
-    const bookmarkIcon = msg.bookmarked ? '★' : '☆';
+    const bookmarkSvg = msg.bookmarked ? ICONS.starFilled : ICONS.starOutline;
     const bookmarkLabel = msg.bookmarked ? 'Bookmarked' : 'Bookmark';
     const pinClass = isPinned ? 'action-btn pin active' : 'action-btn pin';
-    const pinLabel = isPinned ? '📌 Pinned' : '📌 Pin diff';
+    const pinLabel = isPinned ? 'Pinned' : 'Pin diff';
 
     const tagChipsHtml = (msg.tags || []).map(t =>
         `<span class="msg-tag">${esc(t)} <span class="msg-tag-remove" onclick="removeTag('${msg.id}', '${escAttr(escJS(t))}')">×</span></span>`
@@ -856,8 +872,8 @@ function renderDetail() {
 
     document.getElementById('detail-actions').innerHTML = `
         <div id="detail-tags" class="detail-tags-inline">${tagChipsHtml}${tagAddHtml}</div>
-        <button class="${bookmarkClass}" aria-label="${bookmarkLabel}" onclick="toggleBookmark('${msg.id}', event)" title="Toggle bookmark">${bookmarkIcon} ${bookmarkLabel}</button>
-        <button class="${pinClass}" aria-label="${pinLabel}" onclick="toggleDiffPin('${msg.id}', event)" title="Pin this message as the diff reference">${pinLabel}</button>
+        <button class="${bookmarkClass}" aria-label="${bookmarkLabel}" onclick="toggleBookmark('${msg.id}', event)" title="Toggle bookmark">${bookmarkSvg}<span class="btn-label">${bookmarkLabel}</span></button>
+        <button class="${pinClass}" aria-label="${pinLabel}" onclick="toggleDiffPin('${msg.id}', event)" title="Pin this message as the diff reference">${ICONS.pin}<span class="btn-label">${pinLabel}</span></button>
     `;
 
     // Segments tab badge — segment count.
@@ -1002,7 +1018,7 @@ function renderTab() {
 
             validationBanner = `<details class="${summaryClass}">
                 <summary>
-                    <span class="summary-icon">⚠</span>
+                    <span class="summary-icon">${ICONS.warning}</span>
                     <span class="summary-text"><strong>${headline}</strong> · ${summaryLine}</span>
                 </summary>
                 <ul class="validation-warnings-list">
@@ -1029,7 +1045,7 @@ function renderTab() {
         content.innerHTML = typicalChecklist + validationBanner + msg.segments.map((seg, segIdx) => {
             const key = `${msg.id}-${segIdx}`;
             const collapsed = collapsedSegments.has(key);
-            const icon = collapsed ? '▸' : '▾';
+            const icon = collapsed ? ICONS.chevronRight : ICONS.chevronDown;
             const warnFields = missingFieldByseg.get(seg.name);
             return `
             <div class="segment-block">
@@ -1037,7 +1053,7 @@ function renderTab() {
                     <span class="collapse-icon">${icon}</span>
                     ${esc(seg.name)}
                     <span class="field-count">(${seg.fields.length})</span>
-                    <span class="copy-btn" onclick="event.stopPropagation(); copySegment(${segIdx}, this)" title="Copy segment">📋</span>
+                    <span class="copy-btn" onclick="event.stopPropagation(); copySegment(${segIdx}, this)" title="Copy segment">${ICONS.copy}</span>
                 </div>
                 ${collapsed ? '' : `<table class="field-table">
                     <tbody>
@@ -1062,7 +1078,7 @@ function renderTab() {
         const lines = msg.raw.split(/\r?\n|\r/).filter(l => l.trim());
         content.innerHTML = `
             <div style="display:flex;justify-content:flex-end;margin-bottom:8px;">
-                <button class="copy-raw-btn" onclick="copyRawMessage(this)" title="Copy entire message">📋 Copy All</button>
+                <button class="copy-raw-btn" onclick="copyRawMessage(this)" title="Copy entire message">${ICONS.copy} Copy All</button>
             </div>
             <div class="raw-view">${lines.map(line => {
             const segName = line.substring(0, 3);
@@ -1233,11 +1249,11 @@ function togglePause() {
     paused = !paused;
     const btn = document.getElementById('btn-pause');
     if (paused) {
-        btn.textContent = '▶ Live';
+        btn.innerHTML = `${ICONS.play}<span class="btn-label">Live</span>`;
         btn.style.borderColor = 'var(--warning)';
         btn.style.color = 'var(--warning)';
     } else {
-        btn.textContent = '⏸ Pause';
+        btn.innerHTML = `${ICONS.pause}<span class="btn-label">Pause</span>`;
         btn.style.borderColor = '';
         btn.style.color = '';
         flushAndRender();
@@ -1324,11 +1340,11 @@ function toggleBookmarkFilter() {
     showBookmarkedOnly = !showBookmarkedOnly;
     const btn = document.getElementById('btn-bookmarks');
     if (showBookmarkedOnly) {
-        btn.textContent = '★ Bookmarks';
+        btn.innerHTML = `${ICONS.starFilled}<span class="btn-label">Bookmarks</span>`;
         btn.style.borderColor = 'var(--warning)';
         btn.style.color = 'var(--warning)';
     } else {
-        btn.textContent = '☆ Bookmarks';
+        btn.innerHTML = `${ICONS.starOutline}<span class="btn-label">Bookmarks</span>`;
         btn.style.borderColor = '';
         btn.style.color = '';
     }
@@ -1340,15 +1356,15 @@ function syncValidationFilterUI() {
     const btn = document.getElementById('btn-validation');
     if (!btn) return;
     if (validationFilter === 0) {
-        btn.textContent = '⚠ All';
+        btn.innerHTML = `${ICONS.warning}<span class="btn-label">All</span>`;
         btn.style.borderColor = '';
         btn.style.color = '';
     } else if (validationFilter === 1) {
-        btn.textContent = '⚠ Warn';
+        btn.innerHTML = `${ICONS.warning}<span class="btn-label">Warn</span>`;
         btn.style.borderColor = 'var(--warning)';
         btn.style.color = 'var(--warning)';
     } else if (validationFilter === 2) {
-        btn.textContent = '⚠ Error';
+        btn.innerHTML = `${ICONS.warning}<span class="btn-label">Error</span>`;
         btn.style.borderColor = 'var(--error)';
         btn.style.color = 'var(--error)';
     }
@@ -1532,14 +1548,14 @@ document.addEventListener('click', (e) => {
 
     if (paused) {
         const btn = document.getElementById('btn-pause');
-        btn.textContent = '▶ Live';
+        btn.innerHTML = `${ICONS.play}<span class="btn-label">Live</span>`;
         btn.style.borderColor = 'var(--warning)';
         btn.style.color = 'var(--warning)';
     }
 
     if (showBookmarkedOnly) {
         const btn = document.getElementById('btn-bookmarks');
-        btn.textContent = '★ Bookmarks';
+        btn.innerHTML = `${ICONS.starFilled}<span class="btn-label">Bookmarks</span>`;
         btn.style.borderColor = 'var(--warning)';
         btn.style.color = 'var(--warning)';
     }
