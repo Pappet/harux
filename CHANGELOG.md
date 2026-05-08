@@ -11,6 +11,11 @@ and this project follows [Semantic Versioning](https://semver.org/lang/en/).
 
 ### Added
 - **Keyboard accessibility for message rows** — message list rows now support `Tab` focus navigation and `Enter`/`Space` to select; a 2px accent outline appears on `:focus-visible`. Improves screen-reader and keyboard-only workflows.
+- **ARIA labels on message rows + bookmark/pin controls** — each row exposes a synthesized `aria-label` (facility, type, time); the bookmark and pin controls were promoted from `<span>` to native `<button>` so they receive `Tab` focus, keyboard activation, and `aria-label`. Pin clicks now `stopPropagation` so the row beneath does not also select.
+- **Global `:focus-visible` outline** — every focusable element gets a 2 px accent outline when reached via keyboard, addressing missing focus rings across header buttons, search input, and inline controls.
+
+### Fixed
+- **Pin click leaked to row selection** — clicking the diff-pin icon previously also selected the underlying message row. `toggleDiffPin` now calls `event.stopPropagation()` when invoked from the row.
 
 ### Changed
 - **Typography** — adopted Inter (sans) and JetBrains Mono (mono) via Google Fonts; first phase of the v0.5.0 UI redesign (#86)
@@ -52,6 +57,7 @@ and this project follows [Semantic Versioning](https://semver.org/lang/en/).
 | Commit | Description |
 |--------|-------------|
 | [`a14f0de`](https://github.com/Pappet/harux/commit/a14f0de20053257e6b9cd2b9e6063fc8e2daf8dc) | `fix:` resolve ISO-8859-1 charset encoding issues (#78) |
+| [`a6f1ce7`](https://github.com/Pappet/harux/commit/a6f1ce7e1e8deb5dbead3248e099423231b1cd09) | `feat(a11y):` ARIA labels, native buttons, global focus ring |
 | [`1993bcb`](https://github.com/Pappet/harux/commit/1993bcb07709460bce5d468c046be6e2f1db533c) | `feat(a11y):` keyboard navigation for message list rows |
 | [`f5c650a`](https://github.com/Pappet/harux/commit/f5c650aa025132a5a6e660092957fd3ad69099ec) | `feat(ui):` typography + color foundation for v0.5.0 redesign (#86) |
 
