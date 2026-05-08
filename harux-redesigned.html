@@ -1,0 +1,1614 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Harux — proposed redesign</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  :root {
+    /* Slightly warmer, higher-contrast dark palette */
+    --bg-0: #0b0d12;          /* page */
+    --bg-1: #131620;          /* panels */
+    --bg-2: #1b1f2c;          /* surfaces */
+    --bg-3: #242938;          /* hover */
+    --bg-4: #2e3447;          /* selected */
+    --line: #262b3a;
+    --line-strong: #343a4f;
+    --fg-0: #e9ebf2;
+    --fg-1: #aab0c2;
+    --fg-2: #6e7388;
+    --fg-3: #4a4f64;
+
+    --accent: #7aa2ff;
+    --accent-2: #5a82e8;
+    --accent-bg: rgba(122,162,255,0.10);
+
+    --ok:    #4fb98a;
+    --warn:  #e5a54b;
+    --err:   #ea6363;
+    --info:  #6cc6e0;
+
+    --mono: 'JetBrains Mono', ui-monospace, 'SF Mono', Consolas, monospace;
+    --sans: 'Inter', -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+
+    --radius: 8px;
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { height: 100%; }
+  body {
+    font-family: var(--sans);
+    background: var(--bg-0);
+    color: var(--fg-0);
+    font-size: 13px;
+    line-height: 1.45;
+    overflow: hidden;
+    -webkit-font-smoothing: antialiased;
+  }
+  ::selection { background: var(--accent-bg); }
+
+  .app {
+    display: grid;
+    grid-template-rows: auto 1fr;
+    height: 100vh;
+  }
+
+  /* ── Top bar ───────────────────────────────────────────────────── */
+  .topbar {
+    display: grid;
+    grid-template-columns: 220px 1fr auto;
+    align-items: center;
+    gap: 24px;
+    padding: 0 18px;
+    height: 56px;
+    background: var(--bg-1);
+    border-bottom: 1px solid var(--line);
+  }
+
+  .brand {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-weight: 700;
+    letter-spacing: -0.01em;
+    font-size: 15px;
+  }
+  .brand-mark {
+    width: 22px; height: 22px;
+    display: grid; place-items: center;
+    background: linear-gradient(135deg, #5a82e8 0%, #9468e6 100%);
+    border-radius: 6px;
+    color: #fff;
+    font-size: 12px;
+    font-weight: 800;
+    font-family: var(--mono);
+  }
+  .brand-tag {
+    font-family: var(--mono);
+    font-size: 10px;
+    color: var(--fg-2);
+    background: var(--bg-2);
+    border: 1px solid var(--line);
+    padding: 1px 5px;
+    border-radius: 4px;
+    margin-left: 4px;
+  }
+
+  /* Health strip — the most important info on the page */
+  .health {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    flex-wrap: nowrap;
+    overflow: hidden;
+  }
+  .health-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 11px;
+    background: var(--bg-2);
+    border: 1px solid var(--line);
+    border-radius: 999px;
+    font-size: 12px;
+    color: var(--fg-1);
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+  }
+  .health-pill .label {
+    color: var(--fg-2);
+    font-size: 11px;
+  }
+  .health-pill .value {
+    color: var(--fg-0);
+    font-family: var(--mono);
+    font-weight: 500;
+  }
+  .health-pill.live { border-color: rgba(79,185,138,0.35); background: rgba(79,185,138,0.08); }
+  .health-pill.live .value { color: var(--ok); }
+  .health-pill .dot {
+    width: 7px; height: 7px; border-radius: 50%;
+    background: var(--ok);
+    box-shadow: 0 0 0 0 rgba(79,185,138,0.55);
+    animation: pulse 1.8s ease-out infinite;
+  }
+  @keyframes pulse {
+    0% { box-shadow: 0 0 0 0 rgba(79,185,138,0.5); }
+    100% { box-shadow: 0 0 0 6px rgba(79,185,138,0); }
+  }
+  .spark {
+    width: 60px;
+    height: 18px;
+  }
+
+  .topbar-right {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+  }
+  .icon-btn, .text-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    height: 30px;
+    padding: 0 10px;
+    background: transparent;
+    border: 1px solid transparent;
+    color: var(--fg-1);
+    font: inherit;
+    font-size: 12px;
+    border-radius: 6px;
+    cursor: pointer;
+    transition: background .12s, color .12s, border-color .12s;
+  }
+  .icon-btn:hover, .text-btn:hover {
+    background: var(--bg-2);
+    color: var(--fg-0);
+    border-color: var(--line);
+  }
+  .text-btn.primary {
+    background: var(--accent-bg);
+    border-color: rgba(122,162,255,0.35);
+    color: var(--accent);
+  }
+  .text-btn.primary:hover {
+    background: rgba(122,162,255,0.18);
+  }
+  .text-btn .kbd {
+    font-family: var(--mono);
+    font-size: 10px;
+    background: var(--bg-3);
+    color: var(--fg-2);
+    padding: 1px 5px;
+    border-radius: 3px;
+    margin-left: 4px;
+  }
+
+  /* ── Main split ────────────────────────────────────────────────── */
+  .main {
+    display: grid;
+    grid-template-columns: minmax(440px, 44%) 1fr;
+    overflow: hidden;
+  }
+  .splitter {
+    width: 1px;
+    background: var(--line);
+  }
+
+  /* ── List panel ────────────────────────────────────────────────── */
+  .list-panel {
+    display: grid;
+    grid-template-rows: auto auto auto 1fr;
+    background: var(--bg-0);
+    border-right: 1px solid var(--line);
+    overflow: hidden;
+  }
+
+  .list-toolbar {
+    padding: 10px 14px;
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    border-bottom: 1px solid var(--line);
+    background: var(--bg-1);
+  }
+  .search {
+    flex: 1;
+    position: relative;
+  }
+  .search input {
+    width: 100%;
+    height: 32px;
+    padding: 0 10px 0 32px;
+    background: var(--bg-0);
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    color: var(--fg-0);
+    font: inherit;
+    font-family: var(--mono);
+    font-size: 12px;
+    outline: none;
+    transition: border-color .12s, background .12s;
+  }
+  .search input:focus { border-color: var(--accent-2); background: var(--bg-1); }
+  .search input::placeholder { color: var(--fg-3); }
+  .search-icon {
+    position: absolute; left: 10px; top: 50%; transform: translateY(-50%);
+    color: var(--fg-2);
+    pointer-events: none;
+  }
+  .search-tip {
+    position: absolute; right: 8px; top: 50%; transform: translateY(-50%);
+    font-family: var(--mono);
+    font-size: 10px;
+    color: var(--fg-3);
+    background: var(--bg-2);
+    padding: 1px 5px;
+    border-radius: 3px;
+  }
+
+  .filter-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    height: 32px;
+    padding: 0 10px;
+    background: var(--bg-2);
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    color: var(--fg-1);
+    font-size: 12px;
+    cursor: pointer;
+    transition: all .12s;
+  }
+  .filter-chip:hover { background: var(--bg-3); color: var(--fg-0); }
+  .filter-chip.active {
+    background: var(--accent-bg);
+    border-color: rgba(122,162,255,0.4);
+    color: var(--accent);
+  }
+  .filter-chip .count {
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--fg-2);
+    background: var(--bg-1);
+    padding: 1px 6px;
+    border-radius: 3px;
+  }
+  .filter-chip.active .count { color: var(--accent); background: rgba(122,162,255,0.15); }
+
+  /* Source rail — always visible, compact */
+  .source-rail {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 14px;
+    background: var(--bg-1);
+    border-bottom: 1px solid var(--line);
+    font-size: 11px;
+    color: var(--fg-2);
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+  .source-rail::-webkit-scrollbar { display: none; }
+  .source-rail .label {
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    font-size: 10px;
+    color: var(--fg-3);
+    white-space: nowrap;
+  }
+  .source-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 3px 8px;
+    background: var(--bg-2);
+    border: 1px solid var(--line);
+    border-radius: 999px;
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--fg-1);
+    cursor: pointer;
+    white-space: nowrap;
+    transition: all .12s;
+  }
+  .source-chip:hover { background: var(--bg-3); color: var(--fg-0); }
+  .source-chip.active {
+    background: var(--bg-3);
+    border-color: var(--line-strong);
+    color: var(--fg-0);
+  }
+  .source-chip .dot {
+    width: 8px; height: 8px;
+    border-radius: 50%;
+    box-shadow: 0 0 6px currentColor;
+  }
+  .source-chip .num {
+    color: var(--fg-2);
+    font-size: 10px;
+  }
+
+  /* Throughput band — collapsed sparkline */
+  .rate-band {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 8px 14px 10px;
+    background: var(--bg-1);
+    border-bottom: 1px solid var(--line);
+  }
+  .rate-band .stat {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+  .rate-band .stat .v {
+    font-family: var(--mono);
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--fg-0);
+  }
+  .rate-band .stat .v.warn { color: var(--warn); }
+  .rate-band .stat .v.err { color: var(--err); }
+  .rate-band .stat .l {
+    font-size: 10px;
+    color: var(--fg-2);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+  }
+  .rate-band .spark-wrap {
+    flex: 1;
+    height: 30px;
+    position: relative;
+  }
+  .rate-band svg.bars {
+    width: 100%; height: 100%;
+    display: block;
+  }
+
+  /* Message list */
+  .messages {
+    overflow-y: auto;
+    scrollbar-width: thin;
+    scrollbar-color: var(--bg-3) transparent;
+  }
+  .messages::-webkit-scrollbar { width: 8px; }
+  .messages::-webkit-scrollbar-thumb { background: var(--bg-3); border-radius: 4px; }
+
+  .group-header {
+    position: sticky; top: 0;
+    z-index: 2;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 14px 6px;
+    background: var(--bg-0);
+    color: var(--fg-2);
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    font-weight: 600;
+    border-bottom: 1px solid var(--line);
+  }
+  .group-header::after {
+    content: '';
+    flex: 1;
+    height: 1px;
+    background: var(--line);
+  }
+  .group-header .count {
+    font-family: var(--mono);
+    color: var(--fg-3);
+    font-weight: 500;
+    letter-spacing: 0;
+  }
+
+  .msg {
+    display: grid;
+    grid-template-columns: 4px 1fr auto;
+    gap: 0;
+    padding: 0;
+    border-bottom: 1px solid var(--line);
+    cursor: pointer;
+    transition: background .1s;
+    position: relative;
+  }
+  .msg:hover { background: var(--bg-1); }
+  .msg.selected { background: var(--bg-2); }
+  .msg.selected::before {
+    content: ''; position: absolute; left: 0; top: 0; bottom: 0;
+    width: 2px; background: var(--accent);
+  }
+  .msg .source-bar {
+    width: 3px;
+    align-self: stretch;
+    margin-left: 1px;
+  }
+  .msg .body {
+    padding: 11px 14px 11px 11px;
+    min-width: 0;
+  }
+  .msg-row1 {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 4px;
+  }
+  .msg-type {
+    font-family: var(--mono);
+    font-weight: 600;
+    font-size: 12px;
+    color: var(--accent);
+    letter-spacing: -0.01em;
+  }
+  .msg-type.parse-error { color: var(--err); }
+  .msg-patient {
+    color: var(--fg-0);
+    font-weight: 500;
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .msg-ack {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 2px 6px;
+    border-radius: 3px;
+    font-family: var(--mono);
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+  }
+  .msg-ack.aa { background: rgba(79,185,138,0.12); color: var(--ok); }
+  .msg-ack.ae { background: rgba(234,99,99,0.12);  color: var(--err); }
+  .msg-ack.ar { background: rgba(229,165,75,0.14); color: var(--warn); }
+  .msg-ack.none { color: var(--fg-3); background: var(--bg-2); }
+
+  .msg-row2 {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-size: 11px;
+    color: var(--fg-2);
+    font-family: var(--mono);
+  }
+  .msg-row2 .sep { color: var(--fg-3); }
+  .msg-row2 .facility { color: var(--fg-1); }
+  .msg-row2 .time { margin-left: auto; }
+
+  .msg-warning {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 1px 6px;
+    border-radius: 3px;
+    font-family: var(--mono);
+    font-size: 10px;
+    font-weight: 600;
+  }
+  .msg-warning.warn { background: rgba(229,165,75,0.12); color: var(--warn); }
+  .msg-warning.err  { background: rgba(234,99,99,0.12);  color: var(--err); }
+
+  .msg .actions {
+    display: flex;
+    align-items: center;
+    padding-right: 10px;
+    opacity: 0;
+    transition: opacity .12s;
+  }
+  .msg:hover .actions, .msg.selected .actions, .msg.bookmarked .actions { opacity: 1; }
+  .msg .star {
+    width: 24px; height: 24px;
+    display: grid; place-items: center;
+    color: var(--fg-3);
+    cursor: pointer;
+    border-radius: 4px;
+    font-size: 14px;
+    transition: color .12s, background .12s;
+  }
+  .msg .star:hover { background: var(--bg-3); color: var(--warn); }
+  .msg.bookmarked .star { color: var(--warn); opacity: 1; }
+
+  .msg .tags {
+    display: inline-flex;
+    gap: 4px;
+    margin-left: 6px;
+  }
+  .msg .tag {
+    background: var(--bg-3);
+    color: var(--fg-1);
+    font-family: var(--mono);
+    font-size: 10px;
+    padding: 1px 5px;
+    border-radius: 3px;
+  }
+
+  /* ── Detail panel ──────────────────────────────────────────────── */
+  .detail {
+    display: grid;
+    grid-template-rows: auto auto 1fr;
+    background: var(--bg-0);
+    overflow: hidden;
+  }
+
+  .detail-header {
+    padding: 16px 22px 14px;
+    background: var(--bg-1);
+    border-bottom: 1px solid var(--line);
+    display: grid;
+    grid-template-columns: 1fr auto;
+    gap: 16px;
+    align-items: start;
+  }
+  .detail-title-line {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 6px;
+  }
+  .detail-type {
+    font-family: var(--mono);
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--accent);
+    background: var(--accent-bg);
+    border: 1px solid rgba(122,162,255,0.25);
+    padding: 3px 8px;
+    border-radius: 4px;
+  }
+  .detail-title {
+    font-size: 18px;
+    font-weight: 600;
+    color: var(--fg-0);
+    letter-spacing: -0.01em;
+  }
+  .detail-desc {
+    color: var(--fg-2);
+    font-size: 12px;
+    margin-bottom: 8px;
+  }
+  .detail-meta {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--fg-2);
+  }
+  .detail-meta .item {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+  }
+  .detail-meta .item .k { color: var(--fg-3); }
+  .detail-meta .item .v { color: var(--fg-1); }
+  .detail-meta .item .copy {
+    width: 16px; height: 16px;
+    display: inline-grid; place-items: center;
+    color: var(--fg-3);
+    cursor: pointer;
+    border-radius: 3px;
+    transition: color .12s, background .12s;
+  }
+  .detail-meta .item .copy:hover { color: var(--accent); background: var(--bg-2); }
+  .detail-meta .sep { color: var(--fg-3); }
+
+  .detail-actions {
+    display: flex;
+    gap: 6px;
+    align-items: center;
+  }
+  .detail-actions .text-btn {
+    height: 28px;
+  }
+
+  /* Validation summary banner */
+  .validation-summary {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 10px 22px;
+    background: rgba(229,165,75,0.06);
+    border-bottom: 1px solid rgba(229,165,75,0.2);
+  }
+  .validation-summary.error {
+    background: rgba(234,99,99,0.06);
+    border-bottom-color: rgba(234,99,99,0.25);
+  }
+  .validation-summary .icon {
+    width: 28px; height: 28px;
+    display: grid; place-items: center;
+    background: rgba(229,165,75,0.15);
+    color: var(--warn);
+    border-radius: 6px;
+    flex-shrink: 0;
+  }
+  .validation-summary.error .icon {
+    background: rgba(234,99,99,0.15);
+    color: var(--err);
+  }
+  .validation-summary .text {
+    flex: 1;
+    font-size: 12px;
+    color: var(--fg-1);
+  }
+  .validation-summary .text strong { color: var(--fg-0); font-weight: 600; }
+  .validation-summary .text .seg-list {
+    color: var(--warn);
+    font-family: var(--mono);
+    font-weight: 500;
+  }
+  .validation-summary.error .text .seg-list { color: var(--err); }
+
+  /* Tabs */
+  .tabs {
+    display: flex;
+    align-items: end;
+    gap: 0;
+    padding: 0 22px;
+    background: var(--bg-1);
+    border-bottom: 1px solid var(--line);
+  }
+  .tab {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 11px 14px;
+    background: none;
+    border: none;
+    font: inherit;
+    font-size: 12px;
+    color: var(--fg-2);
+    cursor: pointer;
+    border-bottom: 2px solid transparent;
+    margin-bottom: -1px;
+    transition: color .12s, border-color .12s;
+  }
+  .tab:hover { color: var(--fg-0); }
+  .tab.active { color: var(--accent); border-bottom-color: var(--accent); }
+  .tab .badge {
+    font-family: var(--mono);
+    font-size: 10px;
+    background: var(--bg-3);
+    color: var(--fg-2);
+    padding: 1px 5px;
+    border-radius: 3px;
+  }
+  .tab.active .badge { background: var(--accent-bg); color: var(--accent); }
+
+  .tab-content {
+    overflow-y: auto;
+    padding: 16px 22px 32px;
+  }
+  .tab-content::-webkit-scrollbar { width: 8px; }
+  .tab-content::-webkit-scrollbar-thumb { background: var(--bg-3); border-radius: 4px; }
+
+  /* Typical segments — redesigned as a structured row */
+  .seg-checklist {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    padding: 10px 12px;
+    background: var(--bg-1);
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    margin-bottom: 16px;
+  }
+  .seg-checklist .label {
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--fg-2);
+    margin-right: 8px;
+    align-self: center;
+  }
+  .seg-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 3px 8px;
+    border-radius: 4px;
+    font-family: var(--mono);
+    font-size: 11px;
+    font-weight: 600;
+    border: 1px solid;
+  }
+  .seg-pill.present { color: var(--ok);   border-color: rgba(79,185,138,0.35); background: rgba(79,185,138,0.08); }
+  .seg-pill.missing { color: var(--err);  border-color: rgba(234,99,99,0.4);   background: rgba(234,99,99,0.08); }
+  .seg-pill.warn    { color: var(--warn); border-color: rgba(229,165,75,0.4);  background: rgba(229,165,75,0.08); }
+  .seg-pill.absent  { color: var(--fg-3); border-color: var(--line); background: transparent; }
+
+  /* Segment block */
+  .segment {
+    margin-bottom: 14px;
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    overflow: hidden;
+    background: var(--bg-1);
+  }
+  .segment-head {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 9px 12px;
+    background: var(--bg-2);
+    border-bottom: 1px solid var(--line);
+    cursor: pointer;
+  }
+  .segment-head:hover { background: var(--bg-3); }
+  .segment-head .name {
+    font-family: var(--mono);
+    font-weight: 700;
+    font-size: 13px;
+    color: var(--accent);
+    letter-spacing: 0.02em;
+  }
+  .segment-head .desc {
+    color: var(--fg-1);
+    font-size: 12px;
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .segment-head .count {
+    color: var(--fg-2);
+    font-family: var(--mono);
+    font-size: 11px;
+  }
+  .segment-head .copy {
+    width: 22px; height: 22px;
+    display: grid; place-items: center;
+    color: var(--fg-2);
+    border-radius: 4px;
+    transition: all .12s;
+  }
+  .segment-head .copy:hover { color: var(--accent); background: var(--bg-1); }
+
+  .field-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 12px;
+  }
+  .field-table tr { border-bottom: 1px solid var(--line); }
+  .field-table tr:last-child { border-bottom: none; }
+  .field-table tr:hover { background: var(--bg-2); }
+  .field-table td {
+    padding: 6px 12px;
+    vertical-align: top;
+  }
+  .field-table .idx {
+    width: 84px;
+    color: var(--fg-2);
+    font-family: var(--mono);
+    font-size: 11px;
+    cursor: help;
+    border-right: 1px solid var(--line);
+  }
+  .field-table .idx .desc-text {
+    display: block;
+    color: var(--fg-3);
+    font-family: var(--sans);
+    font-size: 10px;
+    margin-top: 2px;
+    line-height: 1.3;
+  }
+  .field-table .val {
+    font-family: var(--mono);
+    color: var(--fg-0);
+    word-break: break-word;
+  }
+  .field-table .val.empty { color: var(--fg-3); font-style: italic; }
+  .field-table .val .comp-sep { color: var(--fg-3); padding: 0 4px; }
+  .field-table tr.warn { background: rgba(229,165,75,0.05); }
+  .field-table tr.warn .idx { color: var(--warn); }
+  .field-table tr.warn .val::after {
+    content: '⚠ required';
+    margin-left: 8px;
+    color: var(--warn);
+    font-family: var(--sans);
+    font-size: 10px;
+    font-style: italic;
+  }
+
+  /* Empty state — informative */
+  .empty {
+    display: grid;
+    place-items: center;
+    height: 100%;
+    padding: 32px;
+  }
+  .empty-card {
+    max-width: 460px;
+    width: 100%;
+    text-align: center;
+    color: var(--fg-1);
+  }
+  .empty-card .glyph {
+    width: 56px; height: 56px;
+    display: grid; place-items: center;
+    background: var(--bg-2);
+    border: 1px solid var(--line);
+    border-radius: 14px;
+    margin: 0 auto 14px;
+  }
+  .empty-card h3 { color: var(--fg-0); font-size: 15px; margin-bottom: 6px; }
+  .empty-card p { color: var(--fg-2); font-size: 12px; margin-bottom: 16px; }
+  .cli-block {
+    background: var(--bg-1);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    padding: 12px 14px;
+    text-align: left;
+    font-family: var(--mono);
+    font-size: 12px;
+    color: var(--fg-1);
+    line-height: 1.7;
+    position: relative;
+  }
+  .cli-block .prompt { color: var(--fg-3); user-select: none; }
+  .cli-block .cmd-copy {
+    position: absolute; top: 8px; right: 8px;
+    color: var(--fg-3); cursor: pointer;
+    width: 22px; height: 22px;
+    display: grid; place-items: center;
+    border-radius: 4px;
+    transition: color .12s, background .12s;
+  }
+  .cli-block .cmd-copy:hover { color: var(--accent); background: var(--bg-2); }
+
+  /* Notes drawer */
+  .notes-toggle {
+    position: fixed;
+    right: 18px; bottom: 18px;
+    z-index: 50;
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    height: 36px;
+    padding: 0 14px;
+    background: var(--accent);
+    color: #0b0d12;
+    font-weight: 600;
+    border: none;
+    border-radius: 999px;
+    cursor: pointer;
+    box-shadow: 0 8px 24px rgba(0,0,0,0.4);
+    transition: transform .12s;
+  }
+  .notes-toggle:hover { transform: translateY(-1px); }
+  .notes-drawer {
+    position: fixed;
+    right: 0; top: 0; bottom: 0;
+    width: 380px;
+    background: var(--bg-1);
+    border-left: 1px solid var(--line);
+    z-index: 100;
+    transform: translateX(100%);
+    transition: transform .25s ease;
+    display: flex;
+    flex-direction: column;
+  }
+  .notes-drawer.open { transform: translateX(0); }
+  .notes-head {
+    padding: 16px 18px;
+    border-bottom: 1px solid var(--line);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+  .notes-head h3 { font-size: 14px; }
+  .notes-body {
+    flex: 1;
+    overflow-y: auto;
+    padding: 18px;
+  }
+  .note {
+    margin-bottom: 18px;
+    padding-bottom: 16px;
+    border-bottom: 1px solid var(--line);
+  }
+  .note:last-child { border-bottom: none; }
+  .note .num {
+    display: inline-block;
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--accent);
+    background: var(--accent-bg);
+    padding: 2px 7px;
+    border-radius: 4px;
+    margin-bottom: 6px;
+  }
+  .note h4 {
+    font-size: 13px;
+    color: var(--fg-0);
+    margin-bottom: 4px;
+  }
+  .note p {
+    color: var(--fg-1);
+    font-size: 12px;
+    line-height: 1.5;
+  }
+  .note p code {
+    font-family: var(--mono);
+    font-size: 11px;
+    background: var(--bg-2);
+    padding: 1px 5px;
+    border-radius: 3px;
+    color: var(--fg-0);
+  }
+
+  .close-x {
+    width: 26px; height: 26px;
+    display: grid; place-items: center;
+    color: var(--fg-2); cursor: pointer;
+    border-radius: 4px;
+  }
+  .close-x:hover { background: var(--bg-3); color: var(--fg-0); }
+
+  /* Tiny icons */
+  .i { width: 14px; height: 14px; flex-shrink: 0; }
+  .i-sm { width: 12px; height: 12px; flex-shrink: 0; }
+
+</style>
+</head>
+<body>
+
+<div class="app">
+
+  <!-- ─── Top bar ─────────────────────────────────────────────────── -->
+  <div class="topbar">
+    <div class="brand">
+      <div class="brand-mark">H</div>
+      Harux
+      <span class="brand-tag">v0.4.2</span>
+    </div>
+
+    <div class="health">
+      <div class="health-pill live" title="MLLP listener health">
+        <span class="dot"></span>
+        <span class="label">listening</span>
+        <span class="value">:2575</span>
+      </div>
+      <div class="health-pill" title="Active TCP connections">
+        <span class="label">conns</span>
+        <span class="value">3 / 64</span>
+      </div>
+      <div class="health-pill" title="Messages received in last 60 seconds">
+        <span class="label">rate</span>
+        <span class="value">12.4/min</span>
+        <svg class="spark" viewBox="0 0 60 18" preserveAspectRatio="none">
+          <polyline points="0,14 6,12 12,15 18,9 24,11 30,7 36,8 42,5 48,9 54,4 60,6"
+                    fill="none" stroke="currentColor" stroke-width="1.5" style="color:var(--ok)" />
+        </svg>
+      </div>
+      <div class="health-pill" title="Time since last message">
+        <span class="label">last</span>
+        <span class="value">2s ago</span>
+      </div>
+      <div class="health-pill" title="Parse errors in last hour">
+        <span class="label">errors</span>
+        <span class="value" style="color:var(--err)">2</span>
+      </div>
+    </div>
+
+    <div class="topbar-right">
+      <button class="text-btn primary" id="pause-btn" onclick="togglePause()">
+        <svg class="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="6" y="5" width="4" height="14"/><rect x="14" y="5" width="4" height="14"/></svg>
+        <span id="pause-label">Pause</span>
+      </button>
+      <button class="text-btn">
+        <svg class="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+        Export
+      </button>
+      <button class="text-btn">
+        <svg class="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 01-2.83 2.83l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09a1.65 1.65 0 00-1-1.51 1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83-2.83l.06-.06a1.65 1.65 0 00.33-1.82 1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09a1.65 1.65 0 001.51-1 1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 012.83-2.83l.06.06a1.65 1.65 0 001.82.33H9a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 2.83l-.06.06a1.65 1.65 0 00-.33 1.82V9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z"/></svg>
+      </button>
+    </div>
+  </div>
+
+  <!-- ─── Main split ──────────────────────────────────────────────── -->
+  <div class="main">
+
+    <!-- ─── List panel ─── -->
+    <div class="list-panel">
+
+      <!-- search + filters -->
+      <div class="list-toolbar">
+        <div class="search">
+          <svg class="i search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>
+          <input type="text" placeholder="Filter by type, patient, MRN, control ID, or has:errors" />
+          <span class="search-tip">⌘K</span>
+        </div>
+        <button class="filter-chip" title="Bookmarked only">
+          <svg class="i-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="12 2 15 8.5 22 9.3 17 14.1 18.2 21 12 17.8 5.8 21 7 14.1 2 9.3 9 8.5 12 2"/></svg>
+          <span class="count">3</span>
+        </button>
+        <button class="filter-chip active" title="Validation: warnings & errors">
+          <svg class="i-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10.3 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.7 3.86a2 2 0 00-3.4 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+          Issues
+          <span class="count">5</span>
+        </button>
+      </div>
+
+      <!-- sources rail -->
+      <div class="source-rail">
+        <span class="label">Sources</span>
+        <span class="source-chip active">
+          <span class="dot" style="background:hsl(210, 90%, 65%); color:hsl(210, 90%, 65%)"></span>
+          epic.hospital.local <span class="num">428</span>
+        </span>
+        <span class="source-chip">
+          <span class="dot" style="background:hsl(150, 70%, 55%); color:hsl(150, 70%, 55%)"></span>
+          lis-prod-02 <span class="num">112</span>
+        </span>
+        <span class="source-chip">
+          <span class="dot" style="background:hsl(30, 85%, 60%); color:hsl(30, 85%, 60%)"></span>
+          radiology-gw <span class="num">73</span>
+        </span>
+        <span class="source-chip">
+          <span class="dot" style="background:hsl(280, 75%, 65%); color:hsl(280, 75%, 65%)"></span>
+          10.42.7.18 <span class="num">9</span>
+        </span>
+      </div>
+
+      <!-- throughput band -->
+      <div class="rate-band">
+        <div class="stat">
+          <span class="v">622</span>
+          <span class="l">total</span>
+        </div>
+        <div class="stat">
+          <span class="v">12.4</span>
+          <span class="l">per min</span>
+        </div>
+        <div class="stat">
+          <span class="v warn">5</span>
+          <span class="l">warnings</span>
+        </div>
+        <div class="stat">
+          <span class="v err">2</span>
+          <span class="l">errors</span>
+        </div>
+        <div class="spark-wrap">
+          <svg class="bars" viewBox="0 0 200 30" preserveAspectRatio="none">
+            <!-- 60 bars representing last 60 seconds -->
+            <g fill="var(--accent-2)" id="bars"></g>
+          </svg>
+        </div>
+      </div>
+
+      <!-- messages -->
+      <div class="messages">
+
+        <div class="group-header">Live <span class="count">— last 30s</span></div>
+
+        <div class="msg selected" data-id="m1">
+          <div class="source-bar" style="background:hsl(210, 90%, 65%); box-shadow:0 0 8px hsl(210, 90%, 65%)"></div>
+          <div class="body">
+            <div class="msg-row1">
+              <span class="msg-type">ADT^A01</span>
+              <span class="msg-patient">Romero, Marcus</span>
+              <span class="msg-ack aa">AA</span>
+            </div>
+            <div class="msg-row2">
+              <span class="facility">EPIC.MGH</span>
+              <span class="sep">·</span>
+              <span>epic.hospital.local:51422</span>
+              <span class="sep">·</span>
+              <span>23 segs</span>
+              <span class="time">2s ago</span>
+            </div>
+          </div>
+          <div class="actions"><div class="star">★</div></div>
+        </div>
+
+        <div class="msg" data-id="m2">
+          <div class="source-bar" style="background:hsl(150, 70%, 55%); box-shadow:0 0 8px hsl(150, 70%, 55%)"></div>
+          <div class="body">
+            <div class="msg-row1">
+              <span class="msg-type">ORU^R01</span>
+              <span class="msg-patient">Chen, Wei-Ling</span>
+              <span class="msg-warning warn">⚠ 2</span>
+              <span class="msg-ack aa">AA</span>
+            </div>
+            <div class="msg-row2">
+              <span class="facility">LIS_PROD</span>
+              <span class="sep">·</span>
+              <span>lis-prod-02:43011</span>
+              <span class="sep">·</span>
+              <span>14 segs</span>
+              <span class="time">5s ago</span>
+            </div>
+          </div>
+          <div class="actions"><div class="star">☆</div></div>
+        </div>
+
+        <div class="msg bookmarked" data-id="m3">
+          <div class="source-bar" style="background:hsl(30, 85%, 60%); box-shadow:0 0 8px hsl(30, 85%, 60%)"></div>
+          <div class="body">
+            <div class="msg-row1">
+              <span class="msg-type">ORM^O01</span>
+              <span class="msg-patient">Patel, Anjali</span>
+              <span class="tags"><span class="tag">followup</span><span class="tag">L4</span></span>
+              <span class="msg-ack aa">AA</span>
+            </div>
+            <div class="msg-row2">
+              <span class="facility">RAD_GW</span>
+              <span class="sep">·</span>
+              <span>radiology-gw:5021</span>
+              <span class="sep">·</span>
+              <span>9 segs</span>
+              <span class="time">12s ago</span>
+            </div>
+          </div>
+          <div class="actions"><div class="star">★</div></div>
+        </div>
+
+        <div class="msg" data-id="m4">
+          <div class="source-bar" style="background:hsl(280, 75%, 65%); box-shadow:0 0 8px hsl(280, 75%, 65%)"></div>
+          <div class="body">
+            <div class="msg-row1">
+              <span class="msg-type parse-error">⚠ Parse error</span>
+              <span class="msg-patient" style="color:var(--fg-2)">Malformed MSH segment</span>
+              <span class="msg-ack ar">AR</span>
+            </div>
+            <div class="msg-row2">
+              <span class="facility" style="color:var(--fg-2)">unknown</span>
+              <span class="sep">·</span>
+              <span>10.42.7.18:38291</span>
+              <span class="sep">·</span>
+              <span>—</span>
+              <span class="time">18s ago</span>
+            </div>
+          </div>
+          <div class="actions"><div class="star">☆</div></div>
+        </div>
+
+        <div class="group-header">Earlier today <span class="count">— 13:42 onward</span></div>
+
+        <div class="msg" data-id="m5">
+          <div class="source-bar" style="background:hsl(210, 90%, 65%); box-shadow:0 0 8px hsl(210, 90%, 65%)"></div>
+          <div class="body">
+            <div class="msg-row1">
+              <span class="msg-type">ADT^A03</span>
+              <span class="msg-patient">Romero, Marcus</span>
+              <span class="msg-ack aa">AA</span>
+            </div>
+            <div class="msg-row2">
+              <span class="facility">EPIC.MGH</span>
+              <span class="sep">·</span>
+              <span>epic.hospital.local:51418</span>
+              <span class="sep">·</span>
+              <span>11 segs</span>
+              <span class="time">14:02:11</span>
+            </div>
+          </div>
+          <div class="actions"><div class="star">☆</div></div>
+        </div>
+
+        <div class="msg" data-id="m6">
+          <div class="source-bar" style="background:hsl(150, 70%, 55%); box-shadow:0 0 8px hsl(150, 70%, 55%)"></div>
+          <div class="body">
+            <div class="msg-row1">
+              <span class="msg-type">ORU^R01</span>
+              <span class="msg-patient">Okonkwo, Adaeze</span>
+              <span class="msg-warning err">✕ MISSING_SEG</span>
+              <span class="msg-ack ae">AE</span>
+            </div>
+            <div class="msg-row2">
+              <span class="facility">LIS_PROD</span>
+              <span class="sep">·</span>
+              <span>lis-prod-02:43009</span>
+              <span class="sep">·</span>
+              <span>8 segs</span>
+              <span class="time">13:58:04</span>
+            </div>
+          </div>
+          <div class="actions"><div class="star">☆</div></div>
+        </div>
+
+        <div class="msg bookmarked" data-id="m7">
+          <div class="source-bar" style="background:hsl(30, 85%, 60%); box-shadow:0 0 8px hsl(30, 85%, 60%)"></div>
+          <div class="body">
+            <div class="msg-row1">
+              <span class="msg-type">SIU^S12</span>
+              <span class="msg-patient">Reyes, Sofia</span>
+              <span class="tags"><span class="tag">demo</span></span>
+              <span class="msg-ack aa">AA</span>
+            </div>
+            <div class="msg-row2">
+              <span class="facility">RAD_GW</span>
+              <span class="sep">·</span>
+              <span>radiology-gw:5019</span>
+              <span class="sep">·</span>
+              <span>17 segs</span>
+              <span class="time">13:51:33</span>
+            </div>
+          </div>
+          <div class="actions"><div class="star">★</div></div>
+        </div>
+
+        <div class="msg" data-id="m8">
+          <div class="source-bar" style="background:hsl(210, 90%, 65%); box-shadow:0 0 8px hsl(210, 90%, 65%)"></div>
+          <div class="body">
+            <div class="msg-row1">
+              <span class="msg-type">ADT^A08</span>
+              <span class="msg-patient">Bernardini, Lucia</span>
+              <span class="msg-ack aa">AA</span>
+            </div>
+            <div class="msg-row2">
+              <span class="facility">EPIC.MGH</span>
+              <span class="sep">·</span>
+              <span>epic.hospital.local:51404</span>
+              <span class="sep">·</span>
+              <span>22 segs</span>
+              <span class="time">13:45:58</span>
+            </div>
+          </div>
+          <div class="actions"><div class="star">☆</div></div>
+        </div>
+
+      </div>
+    </div>
+
+    <!-- ─── Detail panel ─── -->
+    <div class="detail">
+
+      <!-- Header -->
+      <div class="detail-header">
+        <div>
+          <div class="detail-title-line">
+            <span class="detail-type">ADT^A01</span>
+            <span class="detail-title">Admit/Visit Notification</span>
+          </div>
+          <div class="detail-desc">A new patient has been admitted — patient identification and visit details.</div>
+          <div class="detail-meta">
+            <span class="item"><span class="k">patient</span><span class="v">Romero, Marcus</span></span>
+            <span class="sep">·</span>
+            <span class="item"><span class="k">MRN</span><span class="v">MRN-78421</span></span>
+            <span class="sep">·</span>
+            <span class="item">
+              <span class="k">control</span>
+              <span class="v">MSG00042185</span>
+              <span class="copy" title="Copy">
+                <svg class="i-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg>
+              </span>
+            </span>
+            <span class="sep">·</span>
+            <span class="item"><span class="k">v</span><span class="v">2.5.1</span></span>
+            <span class="sep">·</span>
+            <span class="item"><span class="k">received</span><span class="v">14:03:21.483</span></span>
+          </div>
+        </div>
+        <div class="detail-actions">
+          <button class="text-btn" title="Bookmark">
+            <svg class="i-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="12 2 15 8.5 22 9.3 17 14.1 18.2 21 12 17.8 5.8 21 7 14.1 2 9.3 9 8.5 12 2"/></svg>
+          </button>
+          <button class="text-btn" title="Pin as diff reference">
+            <svg class="i-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="17" x2="12" y2="22"/><path d="M5 17h14V8a3 3 0 00-3-3H8a3 3 0 00-3 3v9z"/></svg>
+            Pin diff
+          </button>
+          <button class="text-btn" title="More">⋯</button>
+        </div>
+      </div>
+
+      <!-- Tabs -->
+      <div class="tabs">
+        <button class="tab active">Segments <span class="badge">23</span></button>
+        <button class="tab">Raw</button>
+        <button class="tab">ACK</button>
+        <button class="tab">JSON</button>
+        <button class="tab" style="margin-left:auto">
+          <svg class="i-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg>
+          Diff vs pinned
+        </button>
+      </div>
+
+      <!-- Tab content -->
+      <div class="tab-content">
+
+        <!-- Typical segments redesigned -->
+        <div class="seg-checklist">
+          <span class="label">Typical segments</span>
+          <span class="seg-pill present" title="Message header">MSH ✓</span>
+          <span class="seg-pill present" title="Event type">EVN ✓</span>
+          <span class="seg-pill present" title="Patient identification">PID ✓</span>
+          <span class="seg-pill warn" title="PD1: missing required field">PD1 ⚠</span>
+          <span class="seg-pill present">NK1 ✓</span>
+          <span class="seg-pill present">PV1 ✓</span>
+          <span class="seg-pill missing" title="OBX: required for this trigger but not sent">OBX ✕</span>
+          <span class="seg-pill absent" title="Optional: not present">DG1</span>
+          <span class="seg-pill absent">AL1</span>
+        </div>
+
+        <!-- Validation summary -->
+        <div class="validation-summary">
+          <div class="icon">
+            <svg class="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10.3 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.7 3.86a2 2 0 00-3.4 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+          </div>
+          <div class="text">
+            <strong>2 validation warnings</strong> · required field missing in <span class="seg-list">PD1-3</span>, expected segment not sent: <span class="seg-list">OBX</span>
+          </div>
+        </div>
+
+        <!-- Segment blocks -->
+        <div class="segment">
+          <div class="segment-head">
+            <span class="name">MSH</span>
+            <span class="desc">Message Header — defines source, destination, and trigger</span>
+            <span class="count">12 fields</span>
+            <div class="copy" title="Copy segment">
+              <svg class="i-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg>
+            </div>
+          </div>
+          <table class="field-table">
+            <tr>
+              <td class="idx">MSH-3<span class="desc-text">Sending app</span></td>
+              <td class="val">EPIC</td>
+            </tr>
+            <tr>
+              <td class="idx">MSH-4<span class="desc-text">Sending facility</span></td>
+              <td class="val">EPIC.MGH</td>
+            </tr>
+            <tr>
+              <td class="idx">MSH-7<span class="desc-text">Date/time of message</span></td>
+              <td class="val">20260508140321</td>
+            </tr>
+            <tr>
+              <td class="idx">MSH-9<span class="desc-text">Message type</span></td>
+              <td class="val">ADT<span class="comp-sep">^</span>A01<span class="comp-sep">^</span>ADT_A01</td>
+            </tr>
+            <tr>
+              <td class="idx">MSH-10<span class="desc-text">Message control ID</span></td>
+              <td class="val">MSG00042185</td>
+            </tr>
+            <tr>
+              <td class="idx">MSH-11<span class="desc-text">Processing ID</span></td>
+              <td class="val">P</td>
+            </tr>
+            <tr>
+              <td class="idx">MSH-12<span class="desc-text">Version ID</span></td>
+              <td class="val">2.5.1</td>
+            </tr>
+          </table>
+        </div>
+
+        <div class="segment">
+          <div class="segment-head">
+            <span class="name">PID</span>
+            <span class="desc">Patient Identification</span>
+            <span class="count">18 fields</span>
+            <div class="copy">
+              <svg class="i-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg>
+            </div>
+          </div>
+          <table class="field-table">
+            <tr>
+              <td class="idx">PID-3<span class="desc-text">Patient identifier list</span></td>
+              <td class="val">MRN-78421<span class="comp-sep">^^^</span>MGH<span class="comp-sep">^</span>MR</td>
+            </tr>
+            <tr>
+              <td class="idx">PID-5<span class="desc-text">Patient name</span></td>
+              <td class="val">Romero<span class="comp-sep">^</span>Marcus<span class="comp-sep">^</span>J<span class="comp-sep">^^</span>Mr.</td>
+            </tr>
+            <tr>
+              <td class="idx">PID-7<span class="desc-text">Date/time of birth</span></td>
+              <td class="val">19840712</td>
+            </tr>
+            <tr>
+              <td class="idx">PID-8<span class="desc-text">Administrative sex</span></td>
+              <td class="val">M</td>
+            </tr>
+            <tr>
+              <td class="idx">PID-11<span class="desc-text">Patient address</span></td>
+              <td class="val">214 Webster Ave<span class="comp-sep">^^</span>Cambridge<span class="comp-sep">^</span>MA<span class="comp-sep">^</span>02139</td>
+            </tr>
+          </table>
+        </div>
+
+        <div class="segment">
+          <div class="segment-head">
+            <span class="name">PD1</span>
+            <span class="desc">Patient Additional Demographics</span>
+            <span class="count">4 fields</span>
+            <div class="copy">
+              <svg class="i-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg>
+            </div>
+          </div>
+          <table class="field-table">
+            <tr class="warn">
+              <td class="idx">PD1-3<span class="desc-text">Patient primary facility</span></td>
+              <td class="val empty">empty</td>
+            </tr>
+            <tr>
+              <td class="idx">PD1-4<span class="desc-text">Patient primary care provider</span></td>
+              <td class="val">PCP-1109<span class="comp-sep">^</span>Reyes<span class="comp-sep">^</span>Daniel</td>
+            </tr>
+          </table>
+        </div>
+
+        <div class="segment">
+          <div class="segment-head">
+            <span class="name">PV1</span>
+            <span class="desc">Patient Visit</span>
+            <span class="count">11 fields</span>
+            <div class="copy">
+              <svg class="i-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg>
+            </div>
+          </div>
+          <table class="field-table">
+            <tr>
+              <td class="idx">PV1-2<span class="desc-text">Patient class</span></td>
+              <td class="val">I</td>
+            </tr>
+            <tr>
+              <td class="idx">PV1-3<span class="desc-text">Assigned patient location</span></td>
+              <td class="val">7E<span class="comp-sep">^</span>702<span class="comp-sep">^</span>A<span class="comp-sep">^</span>MGH</td>
+            </tr>
+            <tr>
+              <td class="idx">PV1-44<span class="desc-text">Admit date/time</span></td>
+              <td class="val">202605081358</td>
+            </tr>
+          </table>
+        </div>
+
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<!-- Notes drawer -->
+<button class="notes-toggle" onclick="document.querySelector('.notes-drawer').classList.toggle('open')">
+  <svg class="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+  9 ideas
+</button>
+
+<div class="notes-drawer">
+  <div class="notes-head">
+    <h3>What changed & why</h3>
+    <div class="close-x" onclick="document.querySelector('.notes-drawer').classList.toggle('open')">
+      <svg class="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+    </div>
+  </div>
+  <div class="notes-body">
+
+    <div class="note">
+      <span class="num">01 · Top bar</span>
+      <h4>Health pills replace dot stats</h4>
+      <p>The MLLP listening port, connection count, throughput rate, time-since-last-message and error count are now first-class. <code>:2575</code> is visible at a glance, and the rate pill carries a 60-second sparkline so you can see trend, not just instant.</p>
+    </div>
+
+    <div class="note">
+      <span class="num">02 · Throughput band</span>
+      <h4>60-second bar histogram above the list</h4>
+      <p>Lets you spot bursts, gaps, or quiet hours without leaving the inbox. Counters next to it (total / per-min / warnings / errors) summarise what the bars show.</p>
+    </div>
+
+    <div class="note">
+      <span class="num">03 · Source rail</span>
+      <h4>Always visible, click to filter</h4>
+      <p>Source is a primary discrimination axis when you have multiple senders. Pulling the legend out of the hidden state and giving each source a count makes it useful as a filter, not just a key.</p>
+    </div>
+
+    <div class="note">
+      <span class="num">04 · Message row</span>
+      <h4>Two-line layout, hierarchy by typography</h4>
+      <p>Type + patient + ACK on line 1 (the answer to "what is this?"), facility · source · time on line 2 (metadata). The 9-column grid is gone — eyes anchor to the bold row 1.</p>
+    </div>
+
+    <div class="note">
+      <span class="num">05 · Time grouping</span>
+      <h4>Sticky "Live / Earlier today" headers</h4>
+      <p>Live debugging is about "what just happened?" Grouping by recency answers that without making you parse timestamps. Older sections collapse implicitly.</p>
+    </div>
+
+    <div class="note">
+      <span class="num">06 · ACK as colored chip</span>
+      <h4>Scannable AA / AE / AR</h4>
+      <p>Green for AA, red for AE, amber for AR. You can spot a row of failures from across the room. Same applies to validation badges (<code>⚠ 2</code>, <code>✕ MISSING_SEG</code>).</p>
+    </div>
+
+    <div class="note">
+      <span class="num">07 · Bookmark only</span>
+      <h4>Pin-for-diff moves out of the row</h4>
+      <p>Two icons per row was too much. Bookmark stays (★ on hover, persistent when set). Pin-for-diff is a contextual action in the detail header — that's the only place it semantically fits.</p>
+    </div>
+
+    <div class="note">
+      <span class="num">08 · Detail header</span>
+      <h4>Title is human, metadata is monospace</h4>
+      <p>"<strong>Admit/Visit Notification</strong>" reads first; <code>ADT^A01</code> chip beside it. MRN, control ID and timestamp sit on their own metadata line with copy-to-clipboard handles.</p>
+    </div>
+
+    <div class="note">
+      <span class="num">09 · Typical segments + warnings panel</span>
+      <h4>Severity is unmissable</h4>
+      <p>The typical-segments bar uses pill states (✓ present, ⚠ warn, ✕ missing, dim absent). A summary banner above the segment blocks names the offending fields directly — no hunting through the list to find the ⚠.</p>
+    </div>
+
+    <div class="note">
+      <span class="num">10 · Empty state (not shown)</span>
+      <h4>Show config + a sample CLI</h4>
+      <p>"Listening on :2575, no messages yet" with a copy-able <code>echo &lt;MSG&gt; | mllp-send …</code> command would turn the empty state from dead air into self-serve help.</p>
+    </div>
+
+  </div>
+</div>
+
+<script>
+  // Generate the 60s rate bars
+  (function(){
+    const bars = document.getElementById('bars');
+    if (!bars) return;
+    const n = 60;
+    const w = 200 / n;
+    let html = '';
+    const data = [3,2,4,1,3,5,2,4,3,6,2,4,5,3,2,4,7,3,5,4,2,3,5,8,4,3,2,4,6,3,5,2,4,3,6,4,2,5,7,3,4,2,3,5,4,2,6,3,5,4,2,3,5,7,4,2,3,5,4,2];
+    const max = Math.max(...data, 1);
+    for (let i=0; i<n; i++) {
+      const h = (data[i] / max) * 28;
+      const x = i * w + 0.5;
+      const opacity = 0.4 + (i / n) * 0.6;
+      html += `<rect x="${x.toFixed(2)}" y="${(30-h).toFixed(2)}" width="${(w-0.5).toFixed(2)}" height="${h.toFixed(2)}" rx="0.5" opacity="${opacity.toFixed(2)}"/>`;
+    }
+    bars.innerHTML = html;
+  })();
+
+  // Selectable rows
+  document.querySelectorAll('.msg').forEach(m => {
+    m.addEventListener('click', (e) => {
+      if (e.target.closest('.star')) {
+        m.classList.toggle('bookmarked');
+        const star = m.querySelector('.star');
+        star.textContent = m.classList.contains('bookmarked') ? '★' : '☆';
+        return;
+      }
+      document.querySelectorAll('.msg').forEach(x => x.classList.remove('selected'));
+      m.classList.add('selected');
+    });
+  });
+
+  // Tabs
+  document.querySelectorAll('.tab').forEach(t => {
+    t.addEventListener('click', () => {
+      document.querySelectorAll('.tab').forEach(x => x.classList.remove('active'));
+      t.classList.add('active');
+    });
+  });
+
+  // Pause toggle
+  let paused = false;
+  function togglePause() {
+    paused = !paused;
+    const btn = document.getElementById('pause-btn');
+    const lbl = document.getElementById('pause-label');
+    if (paused) {
+      btn.classList.remove('primary');
+      lbl.textContent = 'Resume';
+    } else {
+      btn.classList.add('primary');
+      lbl.textContent = 'Pause';
+    }
+  }
+  window.togglePause = togglePause;
+
+  // Filter chips
+  document.querySelectorAll('.filter-chip').forEach(c => {
+    c.addEventListener('click', () => c.classList.toggle('active'));
+  });
+  document.querySelectorAll('.source-chip').forEach(c => {
+    c.addEventListener('click', () => c.classList.toggle('active'));
+  });
+</script>
+
+</body>
+</html>
