@@ -328,12 +328,39 @@ async function pollStats() {
 }
 
 // --- Rendering ---
+// Bolt: Cache parsed queries to prevent recalculating `has:warnings` and `.toLowerCase()`
+// repeatedly during rapid typing or re-renders. Bounded cache to avoid memory leaks.
+let parsedQueryCache = new Map();
+
+function getParsedQuery(query) {
+    if (parsedQueryCache.has(query)) return parsedQueryCache.get(query);
+    let q = query.toLowerCase().trim();
+    let hasWarnings = false;
+    let hasErrors = false;
+    if (q.startsWith('has:warnings')) {
+        hasWarnings = true;
+        q = q.replace('has:warnings', '').trim();
+    } else if (q.startsWith('has:errors')) {
+        hasErrors = true;
+        q = q.replace('has:errors', '').trim();
+    }
+    const result = { q, hasWarnings, hasErrors };
+    // Bounded cache to prevent unbounded memory growth from unique searches
+    if (parsedQueryCache.size > 100) parsedQueryCache.clear();
+    parsedQueryCache.set(query, result);
+    return result;
+}
+
 function renderMessageList() {
     const list = document.getElementById('message-list');
     const empty = document.getElementById('empty-state');
-    let filtered = searchQuery
-        ? messages.filter(m => matchesSearch(m, searchQuery))
-        : messages;
+    let filtered = messages;
+
+    if (searchQuery) {
+        const parsedQuery = getParsedQuery(searchQuery);
+        filtered = filtered.filter(m => matchesSearchFast(m, parsedQuery));
+    }
+
     if (showBookmarkedOnly) {
         filtered = filtered.filter(m => m.bookmarked);
     }
@@ -434,26 +461,29 @@ function renderMessageList() {
     }
 }
 
-function matchesSearch(msg, query) {
-    let q = query.toLowerCase().trim();
-    if (q.startsWith('has:warnings')) {
+// Bolt: Fast search matcher using pre-parsed query object. Replaces heavy chained ||
+// property lowercasing with short-circuited sequential IFs, skipping property accesses early.
+function matchesSearchFast(msg, parsedQuery) {
+    if (parsedQuery.hasWarnings) {
         if ((msg.validation_warning_count || 0) === 0 && !msg.has_segment_errors) return false;
-        q = q.replace('has:warnings', '').trim();
-        if (!q) return true;
-    } else if (q.startsWith('has:errors')) {
+        if (!parsedQuery.q) return true;
+    } else if (parsedQuery.hasErrors) {
         if (!msg.has_segment_errors) return false;
-        q = q.replace('has:errors', '').trim();
-        if (!q) return true;
+        if (!parsedQuery.q) return true;
     }
-    return (
-        (msg.message_type || '').toLowerCase().includes(q) ||
-        (msg.sending_facility || '').toLowerCase().includes(q) ||
-        (msg.patient_name || '').toLowerCase().includes(q) ||
-        (msg.patient_id || '').toLowerCase().includes(q) ||
-        (msg.message_control_id || '').toLowerCase().includes(q) ||
-        (msg.source_addr || '').toLowerCase().includes(q) ||
-        (msg.tags || []).some(t => t.toLowerCase().includes(q))
-    );
+
+    let q = parsedQuery.q;
+    if (!q) return true;
+
+    if (msg.patient_name && msg.patient_name.toLowerCase().includes(q)) return true;
+    if (msg.message_type && msg.message_type.toLowerCase().includes(q)) return true;
+    if (msg.sending_facility && msg.sending_facility.toLowerCase().includes(q)) return true;
+    if (msg.patient_id && msg.patient_id.toLowerCase().includes(q)) return true;
+    if (msg.message_control_id && msg.message_control_id.toLowerCase().includes(q)) return true;
+    if (msg.source_addr && msg.source_addr.toLowerCase().includes(q)) return true;
+    if (msg.tags && msg.tags.some(t => t.toLowerCase().includes(q))) return true;
+
+    return false;
 }
 
 async function selectMessage(id) {
