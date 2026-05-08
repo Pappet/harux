@@ -1,3 +1,19 @@
+// --- Icons (lucide-style outlines, currentColor stroke) ---
+const ICONS = {
+    pause: '<svg class="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg>',
+    play: '<svg class="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"/></svg>',
+    download: '<svg class="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>',
+    arrowDown: '<svg class="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><polyline points="19 12 12 19 5 12"/></svg>',
+    starOutline: '<svg class="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>',
+    starFilled: '<svg class="i" viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>',
+    pin: '<svg class="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="17" x2="12" y2="22"/><path d="M5 17h14V8a3 3 0 0 0-3-3H8a3 3 0 0 0-3 3v9z"/></svg>',
+    warning: '<svg class="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>',
+    trash: '<svg class="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/><path d="M9 6V4a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2v2"/></svg>',
+    copy: '<svg class="i-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>',
+    chevronRight: '<svg class="i-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>',
+    chevronDown: '<svg class="i-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>',
+};
+
 // --- State ---
 let messages = [];
 let selectedId = null;
@@ -255,9 +271,8 @@ function connectWs() {
             renderSourceLegend();
             renderHealthPills();
             renderThroughputBand();
+            resetDetailHeader();
             document.getElementById('detail-content').innerHTML = '<div class="empty-state"><p>No message selected</p></div>';
-            document.getElementById('detail-title').textContent = 'Select a message';
-            document.getElementById('detail-meta').textContent = '';
         }
     };
 }
@@ -632,7 +647,7 @@ function buildMessageRow(msg) {
     const patient = esc(msg.patient_name || msg.patient_id || '—');
 
     const bookmarkClass = msg.bookmarked ? 'msg-bookmark active' : 'msg-bookmark';
-    const bookmarkIcon = msg.bookmarked ? '★' : '☆';
+    const bookmarkSvg = msg.bookmarked ? ICONS.starFilled : ICONS.starOutline;
     const bookmarkLabel = msg.bookmarked ? 'Remove bookmark' : 'Add bookmark';
 
     row.dataset.received = msg.received_at || '';
@@ -657,7 +672,7 @@ function buildMessageRow(msg) {
             </div>
         </div>
         <div class="msg-actions">
-            <button class="${bookmarkClass}" aria-label="${bookmarkLabel}" onclick="toggleBookmark('${msg.id}', event)" title="Bookmark">${bookmarkIcon}</button>
+            <button class="${bookmarkClass}" aria-label="${bookmarkLabel}" onclick="toggleBookmark('${msg.id}', event)" title="Bookmark">${bookmarkSvg}</button>
         </div>
     `;
     return row;
@@ -747,46 +762,131 @@ async function selectMessage(id) {
     }
 }
 
+function resetDetailHeader() {
+    const typeEl = document.getElementById('detail-type');
+    if (typeEl) {
+        typeEl.style.display = 'none';
+        typeEl.textContent = '';
+    }
+    const titleEl = document.getElementById('detail-title');
+    if (titleEl) titleEl.textContent = 'Select a message';
+    const descEl = document.getElementById('detail-desc');
+    if (descEl) {
+        descEl.style.display = 'none';
+        descEl.textContent = '';
+    }
+    const metaEl = document.getElementById('detail-meta');
+    if (metaEl) metaEl.innerHTML = '';
+    const actionsEl = document.getElementById('detail-actions');
+    if (actionsEl) actionsEl.innerHTML = '';
+    const segBadge = document.getElementById('tab-segments-badge');
+    if (segBadge) segBadge.style.display = 'none';
+}
+
+function formatDetailReceived(received) {
+    if (!received) return '';
+    const t = new Date(received);
+    if (isNaN(t.getTime())) return received;
+    const yyyy = t.getFullYear();
+    const mm = String(t.getMonth() + 1).padStart(2, '0');
+    const dd = String(t.getDate()).padStart(2, '0');
+    const hh = String(t.getHours()).padStart(2, '0');
+    const min = String(t.getMinutes()).padStart(2, '0');
+    const ss = String(t.getSeconds()).padStart(2, '0');
+    return `${yyyy}-${mm}-${dd} ${hh}:${min}:${ss}`;
+}
+
+function buildDetailMeta(msg) {
+    const items = [];
+    const patient = msg.patient_name || msg.patient_id;
+    if (patient) {
+        items.push(`<span class="item"><span class="k">patient</span><span class="v">${esc(patient)}</span></span>`);
+    }
+    if (msg.patient_id && msg.patient_name) {
+        // Only show MRN separately if both name and ID exist (otherwise patient covers it).
+        items.push(`<span class="item"><span class="k">MRN</span><span class="v">${esc(msg.patient_id)}</span></span>`);
+    }
+    if (msg.message_control_id) {
+        items.push(`<span class="item"><span class="k">control</span><span class="v">${esc(msg.message_control_id)}</span></span>`);
+    }
+    if (msg.version) {
+        items.push(`<span class="item"><span class="k">v</span><span class="v">${esc(msg.version)}</span></span>`);
+    }
+    if (msg.source_addr) {
+        items.push(`<span class="item"><span class="k">from</span><span class="v">${esc(msg.source_addr)}</span></span>`);
+    }
+    if (msg.charset) {
+        items.push(`<span class="item"><span class="k">charset</span><span class="v">${esc(msg.charset)}</span></span>`);
+    }
+    const received = formatDetailReceived(msg.received_at);
+    if (received) {
+        items.push(`<span class="item"><span class="k">received</span><span class="v">${esc(received)}</span></span>`);
+    }
+    return items.join('<span class="sep">·</span>');
+}
+
 function renderDetail() {
     if (!selectedMessage) return;
     const msg = selectedMessage;
 
+    // Title row: type chip + human title (patient when available, else message type).
+    const typeEl = document.getElementById('detail-type');
+    if (msg.message_type) {
+        typeEl.textContent = msg.message_type;
+        typeEl.style.display = '';
+    } else {
+        typeEl.style.display = 'none';
+    }
     document.getElementById('detail-title').textContent =
-        `${msg.message_type} — ${msg.patient_name || msg.patient_id || 'Unknown'}`;
+        msg.patient_name || msg.patient_id || msg.message_type || 'Message';
 
-    const descEl = document.getElementById('detail-type-desc');
-    if (descEl) {
-        if (msg.message_type_description) {
-            descEl.textContent = msg.message_type_description;
-            descEl.style.display = '';
-        } else {
-            descEl.style.display = 'none';
-        }
+    // Description row — always populate when message_type_description is available.
+    const descEl = document.getElementById('detail-desc');
+    if (msg.message_type_description) {
+        descEl.textContent = msg.message_type_description;
+        descEl.style.display = '';
+    } else {
+        descEl.style.display = 'none';
     }
 
-    document.getElementById('detail-meta').textContent =
-        `${msg.source_addr} | ${msg.message_control_id} | v${msg.version}${msg.charset ? ` | ${msg.charset}` : ''}`;
+    // Metadata row.
+    document.getElementById('detail-meta').innerHTML = buildDetailMeta(msg);
 
-    const tagsContainer = document.getElementById('detail-tags');
-
-    const bookmarkBtnClass = msg.bookmarked ? 'detail-bookmark-btn active' : 'detail-bookmark-btn';
-    const bookmarkBtnIcon = msg.bookmarked ? '★' : '☆';
-
+    // Actions row: tag chips + add-tag input + Bookmark + Pin diff (all on the right).
     const isPinned = diffPinnedMessage && diffPinnedMessage.id === msg.id;
-    const pinBtnClass = isPinned ? 'detail-pin-btn active' : 'detail-pin-btn';
-    const pinBtnLabel = isPinned ? '📌 Pinned' : '📌 Pin for Diff';
+    const bookmarkClass = msg.bookmarked ? 'action-btn bookmark active' : 'action-btn bookmark';
+    const bookmarkSvg = msg.bookmarked ? ICONS.starFilled : ICONS.starOutline;
+    const bookmarkLabel = msg.bookmarked ? 'Bookmarked' : 'Bookmark';
+    const pinClass = isPinned ? 'action-btn pin active' : 'action-btn pin';
+    const pinLabel = isPinned ? 'Pinned' : 'Pin diff';
 
-    tagsContainer.innerHTML = `
-        <button class="${bookmarkBtnClass}" onclick="toggleBookmark('${msg.id}', event)" title="Toggle bookmark">${bookmarkBtnIcon} Bookmark</button>
-        <button class="${pinBtnClass}" onclick="toggleDiffPin('${msg.id}')" title="Pin this message as the diff reference">${pinBtnLabel}</button>
-    ` + (msg.tags || []).map(t =>
+    const tagChipsHtml = (msg.tags || []).map(t =>
         `<span class="msg-tag">${esc(t)} <span class="msg-tag-remove" onclick="removeTag('${msg.id}', '${escAttr(escJS(t))}')">×</span></span>`
-    ).join('') + `
+    ).join('');
+    const tagAddHtml = `
         <div class="msg-tag-add">
             <input type="text" id="add-tag-input" placeholder="Add tag" onkeypress="if(event.key === 'Enter') addTag('${msg.id}', this.value)">
             <button onclick="addTag('${msg.id}', document.getElementById('add-tag-input').value)">+</button>
         </div>
     `;
+
+    document.getElementById('detail-actions').innerHTML = `
+        <div id="detail-tags" class="detail-tags-inline">${tagChipsHtml}${tagAddHtml}</div>
+        <button class="${bookmarkClass}" aria-label="${bookmarkLabel}" onclick="toggleBookmark('${msg.id}', event)" title="Toggle bookmark">${bookmarkSvg}<span class="btn-label">${bookmarkLabel}</span></button>
+        <button class="${pinClass}" aria-label="${pinLabel}" onclick="toggleDiffPin('${msg.id}', event)" title="Pin this message as the diff reference">${ICONS.pin}<span class="btn-label">${pinLabel}</span></button>
+    `;
+
+    // Segments tab badge — segment count.
+    const segBadge = document.getElementById('tab-segments-badge');
+    if (segBadge) {
+        const count = (msg.segments && msg.segments.length) || 0;
+        if (count > 0) {
+            segBadge.textContent = count;
+            segBadge.style.display = '';
+        } else {
+            segBadge.style.display = 'none';
+        }
+    }
 
     // Show/hide Diff tab based on whether a pinned message exists and it's a different message
     const diffTabBtn = document.getElementById('tab-btn-diff');
@@ -856,38 +956,73 @@ function renderTab() {
             else if (w.code === 'MISSING_FIELD') fieldWarningSegs[w.segment] = true;
         }
 
-        const typicalBanner = (msg.typical_segments && msg.typical_segments.length)
-            ? `<div class="typical-segments-bar">
-                <span class="typical-segments-label">Typical segments:</span>
+        const typicalChecklist = (msg.typical_segments && msg.typical_segments.length)
+            ? `<div class="seg-checklist">
+                <span class="seg-checklist-label">Typical segments</span>
                 ${msg.typical_segments.map(s => {
                 const present = msg.segments.some(seg => seg.name === s);
                 const desc = (msg.typical_segment_descriptions || {})[s];
-                let cls, titleText;
+                let cls, symbol, titleText;
                 if (missingSegWarnings[s]) {
                     cls = 'missing';
+                    symbol = '✕';
                     titleText = missingSegWarnings[s];
                 } else if (fieldWarningSegs[s]) {
                     cls = 'warn';
+                    symbol = '⚠';
                     titleText = (desc ? desc + ' — ' : '') + 'has required fields missing';
                 } else if (present) {
                     cls = 'present';
+                    symbol = '✓';
                     titleText = desc || null;
                 } else {
                     cls = 'absent';
+                    symbol = '';
                     titleText = desc || null;
                 }
                 const titleAttr = titleText ? ` title="${escAttr(titleText)}"` : '';
-                return `<span class="typical-seg ${cls}"${titleAttr}>${esc(s)}</span>`;
+                const symbolHtml = symbol ? ` ${symbol}` : '';
+                return `<span class="seg-pill ${cls}"${titleAttr}>${esc(s)}${symbolHtml}</span>`;
             }).join('')}
                </div>`
             : '';
-        const hasSegErrors = warnings.some(w => w.code === 'MISSING_SEGMENT');
-        const panelCls = hasSegErrors ? 'validation-warnings-panel error' : 'validation-warnings-panel';
-        const validationBanner = (msg.validation_warnings && msg.validation_warnings.length)
-            ? `<div class="${panelCls}">
-                <div class="validation-warnings-title">&#9888; Validation ${hasSegErrors ? 'Errors' : 'Warnings'} (${msg.validation_warnings.length})</div>
+
+        // Validation summary banner — one-line aggregate + collapsible full list.
+        let validationBanner = '';
+        if (warnings.length) {
+            const hasSegErrors = warnings.some(w => w.code === 'MISSING_SEGMENT');
+            const summaryClass = hasSegErrors ? 'validation-summary error' : 'validation-summary';
+
+            const segMissing = warnings.filter(w => w.code === 'MISSING_SEGMENT').map(w => w.segment);
+            const fieldMissing = warnings.filter(w => w.code === 'MISSING_FIELD').map(w => `${w.segment}-${w.field}`);
+            const datatype = warnings.filter(w => w.code === 'INVALID_DATATYPE').map(w => `${w.segment}-${w.field}`);
+
+            const fmtList = (items, max) => {
+                const head = items.slice(0, max).map(x => esc(x)).join(', ');
+                const rest = items.length > max ? ` +${items.length - max} more` : '';
+                return head + rest;
+            };
+
+            const parts = [];
+            if (fieldMissing.length) {
+                parts.push(`required field missing in <span class="seg-list">${fmtList(fieldMissing, 3)}</span>`);
+            }
+            if (segMissing.length) {
+                parts.push(`expected segment not sent: <span class="seg-list">${fmtList(segMissing, 3)}</span>`);
+            }
+            if (datatype.length) {
+                parts.push(`invalid datatype in <span class="seg-list-type">${fmtList(datatype, 3)}</span>`);
+            }
+            const summaryLine = parts.join(' · ');
+            const headline = `${warnings.length} validation ${warnings.length === 1 ? 'warning' : 'warnings'}`;
+
+            validationBanner = `<details class="${summaryClass}">
+                <summary>
+                    <span class="summary-icon">${ICONS.warning}</span>
+                    <span class="summary-text"><strong>${headline}</strong> · ${summaryLine}</span>
+                </summary>
                 <ul class="validation-warnings-list">
-                ${msg.validation_warnings.map(w => {
+                    ${warnings.map(w => {
                 const badgeCls = w.code === 'MISSING_SEGMENT' ? 'validation-seg error'
                     : w.code === 'INVALID_DATATYPE' ? 'validation-seg type'
                     : 'validation-seg';
@@ -895,33 +1030,46 @@ function renderTab() {
                 return `<li><span class="${badgeCls}">${esc(label)}</span> ${esc(w.message)}</li>`;
             }).join('')}
                 </ul>
-               </div>`
-            : '';
-        content.innerHTML = typicalBanner + validationBanner + msg.segments.map((seg, segIdx) => {
+            </details>`;
+        }
+
+        // Field-level warning lookup: segName → Set of field indices flagged as MISSING_FIELD.
+        const missingFieldByseg = new Map();
+        for (const w of warnings) {
+            if (w.code === 'MISSING_FIELD' && w.segment != null && w.field != null) {
+                if (!missingFieldByseg.has(w.segment)) missingFieldByseg.set(w.segment, new Set());
+                missingFieldByseg.get(w.segment).add(w.field);
+            }
+        }
+
+        content.innerHTML = typicalChecklist + validationBanner + msg.segments.map((seg, segIdx) => {
             const key = `${msg.id}-${segIdx}`;
             const collapsed = collapsedSegments.has(key);
-            const icon = collapsed ? '▸' : '▾';
+            const icon = collapsed ? ICONS.chevronRight : ICONS.chevronDown;
+            const warnFields = missingFieldByseg.get(seg.name);
             return `
             <div class="segment-block">
                 <div class="segment-name ${seg.description ? 'has-seg-tooltip' : ''}" data-seg-key="${key}"${seg.description ? ` data-desc="${escAttr(seg.name + ': ' + seg.description)}"` : ''}>
                     <span class="collapse-icon">${icon}</span>
                     ${esc(seg.name)}
                     <span class="field-count">(${seg.fields.length})</span>
-                    <span class="copy-btn" onclick="event.stopPropagation(); copySegment(${segIdx}, this)" title="Copy segment">📋</span>
+                    <span class="copy-btn" onclick="event.stopPropagation(); copySegment(${segIdx}, this)" title="Copy segment">${ICONS.copy}</span>
                 </div>
                 ${collapsed ? '' : `<table class="field-table">
-                    <thead><tr><th style="width:70px">Field</th><th>Value</th><th>Components</th></tr></thead>
                     <tbody>
-                    ${seg.fields.map(f => `
-                        <tr>
-                            <td class="field-idx ${f.description ? 'has-tooltip' : ''}" ${f.description ? `data-desc="${escAttr(seg.name + '-' + f.index + ': ' + f.description)}"` : ''}>${esc(seg.name)}-${f.index}</td>
+                    ${seg.fields.map(f => {
+                const trCls = warnFields && warnFields.has(f.index) ? ' class="warn"' : '';
+                const descLine = f.description ? `<span class="desc-text">${esc(f.description)}</span>` : '';
+                return `
+                        <tr${trCls}>
+                            <td class="field-idx">${esc(seg.name)}-${f.index}${descLine}</td>
                             <td class="field-val">${esc(f.value) || '<span class="field-empty">empty</span>'}</td>
                             <td class="field-components">${f.components.length > 1
-                    ? f.components.map((c, i) => `<span title="${escAttr(seg.name + '-' + f.index + '.' + (i + 1))}">${esc(c)}</span>`).join(' <span style="color:var(--text-muted)">^</span> ')
-                    : ''
-                }</td>
-                        </tr>
-                    `).join('')}
+                        ? f.components.map((c, i) => `<span title="${escAttr(seg.name + '-' + f.index + '.' + (i + 1))}">${esc(c)}</span>`).join(' <span style="color:var(--text-muted)">^</span> ')
+                        : ''
+                    }</td>
+                        </tr>`;
+            }).join('')}
                     </tbody>
                 </table>`}
             </div>`;
@@ -930,7 +1078,7 @@ function renderTab() {
         const lines = msg.raw.split(/\r?\n|\r/).filter(l => l.trim());
         content.innerHTML = `
             <div style="display:flex;justify-content:flex-end;margin-bottom:8px;">
-                <button class="copy-raw-btn" onclick="copyRawMessage(this)" title="Copy entire message">📋 Copy All</button>
+                <button class="copy-raw-btn" onclick="copyRawMessage(this)" title="Copy entire message">${ICONS.copy} Copy All</button>
             </div>
             <div class="raw-view">${lines.map(line => {
             const segName = line.substring(0, 3);
@@ -1101,11 +1249,11 @@ function togglePause() {
     paused = !paused;
     const btn = document.getElementById('btn-pause');
     if (paused) {
-        btn.textContent = '▶ Live';
+        btn.innerHTML = `${ICONS.play}<span class="btn-label">Live</span>`;
         btn.style.borderColor = 'var(--warning)';
         btn.style.color = 'var(--warning)';
     } else {
-        btn.textContent = '⏸ Pause';
+        btn.innerHTML = `${ICONS.pause}<span class="btn-label">Pause</span>`;
         btn.style.borderColor = '';
         btn.style.color = '';
         flushAndRender();
@@ -1137,12 +1285,17 @@ async function clearMessages() {
         if (!resp.ok) throw new Error(`Server error: ${resp.status}`);
         messages = [];
         pendingMessages = [];
+        rateWindow.length = 0;
+        rateBuckets.fill(0);
+        lastMessageReceivedAt = null;
         selectedId = null;
         selectedMessage = null;
         renderMessageList();
+        renderSourceLegend();
+        renderHealthPills();
+        renderThroughputBand();
+        resetDetailHeader();
         document.getElementById('detail-content').innerHTML = '<div class="empty-state"><p>No message selected</p></div>';
-        document.getElementById('detail-title').textContent = 'Select a message';
-        document.getElementById('detail-meta').textContent = '';
     } catch (e) {
         console.error('Failed to clear messages:', e);
     }
@@ -1187,11 +1340,11 @@ function toggleBookmarkFilter() {
     showBookmarkedOnly = !showBookmarkedOnly;
     const btn = document.getElementById('btn-bookmarks');
     if (showBookmarkedOnly) {
-        btn.textContent = '★ Bookmarks';
+        btn.innerHTML = `${ICONS.starFilled}<span class="btn-label">Bookmarks</span>`;
         btn.style.borderColor = 'var(--warning)';
         btn.style.color = 'var(--warning)';
     } else {
-        btn.textContent = '☆ Bookmarks';
+        btn.innerHTML = `${ICONS.starOutline}<span class="btn-label">Bookmarks</span>`;
         btn.style.borderColor = '';
         btn.style.color = '';
     }
@@ -1203,15 +1356,15 @@ function syncValidationFilterUI() {
     const btn = document.getElementById('btn-validation');
     if (!btn) return;
     if (validationFilter === 0) {
-        btn.textContent = '⚠ All';
+        btn.innerHTML = `${ICONS.warning}<span class="btn-label">All</span>`;
         btn.style.borderColor = '';
         btn.style.color = '';
     } else if (validationFilter === 1) {
-        btn.textContent = '⚠ Warn';
+        btn.innerHTML = `${ICONS.warning}<span class="btn-label">Warn</span>`;
         btn.style.borderColor = 'var(--warning)';
         btn.style.color = 'var(--warning)';
     } else if (validationFilter === 2) {
-        btn.textContent = '⚠ Error';
+        btn.innerHTML = `${ICONS.warning}<span class="btn-label">Error</span>`;
         btn.style.borderColor = 'var(--error)';
         btn.style.color = 'var(--error)';
     }
@@ -1395,14 +1548,14 @@ document.addEventListener('click', (e) => {
 
     if (paused) {
         const btn = document.getElementById('btn-pause');
-        btn.textContent = '▶ Live';
+        btn.innerHTML = `${ICONS.play}<span class="btn-label">Live</span>`;
         btn.style.borderColor = 'var(--warning)';
         btn.style.color = 'var(--warning)';
     }
 
     if (showBookmarkedOnly) {
         const btn = document.getElementById('btn-bookmarks');
-        btn.textContent = '★ Bookmarks';
+        btn.innerHTML = `${ICONS.starFilled}<span class="btn-label">Bookmarks</span>`;
         btn.style.borderColor = 'var(--warning)';
         btn.style.color = 'var(--warning)';
     }
