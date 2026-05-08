@@ -12,7 +12,26 @@ const ICONS = {
     copy: '<svg class="i-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>',
     chevronRight: '<svg class="i-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>',
     chevronDown: '<svg class="i-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>',
+    xMark: '<svg class="i-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>',
 };
+
+// Empty-state markup for the detail panel when no message is selected.
+const DETAIL_EMPTY_HTML = `
+<div class="empty-state">
+    <div class="empty-card">
+        <div class="glyph">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+                <polyline points="14 2 14 8 20 8"/>
+                <line x1="16" y1="13" x2="8" y2="13"/>
+                <line x1="16" y1="17" x2="8" y2="17"/>
+                <polyline points="10 9 9 9 8 9"/>
+            </svg>
+        </div>
+        <h3>No message selected</h3>
+        <p>Pick a message from the list to inspect its segments, raw payload, ACK, or JSON.</p>
+    </div>
+</div>`;
 
 // --- State ---
 let messages = [];
@@ -272,7 +291,7 @@ function connectWs() {
             renderHealthPills();
             renderThroughputBand();
             resetDetailHeader();
-            document.getElementById('detail-content').innerHTML = '<div class="empty-state"><p>No message selected</p></div>';
+            document.getElementById('detail-content').innerHTML = DETAIL_EMPTY_HTML;
         }
     };
 }
@@ -389,11 +408,13 @@ async function pollStats() {
             }
         }
 
-        // listening pill port + empty-state hint
+        // listening pill port + empty-state hint + CLI snippet port
         if (stats.mllp_port) {
             document.getElementById('pill-port').textContent = stats.mllp_port;
             const emptyPort = document.getElementById('mllp-port');
             if (emptyPort) emptyPort.textContent = stats.mllp_port;
+            const cliPort = document.getElementById('cli-port');
+            if (cliPort) cliPort.textContent = stats.mllp_port;
         }
     } catch (e) { }
 }
@@ -861,7 +882,7 @@ function renderDetail() {
     const pinLabel = isPinned ? 'Pinned' : 'Pin diff';
 
     const tagChipsHtml = (msg.tags || []).map(t =>
-        `<span class="msg-tag">${esc(t)} <span class="msg-tag-remove" onclick="removeTag('${msg.id}', '${escAttr(escJS(t))}')">×</span></span>`
+        `<span class="msg-tag">${esc(t)}<span class="msg-tag-remove" onclick="removeTag('${msg.id}', '${escAttr(escJS(t))}')" title="Remove tag" aria-label="Remove tag">${ICONS.xMark}</span></span>`
     ).join('');
     const tagAddHtml = `
         <div class="msg-tag-add">
@@ -1020,6 +1041,7 @@ function renderTab() {
                 <summary>
                     <span class="summary-icon">${ICONS.warning}</span>
                     <span class="summary-text"><strong>${headline}</strong> · ${summaryLine}</span>
+                    <span class="summary-chevron">${ICONS.chevronRight}</span>
                 </summary>
                 <ul class="validation-warnings-list">
                     ${warnings.map(w => {
@@ -1295,7 +1317,7 @@ async function clearMessages() {
         renderHealthPills();
         renderThroughputBand();
         resetDetailHeader();
-        document.getElementById('detail-content').innerHTML = '<div class="empty-state"><p>No message selected</p></div>';
+        document.getElementById('detail-content').innerHTML = DETAIL_EMPTY_HTML;
     } catch (e) {
         console.error('Failed to clear messages:', e);
     }
@@ -1433,6 +1455,13 @@ function copySegment(segIdx, el) {
 function copyRawMessage(el) {
     if (!selectedMessage) return;
     copyToClipboard(selectedMessage.raw, el);
+}
+
+function copyCliSnippet(btn) {
+    const snippetEl = document.getElementById('cli-snippet');
+    if (!snippetEl) return;
+    const text = snippetEl.textContent.replace(/\s+/g, ' ').trim();
+    copyToClipboard(text, btn);
 }
 
 // --- Panel Splitter ---
@@ -1579,3 +1608,21 @@ renderHealthPills();
 renderSourceLegend();
 renderThroughputBand();
 pollStats();
+
+// Search shortcut: Cmd/Ctrl+K focuses the filter input. The hint chip
+// inside the input adapts to the platform (⌘K on Mac, ^K elsewhere).
+(function setupSearchShortcut() {
+    const isMac = /Mac|iPod|iPhone|iPad/.test(navigator.platform || '');
+    const tip = document.getElementById('search-tip');
+    if (tip) tip.textContent = isMac ? '⌘K' : '^K';
+
+    document.addEventListener('keydown', (e) => {
+        if ((e.metaKey || e.ctrlKey) && !e.shiftKey && !e.altKey && e.key.toLowerCase() === 'k') {
+            const input = document.getElementById('search-input');
+            if (!input) return;
+            e.preventDefault();
+            input.focus();
+            input.select();
+        }
+    });
+})();

@@ -33,6 +33,15 @@ and this project follows [Semantic Versioning](https://semver.org/lang/en/).
 - **Typical segments checklist** — wrapped in a card (`.seg-checklist`) and each pill carries an explicit symbol: `✓` present, `⚠` flagged, `✕` required-but-missing, blank for absent-and-optional (#98)
 - **Validation summary banner** — replaced the bulleted `.validation-warnings-panel` with a one-line summary banner at the top of the segments view: `⚠ 2 validation warnings · required field missing in PD1-3, expected segment not sent: OBX`. The full bulleted list is preserved as a collapsible `<details>` body (#98)
 - **Field rows show description inline** — the field-dictionary description is no longer hover-only. It renders as a `.desc-text` sub-line under the field index (e.g. `PID-5 / Patient name`). Rows that triggered a `MISSING_FIELD` warning are tinted amber and gain a `⚠ required` suffix on the value cell. The hover-tooltip CSS for `.field-idx.has-tooltip` is removed in favor of the inline line (#98)
+- **Empty-state CLI hint** — the message-list empty state is now an `.empty-card` with a tray icon, the live listening port, "No messages received yet", and a copy-able `mllp-send` snippet whose port is wired to `stats.mllp_port` so it tracks the actual listener (#101)
+- **Detail-panel empty state** — the cold "Click a message to view details" placeholder becomes a matching `.empty-card` with a small document icon and a one-line hint about what each tab shows (#101)
+- **Search shortcut** — `Cmd+K` (or `Ctrl+K` on non-Mac) focuses the filter input. The hint chip (`⌘K` / `^K`) sits inside the search field and fades out on focus or when the user is already typing (#101)
+- **Search bar polish** — the filter input gains a leading magnifier icon and the placeholder now hints at `has:errors` operators (#101)
+- **Tag-chip remove control** — replaced the `×` text glyph with the same lucide-style x SVG used elsewhere; the chip itself is now a pill-shaped `.msg-tag` with an inline-grid hover halo around the remove control (#101)
+- **Validation summary chevron** — the trailing `▸` text glyph is replaced with the chevron SVG; CSS rotates it 90° when the `<details>` is open (#101)
+- **`tr.warn` "required" suffix** — dropped the `⚠` glyph; the suffix now renders as a small uppercase `required` chip in `--warning` color (#101)
+- **Diff tab affordance** — the right-aligned Diff tab gains a chevron icon and reads `Diff vs pinned` so it visually announces "leads to the comparison view" (#101)
+- **Source-chip count badge + tab font weight** — source-chip count badges get a tinted background so they pop against the chip body; active tabs render at `font-weight: 600` for a clearer reading rhythm (#101)
 
 ---
 
@@ -75,6 +84,7 @@ and this project follows [Semantic Versioning](https://semver.org/lang/en/).
 | [`e658905`](https://github.com/Pappet/harux/commit/e658905e9faf919031eb267d8179c720d857e468) | `feat(ui):` two-line message rows with time grouping + ACK chips (#94) |
 | [`3e49222`](https://github.com/Pappet/harux/commit/3e49222e15524144e94b7c780cf1cb03e2a0b21a) | `feat(ui):` always-visible source rail + 60-bar throughput band (#96) |
 | [`c353274`](https://github.com/Pappet/harux/commit/c35327476243aecfd9c5763052ef890b6216fd38) | `feat(ui):` detail panel restructure — header / tabs / validation / fields (#98) |
+| [`eeb4fd2`](https://github.com/Pappet/harux/commit/eeb4fd208c2e8f15b462a65b66c2fef21d5cc7f8) | `feat(ui):` empty-state CLI hint + Phase 6 polish pass (#101) |
 | [`1993bcb`](https://github.com/Pappet/harux/commit/1993bcb07709460bce5d468c046be6e2f1db533c) | `feat(a11y):` keyboard navigation for message list rows |
 | [`f5c650a`](https://github.com/Pappet/harux/commit/f5c650aa025132a5a6e660092957fd3ad69099ec) | `feat(ui):` typography + color foundation for v0.5.0 redesign (#86) |
 
