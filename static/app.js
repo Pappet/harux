@@ -389,6 +389,16 @@ function renderRateSpark() {
     return `<polyline points="${points}" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round" />`;
 }
 
+function tickRowRelativeTimes() {
+    const now = Date.now();
+    document.querySelectorAll('.message-row').forEach(row => {
+        const ts = row.dataset.received;
+        if (!ts) return;
+        const timeEl = row.querySelector('.msg-row2 .time');
+        if (timeEl) timeEl.textContent = rowTimeLabel({ received_at: ts }, now);
+    });
+}
+
 function renderHealthPills() {
     pruneRateWindow();
 
@@ -416,6 +426,154 @@ function renderHealthPills() {
 }
 
 // --- Rendering ---
+const MONTH_SHORT = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
+function bucketKey(msg, now) {
+    const t = new Date(msg.received_at).getTime();
+    const age = now - t;
+    if (age < 30_000) return 'live';
+    if (age < 300_000) return 'recent';
+
+    const msgDate = new Date(t);
+    const today = new Date(now);
+    if (msgDate.toDateString() === today.toDateString()) return 'today';
+
+    const yesterday = new Date(now - 86_400_000);
+    if (msgDate.toDateString() === yesterday.toDateString()) return 'yesterday';
+
+    const y = msgDate.getFullYear();
+    const m = String(msgDate.getMonth() + 1).padStart(2, '0');
+    const d = String(msgDate.getDate()).padStart(2, '0');
+    return `${y}-${m}-${d}`;
+}
+
+function bucketLabel(key) {
+    if (key === 'live') return 'Live';
+    if (key === 'recent') return 'Last few minutes';
+    if (key === 'today') return 'Earlier today';
+    if (key === 'yesterday') return 'Yesterday';
+    const [y, m, d] = key.split('-').map(Number);
+    return `${MONTH_SHORT[m - 1]} ${d}`;
+}
+
+function rowTimeLabel(msg, now) {
+    const t = new Date(msg.received_at).getTime();
+    const age = now - t;
+    if (age < 60_000) return `${Math.max(0, Math.floor(age / 1000))}s ago`;
+    if (age < 300_000) return `${Math.floor(age / 60_000)}m ago`;
+
+    const msgDate = new Date(t);
+    const hh = String(msgDate.getHours()).padStart(2, '0');
+    const mn = String(msgDate.getMinutes()).padStart(2, '0');
+    const ss = String(msgDate.getSeconds()).padStart(2, '0');
+
+    const today = new Date(now);
+    if (msgDate.toDateString() === today.toDateString()) {
+        return `${hh}:${mn}:${ss}`;
+    }
+    const yesterday = new Date(now - 86_400_000);
+    if (msgDate.toDateString() === yesterday.toDateString()) {
+        return `Yest ${hh}:${mn}`;
+    }
+    return `${MONTH_SHORT[msgDate.getMonth()]} ${msgDate.getDate()} ${hh}:${mn}`;
+}
+
+function ackChipClass(code) {
+    if (code === 'AA') return 'msg-ack aa';
+    if (code === 'AE') return 'msg-ack ae';
+    if (code === 'AR') return 'msg-ack ar';
+    return 'msg-ack none';
+}
+
+function buildMessageRow(msg) {
+    const row = document.createElement('div');
+    let rowClass = 'message-row';
+    if (msg.id === selectedId) rowClass += ' selected';
+    if (msg.bookmarked) rowClass += ' bookmarked';
+
+    const srcKey = colorByPort ? msg.source_addr : (msg.source_addr ? msg.source_addr.split(':')[0] : '');
+    if (highlightedSource && srcKey !== highlightedSource) {
+        rowClass += ' dimmed';
+    }
+
+    row.className = rowClass;
+    row.dataset.id = msg.id;
+    row.tabIndex = 0;
+    row.setAttribute('role', 'button');
+    row.setAttribute('aria-label', `Message from ${msg.sending_facility || 'unknown'}, type ${msg.message_type || 'unknown'}, received ${msg.received_at}`);
+    row.onclick = () => selectMessage(msg.id);
+    row.onkeydown = (e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault();
+            selectMessage(msg.id);
+        }
+    };
+
+    const srcColor = getSourceColor(msg.source_addr);
+
+    const typeHtml = msg.parse_error
+        ? `<span class="msg-type parse-error" title="${escAttr(msg.parse_error)}">⚠ PARSE ERROR</span>`
+        : `<span class="msg-type">${esc(msg.message_type || '—')}</span>`;
+
+    const warnCount = msg.validation_warning_count || 0;
+    const warnHtml = warnCount > 0
+        ? `<span class="msg-warning ${msg.has_segment_errors ? 'err' : 'warn'}" title="${warnCount} validation warning${warnCount > 1 ? 's' : ''}">⚠ ${warnCount}</span>`
+        : '';
+
+    const tagsArr = msg.tags || [];
+    let tagsHtml = '';
+    if (tagsArr.length > 0) {
+        const visible = tagsArr.slice(0, 2).map(t => `<span class="msg-tag-small">${esc(t)}</span>`).join('');
+        const overflow = tagsArr.length > 2
+            ? `<span class="msg-tag-small">+${tagsArr.length - 2}</span>`
+            : '';
+        tagsHtml = `<span class="msg-tags-list" style="margin-top:0">${visible}${overflow}</span>`;
+    }
+
+    const ackCode = (msg.ack_code || '').toUpperCase();
+    const ackHtml = ackCode
+        ? `<span class="${ackChipClass(ackCode)}">${esc(ackCode)}</span>`
+        : `<span class="msg-ack none">—</span>`;
+
+    const now = Date.now();
+    const timeLabel = rowTimeLabel(msg, now);
+    const segCount = msg.segment_count != null ? `${msg.segment_count} segs` : '—';
+    const facility = esc(msg.sending_facility || 'unknown');
+    const sourceAddr = esc(msg.source_addr || '');
+    const patient = esc(msg.patient_name || msg.patient_id || '—');
+
+    const bookmarkClass = msg.bookmarked ? 'msg-bookmark active' : 'msg-bookmark';
+    const bookmarkIcon = msg.bookmarked ? '★' : '☆';
+    const bookmarkLabel = msg.bookmarked ? 'Remove bookmark' : 'Add bookmark';
+
+    row.dataset.received = msg.received_at || '';
+
+    row.innerHTML = `
+        <div class="msg-source-bar" style="background:${srcColor}" title="${escAttr(msg.source_addr || '')}"></div>
+        <div class="msg-body">
+            <div class="msg-row1">
+                ${typeHtml}
+                <span class="msg-patient">${patient}</span>
+                ${warnHtml}
+                ${tagsHtml}
+                ${ackHtml}
+            </div>
+            <div class="msg-row2">
+                <span class="facility">${facility}</span>
+                <span class="sep">·</span>
+                <span class="src">${sourceAddr}</span>
+                <span class="sep">·</span>
+                <span class="segs">${segCount}</span>
+                <span class="time">${esc(timeLabel)}</span>
+            </div>
+        </div>
+        <div class="msg-actions">
+            <button class="${bookmarkClass}" aria-label="${bookmarkLabel}" onclick="toggleBookmark('${msg.id}', event)" title="Bookmark">${bookmarkIcon}</button>
+        </div>
+    `;
+    return row;
+}
+
 function renderMessageList() {
     const list = document.getElementById('message-list');
     const empty = document.getElementById('empty-state');
@@ -433,98 +591,29 @@ function renderMessageList() {
 
     if (filtered.length === 0) {
         empty.style.display = 'flex';
-        list.querySelectorAll('.message-row').forEach(r => r.remove());
+        list.querySelectorAll('.message-row, .group-header').forEach(r => r.remove());
         return;
     }
 
     empty.style.display = 'none';
 
     const fragment = document.createDocumentFragment();
+    const now = Date.now();
+    let currentBucket = null;
+
     for (const msg of filtered) {
-        const row = document.createElement('div');
-
-        let rowClass = 'message-row';
-        if (msg.id === selectedId) rowClass += ' selected';
-
-        const srcKey = colorByPort ? msg.source_addr : (msg.source_addr ? msg.source_addr.split(':')[0] : '');
-        if (highlightedSource && srcKey !== highlightedSource) {
-            rowClass += ' dimmed';
+        const bucket = bucketKey(msg, now);
+        if (bucket !== currentBucket) {
+            currentBucket = bucket;
+            const header = document.createElement('div');
+            header.className = 'group-header';
+            header.textContent = bucketLabel(bucket);
+            fragment.appendChild(header);
         }
-
-        row.className = rowClass;
-        row.dataset.id = msg.id;
-        row.tabIndex = 0;
-        row.setAttribute('role', 'button');
-        row.setAttribute('aria-label', `Message from ${msg.sending_facility || 'unknown'}, type ${msg.message_type || 'unknown'}, received ${msg.received_at}`);
-        row.onclick = () => selectMessage(msg.id);
-        row.onkeydown = (e) => {
-            if (e.key === 'Enter' || e.key === ' ') {
-                e.preventDefault();
-                selectMessage(msg.id);
-            }
-        };
-
-        const time = new Date(msg.received_at);
-        const yyyy = time.getFullYear();
-        const mm = String(time.getMonth() + 1).padStart(2, '0');
-        const dd = String(time.getDate()).padStart(2, '0');
-        const hh = String(time.getHours()).padStart(2, '0');
-        const min = String(time.getMinutes()).padStart(2, '0');
-        const ss = String(time.getSeconds()).padStart(2, '0');
-        const timeStr = `${yyyy}-${mm}-${dd} ${hh}:${min}:${ss}`;
-        // Source color dot
-        const srcColor = getSourceColor(msg.source_addr);
-        const dotHtml = `<span class="source-dot" style="background:${srcColor};box-shadow:0 0 4px ${srcColor}" title="${escAttr(msg.source_addr)}"></span>`;
-
-        // Validation badge: red if missing segments (errors), yellow for field warnings only
-        const warnCount = msg.validation_warning_count || 0;
-        const warnCls = msg.has_segment_errors ? 'validation-badge error' : 'validation-badge';
-        const warnBadge = warnCount > 0
-            ? ` <span class="${warnCls}" title="${warnCount} validation warning${warnCount > 1 ? 's' : ''}">⚠ ${warnCount}</span>`
-            : '';
-        const typeHtml = msg.parse_error
-            ? `<span class="msg-type" style="color:var(--error)" title="${escAttr(msg.parse_error)}">⚠ PARSE ERROR</span>`
-            : `<span class="msg-type">${esc(msg.message_type)}${warnBadge}</span>`;
-
-        const tagsHtml = (msg.tags && msg.tags.length > 0)
-            ? `<div class="msg-tags-list">` + msg.tags.map(t => `<span class="msg-tag-small">${esc(t)}</span>`).join('') + `</div>`
-            : '';
-
-        let ackColor = '';
-        if (msg.ack_code === 'AA') ackColor = 'color: var(--success);';
-        else if (msg.ack_code === 'AE' || msg.ack_code === 'AR') ackColor = 'color: var(--error);';
-
-        const ackHtml = msg.ack_code
-            ? `<span class="msg-ack" style="${ackColor}">${esc(msg.ack_code)}</span>`
-            : `<span class="msg-ack">—</span>`;
-
-        const bookmarkClass = msg.bookmarked ? 'msg-bookmark active' : 'msg-bookmark';
-        const bookmarkIcon = msg.bookmarked ? '★' : '☆';
-        const bookmarkLabel = msg.bookmarked ? 'Remove bookmark' : 'Add bookmark';
-
-        const isPinned = diffPinnedMessage && diffPinnedMessage.id === msg.id;
-        const pinClass = isPinned ? 'msg-pin active' : 'msg-pin';
-        const pinIcon = isPinned ? '◉' : '◎';
-        const pinTitle = isPinned ? 'Unpin (diff reference)' : 'Pin as diff reference';
-
-        row.innerHTML = `
-            ${dotHtml}
-            <div style="display:flex; flex-direction:column; gap:2px; overflow:hidden;">
-                ${typeHtml}
-                ${tagsHtml}
-            </div>
-            <span class="msg-source">${esc(msg.sending_facility)}</span>
-            <span class="msg-patient">${esc(msg.patient_name || msg.patient_id || '—')}</span>
-            <span class="msg-time">${timeStr}</span>
-            <span class="msg-segs">${msg.segment_count}</span>
-            ${ackHtml}
-            <button class="${bookmarkClass}" aria-label="${bookmarkLabel}" onclick="toggleBookmark('${msg.id}', event)" title="Bookmark">${bookmarkIcon}</button>
-            <button class="${pinClass}" aria-label="${pinTitle}" onclick="toggleDiffPin('${msg.id}', event)" title="${pinTitle}">${pinIcon}</button>
-        `;
-        fragment.appendChild(row);
+        fragment.appendChild(buildMessageRow(msg));
     }
 
-    list.querySelectorAll('.message-row').forEach(r => r.remove());
+    list.querySelectorAll('.message-row, .group-header').forEach(r => r.remove());
     list.appendChild(fragment);
 
     if (autoscroll) {
@@ -1238,6 +1327,9 @@ autoscroll = !autoscroll;
 toggleAutoscroll();
 connectWs();
 setInterval(pollStats, 3000);
-setInterval(renderHealthPills, 1000);
+setInterval(() => {
+    renderHealthPills();
+    tickRowRelativeTimes();
+}, 1000);
 renderHealthPills();
 pollStats();
