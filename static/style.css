@@ -32,6 +32,12 @@ body {
     overflow: hidden;
 }
 
+*:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+    border-radius: 2px;
+}
+
 /* Header */
 header {
     display: flex;
@@ -803,17 +809,31 @@ body.resizing * {
     height: 20px;
 }
 
-/* Bookmark star in message row */
-.msg-bookmark {
-    cursor: pointer;
-    font-size: 14px;
+/* Bookmark / pin buttons in message row — flat icon buttons */
+.msg-bookmark,
+.msg-pin {
+    background: transparent;
+    border: none;
+    padding: 0;
+    margin: 0;
     color: var(--text-muted);
+    cursor: pointer;
     transition: color 0.15s;
     text-align: center;
     user-select: none;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    line-height: 1;
+    font-family: inherit;
+}
+
+.msg-bookmark {
+    font-size: 14px;
 }
 
 .msg-bookmark:hover {
+    background: transparent;
     color: var(--warning);
 }
 
@@ -822,15 +842,11 @@ body.resizing * {
 }
 
 .msg-pin {
-    cursor: pointer;
     font-size: 13px;
-    color: var(--text-muted);
-    transition: color 0.15s;
-    text-align: center;
-    user-select: none;
 }
 
 .msg-pin:hover {
+    background: transparent;
     color: var(--accent);
 }
 
