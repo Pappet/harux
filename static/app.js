@@ -791,11 +791,7 @@ function buildDetailMeta(msg) {
         items.push(`<span class="item"><span class="k">MRN</span><span class="v">${esc(msg.patient_id)}</span></span>`);
     }
     if (msg.message_control_id) {
-        items.push(`<span class="item">
-            <span class="k">control</span>
-            <span class="v">${esc(msg.message_control_id)}</span>
-            <span class="copy" title="Copy control ID" onclick="copyToClipboard('${escAttr(escJS(msg.message_control_id))}', this)">📋</span>
-        </span>`);
+        items.push(`<span class="item"><span class="k">control</span><span class="v">${esc(msg.message_control_id)}</span></span>`);
     }
     if (msg.version) {
         items.push(`<span class="item"><span class="k">v</span><span class="v">${esc(msg.version)}</span></span>`);
