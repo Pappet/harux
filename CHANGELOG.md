@@ -11,6 +11,7 @@ and this project follows [Semantic Versioning](https://semver.org/lang/en/).
 
 ### Added
 - **Keyboard accessibility for custom elements** — added `tabindex`, `role="button"`, and Enter/Space keyboard activation for segment headers, copy buttons, field value cells, and tagging elements.
+- **Keyboard accessibility for source chips** — added `tabindex="0"`, `role="button"`, and Enter/Space keyboard activation for source chips in the message list header, allowing filter toggling via keyboard navigation.
 
 ### Commit History (chronological)
 
@@ -18,6 +19,7 @@ and this project follows [Semantic Versioning](https://semver.org/lang/en/).
 
 | Commit | Description |
 |--------|-------------|
+| [`4f150f7`](https://github.com/Pappet/harux/commit/4f150f7) | `feat(a11y):` add keyboard accessibility to source chips |
 | [`51ca703`](https://github.com/Pappet/harux/commit/51ca703) | `feat(a11y):` add keyboard accessibility to custom UI elements |
 
 ---

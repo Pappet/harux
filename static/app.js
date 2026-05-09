@@ -167,7 +167,7 @@ function renderSourceLegend() {
         const isDimmed = highlightedSource && highlightedSource !== label;
         const classes = `source-chip${isActive ? ' active' : ''}${isDimmed ? ' dimmed' : ''}`;
         const num = counts.get(label) || 0;
-        return `<span class="${classes}" onclick="toggleHighlightSource('${escAttr(escJS(label))}')">
+        return `<span class="${classes}" tabindex="0" role="button" aria-label="Filter by source ${escAttr(label)}" onclick="toggleHighlightSource('${escAttr(escJS(label))}')" onkeydown="if(event.key === 'Enter' || event.key === ' ') { event.preventDefault(); toggleHighlightSource('${escAttr(escJS(label))}'); }">
             <span class="dot" style="background:${color};color:${color}"></span>
             ${esc(label)}
             <span class="num">${num}</span>

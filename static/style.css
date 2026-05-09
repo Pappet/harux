@@ -752,7 +752,7 @@ body.resizing * {
     transition: background 0.12s, color 0.12s, border-color 0.12s, opacity 0.12s;
 }
 
-.source-chip:hover {
+.source-chip:hover, .source-chip:focus-visible {
     background: var(--bg-hover);
     color: var(--text-primary);
 }
