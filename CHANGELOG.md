@@ -9,6 +9,17 @@ and this project follows [Semantic Versioning](https://semver.org/lang/en/).
 
 ## [Unreleased]
 
+### Added
+- **Keyboard accessibility for custom elements** — added `tabindex`, `role="button"`, and Enter/Space keyboard activation for segment headers, copy buttons, field value cells, and tagging elements.
+
+### Commit History (chronological)
+
+#### 2026-05-09
+
+| Commit | Description |
+|--------|-------------|
+| [`51ca703`](https://github.com/Pappet/harux/commit/51ca703) | `feat(a11y):` add keyboard accessibility to custom UI elements |
+
 ---
 
 ## [0.5.0] – 2026-05-08 – UI Redesign
