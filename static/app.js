@@ -913,12 +913,12 @@ function renderDetail() {
     const pinLabel = isPinned ? 'Pinned' : 'Pin diff';
 
     const tagChipsHtml = (msg.tags || []).map(t =>
-        `<span class="msg-tag">${esc(t)}<span class="msg-tag-remove" onclick="removeTag('${msg.id}', '${escAttr(escJS(t))}')" title="Remove tag" aria-label="Remove tag">${ICONS.xMark}</span></span>`
+        `<span class="msg-tag">${esc(t)}<span class="msg-tag-remove" role="button" tabindex="0" onclick="removeTag('${msg.id}', '${escAttr(escJS(t))}')" onkeydown="if(event.key === 'Enter' || event.key === ' ') { event.preventDefault(); removeTag('${msg.id}', '${escAttr(escJS(t))}'); }" title="Remove tag" aria-label="Remove tag">${ICONS.xMark}</span></span>`
     ).join('');
     const tagAddHtml = `
         <div class="msg-tag-add">
-            <input type="text" id="add-tag-input" placeholder="Add tag" onkeypress="if(event.key === 'Enter') addTag('${msg.id}', this.value)">
-            <button onclick="addTag('${msg.id}', document.getElementById('add-tag-input').value)">+</button>
+            <input type="text" id="add-tag-input" placeholder="Add tag" aria-label="Add tag" onkeypress="if(event.key === 'Enter') addTag('${msg.id}', this.value)">
+            <button onclick="addTag('${msg.id}', document.getElementById('add-tag-input').value)" aria-label="Submit tag">+</button>
         </div>
     `;
 
@@ -1102,11 +1102,11 @@ function renderTab() {
             const warnFields = missingFieldByseg.get(seg.name);
             return `
             <div class="segment-block">
-                <div class="segment-name ${seg.description ? 'has-seg-tooltip' : ''}" data-seg-key="${key}"${seg.description ? ` data-desc="${escAttr(seg.name + ': ' + seg.description)}"` : ''}>
+                <div class="segment-name ${seg.description ? 'has-seg-tooltip' : ''}" data-seg-key="${key}"${seg.description ? ` data-desc="${escAttr(seg.name + ': ' + seg.description)}"` : ''} role="button" tabindex="0" aria-expanded="${!collapsed}">
                     <span class="collapse-icon">${icon}</span>
                     ${esc(seg.name)}
                     <span class="field-count">(${seg.fields.length})</span>
-                    <span class="copy-btn" onclick="event.stopPropagation(); copySegment(${segIdx}, this)" title="Copy segment">${ICONS.copy}</span>
+                    <span class="copy-btn" onclick="event.stopPropagation(); copySegment(${segIdx}, this)" title="Copy segment" role="button" tabindex="0" aria-label="Copy segment">${ICONS.copy}</span>
                 </div>
                 ${collapsed ? '' : `<table class="field-table">
                     <tbody>
@@ -1116,7 +1116,7 @@ function renderTab() {
                 return `
                         <tr${trCls}>
                             <td class="field-idx">${esc(seg.name)}-${f.index}${descLine}</td>
-                            <td class="field-val">${esc(f.value) || '<span class="field-empty">empty</span>'}</td>
+                            <td class="field-val" ${f.value ? 'role="button" tabindex="0" aria-label="Copy field value"' : ''}>${esc(f.value) || '<span class="field-empty">empty</span>'}</td>
                             <td class="field-components">${f.components.length > 1
                         ? f.components.map((c, i) => `<span title="${escAttr(seg.name + '-' + f.index + '.' + (i + 1))}">${esc(c)}</span>`).join(' <span style="color:var(--text-muted)">^</span> ')
                         : ''
@@ -1581,13 +1581,35 @@ document.getElementById('search-input').addEventListener('input', (e) => {
     }, 300);
 });
 
-document.addEventListener('click', (e) => {
+function handleInteraction(e) {
+    const copyBtn = e.target.closest('.copy-btn');
+    if (e.type === 'keydown' && copyBtn) {
+        e.preventDefault();
+        copyBtn.click();
+        return;
+    }
+
     const segEl = e.target.closest('.segment-name');
-    if (segEl) toggleSegment(segEl.dataset.segKey);
+    if (segEl && !copyBtn) toggleSegment(segEl.dataset.segKey);
 
     const cell = e.target.closest('.field-val');
     if (cell && !cell.querySelector('.field-empty')) {
         copyToClipboard(cell.textContent.trim(), cell);
+    }
+}
+
+document.addEventListener('click', handleInteraction);
+document.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' || e.key === ' ') {
+        const activeEl = document.activeElement;
+        if (activeEl && (activeEl.classList.contains('segment-name') || activeEl.classList.contains('field-val') || activeEl.classList.contains('copy-btn'))) {
+            e.preventDefault();
+            handleInteraction({
+                target: activeEl,
+                type: 'keydown',
+                preventDefault: () => e.preventDefault()
+            });
+        }
     }
 });
 
