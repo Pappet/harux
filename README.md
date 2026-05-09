@@ -27,18 +27,19 @@ Designed as a drop-in replacement for HL7 Inspector: runs as a central service, 
 ## Features
 
 - **MLLP Server** — async TCP listener with correct `0x0B`/`0x1C 0x0D` framing, auto ACK/NACK
-- **Real-time Web UI** — browser SPA with WebSocket push, no page reload, no framework
+- **Real-time Web UI** — browser SPA with WebSocket push, modern typography, two-line message layout, and time-bucket group headers
+- **Accessibility** — full keyboard navigation (`Tab` focus) and Enter/Space activation for screen-reader and keyboard-only workflows
 - **Deep HL7 Parser** — dynamic delimiter detection, full segment/field/component decomposition
 - **Five Message Views** — Parsed segments, Raw HL7, sent ACK/NACK, JSON, and Segment Diff
 - **HL7 Dictionary Tooltips** — hover any field or segment header for its official HL7 v2.5.1 description; no internet required
-- **Message Type Detection** — human-readable type description and "Typical segments" bar per message
+- **Message Type Detection** — human-readable type description and typical segments checklist per message
 - **Validation Engine** — warnings for missing required fields/segments (amber) and invalid field data types (blue); per message type; non-blocking, all messages are stored regardless
 - **Validation Filter** — one-click filter to show only messages with warnings or errors; also supports `has:warnings` / `has:errors` search prefixes
 - **Segment Diff** — pin any message as a reference and compare it field-by-field; optional toggle to hide always-changing dynamic fields (MSH-7, MSH-10)
-- **Search & Filter** — by message type, patient name, facility, message control ID, source IP
+- **Search & Filter** — global shortcut `Cmd+K` to search by message type, patient name, facility, message control ID, source IP
 - **Bookmark & Tag** — pin important messages (eviction-protected), add custom text tags
 - **Session-based Views** — each developer sees their own filters, selection, and scroll position
-- **Color-coded Sources** — messages visually distinguishable by sender system/IP
+- **Source Rail** — always-visible rail of color-coded source chips to instantly visually distinguish and filter by sender system/IP
 - **Smart Store** — in-memory with configurable capacity and dual eviction (count + size)
 - **JSON Export** — export full message data with one click
 - **Resizable Panels** — drag splitter between message list and detail view

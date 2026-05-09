@@ -7,7 +7,7 @@ Harux is a high-performance MLLP server with a real-time web UI for inspecting H
 ## Project Status
 
 - **Language:** Rust
-- **Latest Release:** v0.3.0 — Milestones 1, 2 & 3 complete
+- **Latest Release:** v0.5.0 — UI Redesign & Accessibility complete
 - **Next Milestone:** Milestone 4 (Workflow & Testing)
 
 ---
@@ -120,18 +120,18 @@ Three files, all embedded into the binary at compile time via `rust-embed`:
 
 Key behaviors:
 - Messages are batched and rendered at most every 250ms to prevent DOM freeze at high throughput
-- Pause/Live button buffers incoming messages without displaying them
-- Search is purely client-side (filters `messages[]` array via `matchesSearch()`)
-- Parse errors are shown with `⚠ PARSE ERROR` in red in the message list
-- Validation warnings show as a coloured `⚠ N` badge in the list row and a warnings panel in the detail view; badge colours: amber = `MISSING_FIELD`, red = `MISSING_SEGMENT`, blue = `INVALID_DATATYPE`
-- Validation status filter button in the header cycles through All → Warnings Only → Errors Only; also supports `has:warnings` / `has:errors` prefixes in the search bar
-- Message type description displayed in the detail header; "Typical segments" bar shows colour-coded badges: red = missing required segment, amber = missing required field, blue = present, grey = absent; `INVALID_DATATYPE` warnings never change badge colour (the field is present, just has a type issue)
+- Pause/Live button, Validation Filter, and Bookmarks toggle live in the `.inbox-controls` row; they buffer or filter incoming messages locally.
+- Search is purely client-side via a pre-parsed query cache (bounded at 100 entries). Global shortcut is `Cmd+K`.
+- Top-bar health pills show connection count, message rate, and error/validation counts.
+- Parse errors are shown with `⚠ PARSE ERROR` in red in the message list and tracked in the health pills.
+- Message list displays a two-line layout: row 1 has type, patient, tags; row 2 has facility, source, segment count, and relative time (e.g., `1m ago`). Sticky time-bucket group headers (`Live`, `Yesterday`, etc.) separate the messages.
+- Validation warnings show as a coloured `⚠ N` badge in the list row and a one-line summary banner in the detail view with a collapsible bulleted list; badge colours: amber = `MISSING_FIELD`, red = `MISSING_SEGMENT`, blue = `INVALID_DATATYPE`
+- Message type description displayed in the detail header; "Typical segments" is a checklist card (`.seg-checklist`) with explicit symbols: `✕` (red) = missing required segment, `⚠` (amber) = missing required field, `✓` (blue) = present, blank (grey) = absent.
 - Segment headers have a CSS `::after` tooltip showing the segment description on hover
-- Fields have a CSS `::after` tooltip showing the field description on hover
-- Segment diff: `diffPinnedMessage` state stores a full message fetched via `/api/messages/{id}`; `renderDiffTab()` builds a field-level two-column table with red/green highlighting; optional `diffIgnoreDynamic` toggle hides MSH-7 and MSH-10 rows and shows a count of hidden fields in the summary
-- Message list displays a full timestamp (`YYYY-MM-DD HH:mm:ss`) for precise traceability (#55)
-- Segment diff uses a fixed table layout (`table-layout: fixed`) to ensure consistent column alignment even with varying content (#67)
-- Detail header is a flex row: left column (`detail-header-info`) has title, type description, and meta; right column (`detail-tags-container`) has Bookmark, tags, and Add tag controls
+- Fields show their dictionary description inline as a `.desc-text` sub-line
+- Segment diff: `diffPinnedMessage` state stores a full message fetched via `/api/messages/{id}`; `renderDiffTab()` builds a field-level two-column table with red/green highlighting (`table-layout: fixed`); optional `diffIgnoreDynamic` toggle hides MSH-7 and MSH-10 rows and shows a count of hidden fields in the summary
+- Detail header is a layered structure: type chip + human title on row 1, optional description on row 2, monospace metadata row (`patient · MRN · control · v · received`) on row 3, plus a tags row. Bookmark and Pin-for-diff are explicit buttons in an actions column.
+- Full keyboard accessibility: list rows, custom interactive elements, and source chips are navigable via `Tab` and actable via `Enter`/`Space`.
 
 ---
 

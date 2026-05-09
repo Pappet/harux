@@ -19,6 +19,7 @@ and this project follows [Semantic Versioning](https://semver.org/lang/en/).
 
 | Commit | Description |
 |--------|-------------|
+| [`39cf3b1`](https://github.com/Pappet/harux/commit/39cf3b1) | `docs:` update documentation to reflect v0.5.0 UI redesign |
 | [`4f150f7`](https://github.com/Pappet/harux/commit/4f150f7) | `feat(a11y):` add keyboard accessibility to source chips |
 | [`51ca703`](https://github.com/Pappet/harux/commit/51ca703) | `feat(a11y):` add keyboard accessibility to custom UI elements |
 
