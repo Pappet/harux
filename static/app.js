@@ -721,8 +721,17 @@ function getParsedQuery(query) {
 function renderMessageList() {
     const list = document.getElementById('message-list');
     const empty = document.getElementById('empty-state');
+
+    // ⚡ Bolt: Lifted search query parsing out of the filter loop.
+    // Reduces query parse operations from O(N) to O(1), significantly
+    // speeding up list rendering when searching large message buffers.
+    let parsedSearchQuery = null;
+    if (searchQuery) {
+        parsedSearchQuery = getParsedQuery(searchQuery);
+    }
+
     let filtered = searchQuery
-        ? messages.filter(m => matchesSearch(m, getParsedQuery(searchQuery)))
+        ? messages.filter(m => matchesSearch(m, parsedSearchQuery))
         : messages;
     if (showBookmarkedOnly) {
         filtered = filtered.filter(m => m.bookmarked);
