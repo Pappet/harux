@@ -14,6 +14,7 @@ and this project follows [Semantic Versioning](https://semver.org/lang/en/).
 - **Keyboard accessibility for source chips** — added `tabindex="0"`, `role="button"`, and Enter/Space keyboard activation for source chips in the message list header, allowing filter toggling via keyboard navigation.
 
 ### Changed
+- **Refactor — parser modularization** — split the monolithic `parse_message` function into composable passes (`parse_structure`, `enrich_msh`, `enrich_pid`, `inject_descriptions`, `annotate_message_type`, `validate`) making it easier to test and extend. (#122)
 - **Performance — background store eviction** — moved the store eviction scan out of the `insert` hot path and into a background Tokio task, driven by a `Notify` trigger. This eliminates `MessageStore` write-lock contention under heavy loads, ensuring concurrent readers (WebSocket, search, HTTP API) no longer stall during eviction. (#130)
 - **Performance — detail panel DOM builders** — replaced the parsed/raw/ack tab `innerHTML` mega-string concatenation (nested `msg.segments.map().join('')` × `seg.fields.map().join('')`) with real `document.createElement` builders that `replaceChildren` once. Opening a message with many segments/fields no longer pays for thousands of intermediate string allocations. Segment collapse is now a CSS class on `.segment-block` — the field table is rendered once and hidden via `.segment-block.collapsed .field-table { display: none }`, so expanding/collapsing never rebuilds the DOM. JSON tab caches the `JSON.stringify` output in a module-scoped `WeakMap` keyed on the message object (no mutation of the data model) and invalidates the entry when tags/bookmark change.
 - **Performance — store eviction in O(n)** — rewrote the eviction loop in `MessageStore::insert`. The previous code collected indices and called `VecDeque::remove(i)` per candidate, which is O(n) each — combined with the candidate loop this was O(n²) and kept the write lock held during the whole pass, blocking MLLP ingestion and UI reads. The new loop pops candidates from the front, sets bookmarked ones aside, evicts the rest, and pushes the bookmarks back. Single linear pass, no per-element shift. Added test `test_eviction_skips_scattered_bookmarks` covering scattered bookmarks among eviction candidates.
@@ -26,6 +27,7 @@ and this project follows [Semantic Versioning](https://semver.org/lang/en/).
 
 | Commit | Description |
 |--------|-------------|
+| [`fb41636`](https://github.com/Pappet/harux/commit/fb41636315214e0195ef1030ae4eb20e454ad35d) | `refactor:` split parse_message into composable passes |
 | [`8ed739b`](https://github.com/Pappet/harux/commit/8ed739bbf9ffff46c1a058043eaed547a7e2dd7b) | `perf:` move eviction to background task (#130) |
 
 #### 2026-05-14
