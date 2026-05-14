@@ -50,40 +50,52 @@ impl MessageStore {
 
         let mut inner = self.inner.write().await;
 
-        // Evict oldest 10% when either size or count limit is breached
-        // Bookmarked messages are protected from eviction
+        // Evict oldest 10% when either size or count limit is breached.
+        // Bookmarked messages are protected — they are popped off the front
+        // alongside eviction candidates and pushed back to the front in their
+        // original relative order. This runs in O(n) on the number of
+        // messages scanned (was O(n²) with `VecDeque::remove(i)` per evict).
         if inner.current_bytes >= inner.max_bytes || inner.messages.len() >= inner.capacity {
             let target_count = inner.messages.len() / 10;
-            let mut evict_indices: Vec<usize> = Vec::with_capacity(target_count);
-            for (i, m) in inner.messages.iter().enumerate() {
-                if evict_indices.len() >= target_count {
-                    break;
-                }
-                if !m.bookmarked {
-                    evict_indices.push(i);
-                }
-            }
-            if evict_indices.is_empty() {
-                warn!(
-                    "Eviction triggered but all candidate messages are bookmarked — skipping eviction"
-                );
+            if target_count == 0 {
+                // Single message over limit — nothing meaningful to evict.
             } else {
-                let freed_bytes: usize = evict_indices
-                    .iter()
-                    .map(|&i| inner.messages[i].raw.len())
-                    .sum();
-                // Remove in reverse order to keep indices valid
-                for &i in evict_indices.iter().rev() {
-                    inner.messages.remove(i);
+                let mut kept_bookmarks: Vec<Hl7Message> = Vec::new();
+                let mut freed_bytes: usize = 0;
+                let mut evicted: usize = 0;
+
+                while evicted < target_count {
+                    let m = match inner.messages.pop_front() {
+                        Some(m) => m,
+                        None => break,
+                    };
+                    if m.bookmarked {
+                        kept_bookmarks.push(m);
+                    } else {
+                        freed_bytes += m.raw.len();
+                        evicted += 1;
+                    }
                 }
-                inner.current_bytes = inner.current_bytes.saturating_sub(freed_bytes);
-                info!(
-                    "Evicted {} messages from store ({} MB freed, store now {} messages / {} MB)",
-                    evict_indices.len(),
-                    freed_bytes / 1024 / 1024,
-                    inner.messages.len(),
-                    inner.current_bytes / 1024 / 1024,
-                );
+
+                // Restore bookmarked messages at the front in original order.
+                for m in kept_bookmarks.into_iter().rev() {
+                    inner.messages.push_front(m);
+                }
+
+                if evicted == 0 {
+                    warn!(
+                        "Eviction triggered but all candidate messages are bookmarked — skipping eviction"
+                    );
+                } else {
+                    inner.current_bytes = inner.current_bytes.saturating_sub(freed_bytes);
+                    info!(
+                        "Evicted {} messages from store ({} MB freed, store now {} messages / {} MB)",
+                        evicted,
+                        freed_bytes / 1024 / 1024,
+                        inner.messages.len(),
+                        inner.current_bytes / 1024 / 1024,
+                    );
+                }
             }
         }
 
@@ -293,5 +305,32 @@ mod tests {
         assert!(store.get_by_id("msg-0").await.is_some());
         // The first non-bookmarked message should be evicted
         assert!(store.get_by_id("msg-1").await.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_eviction_skips_scattered_bookmarks() {
+        let store = make_store(20);
+
+        for i in 0..20 {
+            let msg = make_msg(&format!("msg-{i}"));
+            store.insert(msg).await;
+        }
+        // Bookmark a few oldest messages in scattered positions
+        store.toggle_bookmark("msg-0").await;
+        store.toggle_bookmark("msg-2").await;
+        store.toggle_bookmark("msg-4").await;
+
+        // Trigger eviction: 10% of 20 = 2 non-bookmarked messages to evict
+        store.insert(make_msg("trigger")).await;
+
+        // All three bookmarked messages must survive
+        assert!(store.get_by_id("msg-0").await.is_some());
+        assert!(store.get_by_id("msg-2").await.is_some());
+        assert!(store.get_by_id("msg-4").await.is_some());
+        // The two oldest non-bookmarked (msg-1, msg-3) should be evicted
+        assert!(store.get_by_id("msg-1").await.is_none());
+        assert!(store.get_by_id("msg-3").await.is_none());
+        // msg-5 (next non-bookmarked candidate) should still be there
+        assert!(store.get_by_id("msg-5").await.is_some());
     }
 }
