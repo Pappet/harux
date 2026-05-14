@@ -29,7 +29,7 @@ and this project follows [Semantic Versioning](https://semver.org/lang/en/).
 | [`5994df0`](https://github.com/Pappet/harux/commit/5994df03294bf215d3d5ea16d6061c548b6bd0cb) | `perf(store):` rewrite eviction loop in O(n) |
 | [`e3077c1`](https://github.com/Pappet/harux/commit/e3077c1d3c43e008623d223ab9d9f40627c7f3c7) | `perf(store):` Arc-backed messages with HashMap index |
 | [`6392601`](https://github.com/Pappet/harux/commit/639260177401c6246a3c04810c31d152b5c66c20) | `perf(ui):` incremental list rendering + source-counts cache |
-| [`{HASH7}`](https://github.com/Pappet/harux/commit/{HASHFULL}) | `refactor(ui):` move detail JSON cache from property to WeakMap |
+| [`138784a`](https://github.com/Pappet/harux/commit/138784adeac4433de54160ab290670e6137b6952) | `refactor(ui):` move detail JSON cache from property to WeakMap |
 
 #### 2026-05-09
 
