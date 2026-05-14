@@ -362,6 +362,10 @@ mod tests {
         let msg = enrich_msh(msg, delimiters);
         let msg = enrich_pid(msg, delimiters);
         let warnings = validate(&msg);
-        assert!(warnings.is_empty(), "Expected no warnings for valid ADT, got: {:?}", warnings);
+        assert!(
+            warnings.is_empty(),
+            "Expected no warnings for valid ADT, got: {:?}",
+            warnings
+        );
     }
 }
