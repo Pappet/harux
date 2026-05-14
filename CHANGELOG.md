@@ -13,7 +13,16 @@ and this project follows [Semantic Versioning](https://semver.org/lang/en/).
 - **Keyboard accessibility for custom elements** — added `tabindex`, `role="button"`, and Enter/Space keyboard activation for segment headers, copy buttons, field value cells, and tagging elements.
 - **Keyboard accessibility for source chips** — added `tabindex="0"`, `role="button"`, and Enter/Space keyboard activation for source chips in the message list header, allowing filter toggling via keyboard navigation.
 
+### Changed
+- **Performance — detail panel DOM builders** — replaced the parsed/raw/ack tab `innerHTML` mega-string concatenation (nested `msg.segments.map().join('')` × `seg.fields.map().join('')`) with real `document.createElement` builders that `replaceChildren` once. Opening a message with many segments/fields no longer pays for thousands of intermediate string allocations. Segment collapse is now a CSS class on `.segment-block` — the field table is rendered once and hidden via `.segment-block.collapsed .field-table { display: none }`, so expanding/collapsing never rebuilds the DOM. JSON tab caches the `JSON.stringify` output on a non-enumerable `_jsonCache` property and invalidates it when tags/bookmark change.
+
 ### Commit History (chronological)
+
+#### 2026-05-14
+
+| Commit | Description |
+|--------|-------------|
+| [`{HASH7}`](https://github.com/Pappet/harux/commit/{HASHFULL}) | `perf(ui):` rebuild detail panel via DOM builders + CSS collapse |
 
 #### 2026-05-09
 

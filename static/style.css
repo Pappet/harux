@@ -1301,6 +1301,10 @@ body.resizing * {
     margin-bottom: 4px;
 }
 
+.segment-block.collapsed .field-table {
+    display: none;
+}
+
 .field-table th {
     padding: 4px 10px;
     text-align: left;
