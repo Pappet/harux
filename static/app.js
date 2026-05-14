@@ -307,7 +307,7 @@ function updateMessageTags(summary) {
 
     if (selectedMessage && selectedMessage.id === summary.id) {
         selectedMessage.tags = summary.tags;
-        delete selectedMessage._jsonCache;
+        detailJsonCache.delete(selectedMessage);
         renderDetail();
     }
 
@@ -323,7 +323,7 @@ function updateMessageBookmark(summary) {
 
     if (selectedMessage && selectedMessage.id === summary.id) {
         selectedMessage.bookmarked = summary.bookmarked;
-        delete selectedMessage._jsonCache;
+        detailJsonCache.delete(selectedMessage);
         renderDetail();
     }
 
@@ -1422,22 +1422,21 @@ function renderAckTab(content, ack) {
     renderRawLinesView(content, ack, false);
 }
 
+// Cache for the JSON tab's stringified payload. WeakMap keys the cache on
+// the message object itself so we don't mutate the data model with a
+// presentation-layer property, and entries are reclaimed automatically when
+// a message is no longer referenced (e.g. after switching selection).
+const detailJsonCache = new WeakMap();
+
 function renderJsonTab(content, msg) {
-    // Cache the stringified JSON on the message so re-opening the JSON tab
-    // (or rendering after a tag/bookmark change) does not re-stringify a
-    // potentially multi-MB payload (MDM with Base64 attachments). The cache
-    // is non-enumerable so it never appears in the JSON itself.
-    if (msg._jsonCache === undefined) {
-        Object.defineProperty(msg, '_jsonCache', {
-            value: JSON.stringify(msg, null, 2),
-            writable: true,
-            configurable: true,
-            enumerable: false,
-        });
+    let json = detailJsonCache.get(msg);
+    if (json === undefined) {
+        json = JSON.stringify(msg, null, 2);
+        detailJsonCache.set(msg, json);
     }
     const pre = document.createElement('pre');
     pre.className = 'raw-view';
-    pre.textContent = msg._jsonCache;
+    pre.textContent = json;
     content.replaceChildren(pre);
 }
 
