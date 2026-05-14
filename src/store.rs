@@ -21,6 +21,8 @@ pub enum StoreEvent {
 pub struct MessageStore {
     inner: Arc<RwLock<StoreInner>>,
     tx: broadcast::Sender<StoreEvent>,
+    eviction_notify: Arc<tokio::sync::Notify>,
+    eviction_flag: Arc<std::sync::atomic::AtomicBool>,
 }
 
 // Messages are addressed by ID through `messages` (O(1) lookup) and ordered
@@ -38,9 +40,12 @@ struct StoreInner {
 }
 
 impl MessageStore {
+    /// Create a new MessageStore.
+    ///
+    /// Must be called from within a Tokio runtime — spawns a background eviction task.
     pub fn new(config: StoreConfig) -> Self {
         let (tx, _) = broadcast::channel(BROADCAST_CAPACITY);
-        Self {
+        let store = Self {
             inner: Arc::new(RwLock::new(StoreInner {
                 order: VecDeque::with_capacity(1024),
                 messages: HashMap::with_capacity(1024),
@@ -49,7 +54,17 @@ impl MessageStore {
                 current_bytes: 0,
             })),
             tx,
-        }
+            eviction_notify: Arc::new(tokio::sync::Notify::new()),
+            eviction_flag: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        };
+
+        // Spawn background eviction task
+        let store_clone = store.clone();
+        tokio::spawn(async move {
+            store_clone.run_eviction_loop().await;
+        });
+
+        store
     }
 
     /// Insert a message and broadcast summary to all WebSocket subscribers
@@ -58,66 +73,23 @@ impl MessageStore {
 
         let mut inner = self.inner.write().await;
 
-        // Evict oldest 10% when either size or count limit is breached.
-        // Bookmarked messages are protected — they are popped off the front
-        // alongside eviction candidates and pushed back to the front in their
-        // original relative order. Single linear pass.
-        if inner.current_bytes >= inner.max_bytes || inner.order.len() >= inner.capacity {
-            let target_count = inner.order.len() / 10;
-            if target_count == 0 {
-                // Single message over limit — nothing meaningful to evict.
-            } else {
-                let mut kept_bookmarks: Vec<String> = Vec::new();
-                let mut freed_bytes: usize = 0;
-                let mut evicted: usize = 0;
-
-                while evicted < target_count {
-                    let id = match inner.order.pop_front() {
-                        Some(id) => id,
-                        None => break,
-                    };
-                    let bookmarked = inner
-                        .messages
-                        .get(&id)
-                        .map(|m| m.bookmarked)
-                        .unwrap_or(false);
-                    if bookmarked {
-                        kept_bookmarks.push(id);
-                    } else if let Some(removed) = inner.messages.remove(&id) {
-                        freed_bytes += removed.raw.len();
-                        evicted += 1;
-                    }
-                }
-
-                // Restore bookmarked IDs at the front in original order.
-                for id in kept_bookmarks.into_iter().rev() {
-                    inner.order.push_front(id);
-                }
-
-                if evicted == 0 {
-                    warn!(
-                        "Eviction triggered but all candidate messages are bookmarked — skipping eviction"
-                    );
-                } else {
-                    inner.current_bytes = inner.current_bytes.saturating_sub(freed_bytes);
-                    info!(
-                        "Evicted {} messages from store ({} MB freed, store now {} messages / {} MB)",
-                        evicted,
-                        freed_bytes / 1024 / 1024,
-                        inner.order.len(),
-                        inner.current_bytes / 1024 / 1024,
-                    );
-                }
-            }
-        }
-
         let raw_len = msg.raw.len();
         let id = msg.id.clone();
         inner.current_bytes += raw_len;
         inner.order.push_back(id.clone());
         inner.messages.insert(id, Arc::new(msg));
         let count = inner.order.len();
+        let needs_eviction = inner.current_bytes >= inner.max_bytes || count >= inner.capacity;
         drop(inner);
+
+        if needs_eviction
+            // Ordering::Relaxed is sufficient because notify_one() handles the necessary memory barriers
+            && !self
+                .eviction_flag
+                .swap(true, std::sync::atomic::Ordering::Relaxed)
+        {
+            self.eviction_notify.notify_one();
+        }
 
         // Broadcast to WebSocket subscribers (ignore if no receivers)
         let _ = self.tx.send(StoreEvent::NewMessage(Box::new(summary)));
@@ -240,6 +212,71 @@ impl MessageStore {
         info!("Message store cleared");
         let _ = self.tx.send(StoreEvent::Cleared);
     }
+
+    async fn run_eviction_loop(self) {
+        loop {
+            self.eviction_notify.notified().await;
+            // Ordering::Relaxed is sufficient because notified() handles the necessary memory barriers
+            self.eviction_flag
+                .store(false, std::sync::atomic::Ordering::Relaxed);
+
+            let mut inner = self.inner.write().await;
+
+            // Evict oldest 10% when either size or count limit is breached.
+            // Bookmarked messages are protected — they are popped off the front
+            // alongside eviction candidates and pushed back to the front in their
+            // original relative order. Single linear pass.
+            if inner.current_bytes >= inner.max_bytes || inner.order.len() >= inner.capacity {
+                let target_count = inner.order.len() / 10;
+                if target_count == 0 {
+                    // Single message over limit — nothing meaningful to evict.
+                    continue;
+                }
+
+                let mut kept_bookmarks: Vec<String> = Vec::new();
+                let mut freed_bytes: usize = 0;
+                let mut evicted: usize = 0;
+
+                while evicted < target_count {
+                    let id = match inner.order.pop_front() {
+                        Some(id) => id,
+                        None => break,
+                    };
+                    let bookmarked = inner
+                        .messages
+                        .get(&id)
+                        .map(|m| m.bookmarked)
+                        .unwrap_or(false);
+                    if bookmarked {
+                        kept_bookmarks.push(id);
+                    } else if let Some(removed) = inner.messages.remove(&id) {
+                        freed_bytes += removed.raw.len();
+                        evicted += 1;
+                    }
+                }
+
+                // Restore bookmarked IDs at the front in original order.
+                for id in kept_bookmarks.into_iter().rev() {
+                    inner.order.push_front(id);
+                }
+
+                if evicted == 0 {
+                    warn!(
+                        "Eviction triggered but all candidate messages are bookmarked — skipping eviction"
+                    );
+                } else {
+                    inner.current_bytes = inner.current_bytes.saturating_sub(freed_bytes);
+                    info!(
+                        "Evicted {} messages from store ({} MB freed, store now {} messages / {} MB)",
+                        evicted,
+                        freed_bytes / 1024 / 1024,
+                        inner.order.len(),
+                        inner.current_bytes / 1024 / 1024,
+                    );
+                }
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -319,6 +356,9 @@ mod tests {
         let msg = make_msg("trigger");
         store.insert(msg).await;
 
+        // Give background eviction task time to run
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+
         // Bookmarked message should survive
         assert!(store.get_by_id("msg-0").await.is_some());
         // The first non-bookmarked message should be evicted
@@ -340,6 +380,9 @@ mod tests {
 
         // Trigger eviction: 10% of 20 = 2 non-bookmarked messages to evict
         store.insert(make_msg("trigger")).await;
+
+        // Give background eviction task time to run
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
 
         // All three bookmarked messages must survive
         assert!(store.get_by_id("msg-0").await.is_some());
