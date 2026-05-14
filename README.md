@@ -82,9 +82,9 @@ Pre-built binaries for Windows, macOS, and Linux are available on the [Releases]
 
 | Document | Description |
 |---|---|
-| [PROJECT_OVERVIEW.md](PROJECT_OVERVIEW.md) | Detailed architecture, technical decisions, API reference |
-| [ROADMAP.md](ROADMAP.md) | Milestones, planned features, and progress tracking |
-| [STYLE_GUIDE.md](STYLE_GUIDE.md) | UI design rules, coding conventions, workflow standards |
+| [PROJECT_OVERVIEW.md](docs/PROJECT_OVERVIEW.md) | Detailed architecture, technical decisions, API reference |
+| [ROADMAP.md](docs/ROADMAP.md) | Milestones, planned features, and progress tracking |
+| [STYLE_GUIDE.md](docs/STYLE_GUIDE.md) | UI design rules, coding conventions, workflow standards |
 | [CHANGELOG.md](CHANGELOG.md) | Full history of every change |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | How to contribute |
 

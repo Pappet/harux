@@ -191,7 +191,7 @@ The following features are planned but not yet implemented. Do not add them unle
 - SQLite persistence (Milestone 5)
 - FHIR R4 mapping (Milestone 6)
 
-Full roadmap in `ROADMAP.md`.
+Full roadmap in `docs/ROADMAP.md`.
 
 ---
 

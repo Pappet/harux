@@ -131,7 +131,7 @@ Key frontend behaviors:
 
 ## Current Milestone: Milestone 3 — Message Analysis
 
-Next planned work (see `ROADMAP.md` for full details):
+Next planned work (see `docs/ROADMAP.md` for full details):
 - HL7 field dictionary (hover tooltips with field descriptions)
 - Message type detection with descriptions
 - Validation (required fields per message type)
