@@ -1,6 +1,6 @@
+use harux::hl7::parser::parse_message;
 use std::fs;
 use std::path::PathBuf;
-use harux::hl7::parser::parse_message;
 
 fn get_fixture_path(sub_dir: &str) -> PathBuf {
     let mut path = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
@@ -21,9 +21,19 @@ fn test_valid_fixtures() {
             count += 1;
             let content = fs::read_to_string(&path).unwrap();
             let msg = parse_message(&content, "127.0.0.1:9999");
-            assert!(msg.is_ok(), "Failed to parse valid fixture {:?}: {:?}", path.file_name(), msg.err());
+            assert!(
+                msg.is_ok(),
+                "Failed to parse valid fixture {:?}: {:?}",
+                path.file_name(),
+                msg.err()
+            );
             let msg = msg.unwrap();
-            assert!(msg.parse_error.is_none(), "Valid fixture {:?} has parse_error: {:?}", path.file_name(), msg.parse_error);
+            assert!(
+                msg.parse_error.is_none(),
+                "Valid fixture {:?} has parse_error: {:?}",
+                path.file_name(),
+                msg.parse_error
+            );
             // We do not assert that validation_warnings is empty, because real-world valid messages may be missing fields.
         }
     }
@@ -43,8 +53,8 @@ fn test_error_fixtures() {
             let msg = parse_message(&content, "127.0.0.1:9999");
             match msg {
                 Ok(m) => {
-                    let is_error = m.parse_error.is_some() 
-                        || !m.validation_warnings.is_empty() 
+                    let is_error = m.parse_error.is_some()
+                        || !m.validation_warnings.is_empty()
                         || m.message_type_description.is_none();
                     assert!(is_error, "Error fixture {:?} parsed cleanly with no warnings, parse errors, or unknown type", path.file_name());
                 }
@@ -72,9 +82,9 @@ fn test_non_default_delimiters() {
     // Using alternative delimiters: MSH*$!#%
     let raw = "MSH*$!#%*SENDING*FAC***2024**ADT$A01*123*P*2.5\rPID***123**Smith$John#E#Doe";
     let msg = parse_message(raw, "127.0.0.1:9999").unwrap();
-    
+
     assert_eq!(msg.sending_application, "SENDING");
-    assert_eq!(msg.message_type, "ADT^A01"); 
+    assert_eq!(msg.message_type, "ADT^A01");
     assert_eq!(msg.message_control_id, "123");
 
     let pid = msg.segments.iter().find(|s| s.name == "PID").unwrap();
@@ -89,8 +99,11 @@ fn test_non_default_delimiters() {
 fn test_malformed_msh() {
     let raw = "MSH|^~\\&|SENDING";
     let msg = parse_message(raw, "127.0.0.1:9999").unwrap();
-    assert!(!msg.validation_warnings.is_empty(), "Expected validation warnings for malformed MSH");
-    
+    assert!(
+        !msg.validation_warnings.is_empty(),
+        "Expected validation warnings for malformed MSH"
+    );
+
     let raw2 = "MSH";
     let res2 = parse_message(raw2, "127.0.0.1:9999");
     assert!(res2.is_err(), "Expected parsing error for too short MSH");
