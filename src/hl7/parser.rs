@@ -3,6 +3,18 @@ use super::types::*;
 /// Parse a raw HL7 v2.x message string into a structured Hl7Message.
 /// Handles standard and custom delimiters from MSH segment.
 pub fn parse_message(raw: &str, source_addr: &str) -> Result<Hl7Message, String> {
+    let (msg, delimiters) = parse_structure(raw, source_addr)?;
+    let msg = enrich_msh(msg, delimiters);
+    let msg = enrich_pid(msg, delimiters);
+    let msg = inject_descriptions(msg);
+    let msg = annotate_message_type(msg);
+    let mut msg = msg;
+    msg.validation_warnings = validate(&msg);
+
+    Ok(msg)
+}
+
+fn parse_structure(raw: &str, source_addr: &str) -> Result<(Hl7Message, Delimiters), String> {
     let raw = raw.trim();
     if raw.is_empty() {
         return Err("Empty message".into());
@@ -26,6 +38,10 @@ pub fn parse_message(raw: &str, source_addr: &str) -> Result<Hl7Message, String>
         msg.segments.push(segment);
     }
 
+    Ok((msg, delimiters))
+}
+
+fn enrich_msh(mut msg: Hl7Message, delimiters: Delimiters) -> Hl7Message {
     // Extract key fields from MSH
     if let Some(msh) = msg.segments.first() {
         // Use HL7-standard field numbers (1-based): MSH-1=separator, MSH-2=encoding chars, etc.
@@ -49,7 +65,10 @@ pub fn parse_message(raw: &str, source_addr: &str) -> Result<Hl7Message, String>
         msg.message_control_id = get_field_value(msh, 10);
         msg.version = get_field_value(msh, 12);
     }
+    msg
+}
 
+fn enrich_pid(mut msg: Hl7Message, delimiters: Delimiters) -> Hl7Message {
     // Extract patient info from PID segment
     if let Some(pid) = msg.segments.iter().find(|s| s.name == "PID") {
         // PID-3: Patient ID
@@ -78,7 +97,10 @@ pub fn parse_message(raw: &str, source_addr: &str) -> Result<Hl7Message, String>
             }
         }
     }
+    msg
+}
 
+fn inject_descriptions(mut msg: Hl7Message) -> Hl7Message {
     // Second pass: inject field descriptions from the embedded dictionary
     let version = if msg.version.is_empty() {
         "2.5.1"
@@ -86,7 +108,10 @@ pub fn parse_message(raw: &str, source_addr: &str) -> Result<Hl7Message, String>
         &msg.version
     };
     crate::dictionary::inject_descriptions(&mut msg.segments, version);
+    msg
+}
 
+fn annotate_message_type(mut msg: Hl7Message) -> Hl7Message {
     // Third pass: look up message type description and typical segments
     if let Some(info) = super::message_types::get_message_type_info(&msg.message_type) {
         msg.message_type_description = Some(info.description.to_string());
@@ -103,11 +128,12 @@ pub fn parse_message(raw: &str, source_addr: &str) -> Result<Hl7Message, String>
             })
             .collect();
     }
+    msg
+}
 
+fn validate(msg: &Hl7Message) -> Vec<crate::validation::ValidationWarning> {
     // Fourth pass: validate required segments and fields
-    msg.validation_warnings = crate::validation::validate_message(&msg);
-
-    Ok(msg)
+    crate::validation::validate_message(msg)
 }
 
 fn parse_delimiters(raw: &str) -> Result<Delimiters, String> {
@@ -275,6 +301,71 @@ mod tests {
         assert_eq!(
             res.unwrap_err(),
             "MSH segment too short to extract delimiters"
+        );
+    }
+
+    #[test]
+    fn test_parse_structure() {
+        let (msg, _) = parse_structure(SAMPLE_ADT, "127.0.0.1:9999").unwrap();
+        assert_eq!(msg.segments.len(), 3);
+        assert_eq!(msg.segments[0].name, "MSH");
+        assert_eq!(msg.segments[1].name, "PID");
+        assert_eq!(msg.segments[2].name, "PV1");
+        assert_eq!(msg.message_type, ""); // Not enriched yet
+    }
+
+    #[test]
+    fn test_enrich_msh() {
+        let (msg, delimiters) = parse_structure(SAMPLE_ADT, "127.0.0.1:9999").unwrap();
+        let msg = enrich_msh(msg, delimiters);
+        assert_eq!(msg.message_type, "ADT^A01");
+        assert_eq!(msg.trigger_event, "A01");
+        assert_eq!(msg.sending_application, "SENDING_APP");
+        assert_eq!(msg.sending_facility, "SENDING_FAC");
+        assert_eq!(msg.message_control_id, "MSG00001");
+        assert_eq!(msg.version, "2.5");
+    }
+
+    #[test]
+    fn test_enrich_pid() {
+        let (msg, delimiters) = parse_structure(SAMPLE_ADT, "127.0.0.1:9999").unwrap();
+        let msg = enrich_pid(msg, delimiters);
+        assert_eq!(msg.patient_id, Some("12345".into()));
+        assert_eq!(msg.patient_name, Some("Smith, John".into()));
+    }
+
+    #[test]
+    fn test_inject_descriptions() {
+        let (msg, _) = parse_structure(SAMPLE_ADT, "127.0.0.1:9999").unwrap();
+        let mut msg = msg;
+        msg.version = "2.5".to_string(); // Need version for description lookup
+        let msg = inject_descriptions(msg);
+        // We know MSH-9 should get a description injected if dictionary works
+        let msh = &msg.segments[0];
+        let field9 = msh.fields.iter().find(|f| f.index == 9).unwrap();
+        assert!(field9.description.is_some());
+    }
+
+    #[test]
+    fn test_annotate_message_type() {
+        let (msg, delimiters) = parse_structure(SAMPLE_ADT, "127.0.0.1:9999").unwrap();
+        let msg = enrich_msh(msg, delimiters);
+        let msg = annotate_message_type(msg);
+        assert!(msg.message_type_description.is_some());
+        assert!(!msg.typical_segments.is_empty());
+    }
+
+    #[test]
+    fn test_validate() {
+        let valid_adt = "MSH|^~\\&|APP|FAC|APP|FAC|2024||ADT^A01|MSG001|P|2.5\rEVN||2024\rPID|||12345||Smith^John||1980|M\rPV1||I";
+        let (msg, delimiters) = parse_structure(valid_adt, "127.0.0.1:9999").unwrap();
+        let msg = enrich_msh(msg, delimiters);
+        let msg = enrich_pid(msg, delimiters);
+        let warnings = validate(&msg);
+        assert!(
+            warnings.is_empty(),
+            "Expected no warnings for valid ADT, got: {:?}",
+            warnings
         );
     }
 }
