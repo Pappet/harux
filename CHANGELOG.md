@@ -25,6 +25,7 @@ and this project follows [Semantic Versioning](https://semver.org/lang/en/).
 
 | Commit | Description |
 |--------|-------------|
+| [`655edfb`](https://github.com/Pappet/harux/commit/655edfbad9d434f75f6428bbb5152bc0a63143a9) | `chore:` organize repo — add docs/ folder, move project docs |
 | [`6f1d19a`](https://github.com/Pappet/harux/commit/6f1d19a86fc580f28d1a031eb059d854e72786b8) | `perf(ui):` rebuild detail panel via DOM builders + CSS collapse |
 | [`5994df0`](https://github.com/Pappet/harux/commit/5994df03294bf215d3d5ea16d6061c548b6bd0cb) | `perf(store):` rewrite eviction loop in O(n) |
 | [`e3077c1`](https://github.com/Pappet/harux/commit/e3077c1d3c43e008623d223ab9d9f40627c7f3c7) | `perf(store):` Arc-backed messages with HashMap index |

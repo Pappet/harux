@@ -4,7 +4,6 @@
 .DS_Store
 .gemini/
 .claude/
-docs/
 .axon/
 .agents/
 .planning/
