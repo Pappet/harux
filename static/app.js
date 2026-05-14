@@ -87,6 +87,10 @@ const SOURCE_PALETTE = [
 let seenSources = new Set();
 let colorByPort = false;
 let highlightedSource = null;
+// Per-source message counts maintained incrementally so renderSourceLegend
+// does not iterate `messages[]` on every flush. Recomputed only when
+// labelling changes (toggleColorByPort) or the buffer is replaced.
+let sourceCounts = new Map();
 
 function hashString(str) {
     let hash = 0;
@@ -109,6 +113,8 @@ function registerSource(addr) {
 function toggleColorByPort(e) {
     colorByPort = e.target.checked;
     highlightedSource = null; // reset highlight on toggle
+    // Labels change between "host" and "host:port" — rebuild the count cache.
+    recomputeSourceCounts();
     renderMessageList();
     renderSourceLegend();
     saveSession();
@@ -124,6 +130,15 @@ function toggleHighlightSource(label) {
 function srcLabelFor(addr) {
     if (!addr) return '';
     return colorByPort ? addr : addr.split(':')[0];
+}
+
+function recomputeSourceCounts() {
+    sourceCounts.clear();
+    for (const m of messages) {
+        const label = srcLabelFor(m.source_addr);
+        if (!label) continue;
+        sourceCounts.set(label, (sourceCounts.get(label) || 0) + 1);
+    }
 }
 
 function renderSourceLegend() {
@@ -149,14 +164,6 @@ function renderSourceLegend() {
         return;
     }
 
-    // Build per-source counts from the messages array.
-    const counts = new Map();
-    for (const m of messages) {
-        const label = srcLabelFor(m.source_addr);
-        if (!label) continue;
-        counts.set(label, (counts.get(label) || 0) + 1);
-    }
-
     const uniqueLabels = new Set();
     seenSources.forEach(addr => uniqueLabels.add(srcLabelFor(addr)));
     const sortedLabels = Array.from(uniqueLabels).sort();
@@ -166,7 +173,7 @@ function renderSourceLegend() {
         const isActive = highlightedSource === label;
         const isDimmed = highlightedSource && highlightedSource !== label;
         const classes = `source-chip${isActive ? ' active' : ''}${isDimmed ? ' dimmed' : ''}`;
-        const num = counts.get(label) || 0;
+        const num = sourceCounts.get(label) || 0;
         return `<span class="${classes}" tabindex="0" role="button" aria-label="Filter by source ${escAttr(label)}" onclick="toggleHighlightSource('${escAttr(escJS(label))}')" onkeydown="if(event.key === 'Enter' || event.key === ' ') { event.preventDefault(); toggleHighlightSource('${escAttr(escJS(label))}'); }">
             <span class="dot" style="background:${color};color:${color}"></span>
             ${esc(label)}
@@ -275,6 +282,7 @@ function connectWs() {
             console.info("Server cleared messages via Web UI or API");
             messages = [];
             pendingMessages = [];
+            sourceCounts.clear();
             totalMessagesCount = 0;
             rateWindow.length = 0;
             lastMessageReceivedAt = null;
@@ -303,7 +311,7 @@ function updateMessageTags(summary) {
         renderDetail();
     }
 
-    renderMessageList();
+    patchRow(summary.id, { tags: summary.tags });
 }
 
 function updateMessageBookmark(summary) {
@@ -319,7 +327,14 @@ function updateMessageBookmark(summary) {
         renderDetail();
     }
 
-    renderMessageList();
+    // If the bookmarks-only filter is active and a row toggles off, it
+    // needs to vanish from the list — fall back to a full rebuild in that
+    // case. Otherwise just patch the visible row in place.
+    if (showBookmarkedOnly && !summary.bookmarked) {
+        renderMessageList();
+    } else {
+        patchRow(summary.id, { bookmarked: summary.bookmarked });
+    }
 }
 
 // Task 2: buffer incoming messages, flush at most every 250 ms
@@ -327,6 +342,10 @@ function addMessage(summary) {
     pendingMessages.unshift(summary);
     // Register source for color mapping
     registerSource(summary.source_addr);
+    // Keep the source-counts cache current — avoids re-iterating messages[]
+    // on every renderSourceLegend call.
+    const label = srcLabelFor(summary.source_addr);
+    if (label) sourceCounts.set(label, (sourceCounts.get(label) || 0) + 1);
     totalMessagesCount++;
     const now = Date.now();
     rateWindow.push(now);
@@ -346,11 +365,21 @@ function scheduleRender() {
 }
 
 function flushAndRender() {
-    if (pendingMessages.length > 0) {
-        messages = [...pendingMessages, ...messages];
-        pendingMessages = [];
+    if (pendingMessages.length === 0) {
+        updateHeaderCounters();
+        return;
     }
-    renderMessageList();
+    const newOnes = pendingMessages;
+    messages = [...newOnes, ...messages];
+    pendingMessages = [];
+
+    // Hot path: no client-side filters → DOM diff via prepend instead of
+    // tearing down and rebuilding every row.
+    if (canPrependOnly()) {
+        prependMessagesToList(newOnes);
+    } else {
+        renderMessageList();
+    }
     renderSourceLegend();
     updateHeaderCounters();
 }
@@ -365,6 +394,7 @@ async function loadMessages() {
         for (const m of messages) {
             registerSource(m.source_addr);
         }
+        recomputeSourceCounts();
         renderMessageList();
         renderSourceLegend();
         updateHeaderCounters();
@@ -720,6 +750,115 @@ function getParsedQuery(query) {
     return result;
 }
 
+// True when no client-side filters are active, so new messages can be
+// prepended to the DOM directly instead of rebuilding the whole list.
+function canPrependOnly() {
+    return !searchQuery && !showBookmarkedOnly && validationFilter === 0;
+}
+
+// Insert freshly-arrived messages at the top of the list without touching
+// existing rows. Group-header continuity is preserved via a `data-bucket`
+// attribute on each header.
+function prependMessagesToList(newSummaries) {
+    const list = document.getElementById('message-list');
+    const empty = document.getElementById('empty-state');
+    if (!list || !newSummaries.length) return;
+
+    empty.style.display = 'none';
+
+    const firstChild = list.firstElementChild;
+    const firstExistingBucket = firstChild && firstChild.classList && firstChild.classList.contains('group-header')
+        ? firstChild.dataset.bucket || null
+        : null;
+
+    const fragment = document.createDocumentFragment();
+    const now = Date.now();
+    let lastBucket = null;
+    for (const msg of newSummaries) {
+        const bucket = bucketKey(msg, now);
+        if (bucket !== lastBucket) {
+            lastBucket = bucket;
+            if (bucket !== firstExistingBucket) {
+                const header = document.createElement('div');
+                header.className = 'group-header';
+                header.dataset.bucket = bucket;
+                header.textContent = bucketLabel(bucket);
+                fragment.appendChild(header);
+            }
+        }
+        fragment.appendChild(buildMessageRow(msg));
+    }
+    list.insertBefore(fragment, list.firstChild);
+
+    if (autoscroll) {
+        list.scrollTop = 0;
+    }
+}
+
+// Patch a single existing row's mutable fields (tags / bookmark) without
+// re-rendering the whole list. Safe no-op if the row is not currently
+// in the DOM (e.g. filtered out).
+function patchRow(id, mutations) {
+    const list = document.getElementById('message-list');
+    if (!list) return;
+    const row = list.querySelector(`.message-row[data-id="${CSS.escape(id)}"]`);
+    if (!row) return;
+
+    if ('bookmarked' in mutations) {
+        const on = !!mutations.bookmarked;
+        row.classList.toggle('bookmarked', on);
+        const btn = row.querySelector('.msg-bookmark');
+        if (btn) {
+            btn.classList.toggle('active', on);
+            btn.innerHTML = on ? ICONS.starFilled : ICONS.starOutline;
+            btn.setAttribute('aria-label', on ? 'Remove bookmark' : 'Add bookmark');
+        }
+    }
+
+    if ('tags' in mutations) {
+        const row1 = row.querySelector('.msg-row1');
+        if (!row1) return;
+        const oldTags = row1.querySelector('.msg-tags-list');
+        if (oldTags) oldTags.remove();
+        const tagsArr = mutations.tags || [];
+        if (tagsArr.length === 0) return;
+        const tagsEl = document.createElement('span');
+        tagsEl.className = 'msg-tags-list';
+        tagsEl.style.marginTop = '0';
+        const visible = tagsArr.slice(0, 2);
+        for (const t of visible) {
+            const span = document.createElement('span');
+            span.className = 'msg-tag-small';
+            span.textContent = t;
+            tagsEl.appendChild(span);
+        }
+        if (tagsArr.length > 2) {
+            const over = document.createElement('span');
+            over.className = 'msg-tag-small';
+            over.textContent = '+' + (tagsArr.length - 2);
+            tagsEl.appendChild(over);
+        }
+        // Insert before the ACK chip to match buildMessageRow's ordering.
+        const ackEl = row1.querySelector('.msg-ack');
+        if (ackEl) row1.insertBefore(tagsEl, ackEl);
+        else row1.appendChild(tagsEl);
+    }
+}
+
+// Move the .selected class from the previously-selected row to the new one.
+function updateRowSelection(prevId, newId) {
+    const list = document.getElementById('message-list');
+    if (!list) return;
+    if (prevId) {
+        const prev = list.querySelector(`.message-row[data-id="${CSS.escape(prevId)}"]`);
+        if (prev) prev.classList.remove('selected');
+    }
+    if (newId) {
+        const next = list.querySelector(`.message-row[data-id="${CSS.escape(newId)}"]`);
+        if (next) next.classList.add('selected');
+    }
+}
+
 function renderMessageList() {
     const list = document.getElementById('message-list');
     const empty = document.getElementById('empty-state');
@@ -762,6 +901,7 @@ function renderMessageList() {
             currentBucket = bucket;
             const header = document.createElement('div');
             header.className = 'group-header';
+            header.dataset.bucket = bucket;
             header.textContent = bucketLabel(bucket);
             fragment.appendChild(header);
         }
@@ -802,8 +942,9 @@ function matchesSearch(msg, parsedQuery) {
 }
 
 async function selectMessage(id) {
+    const prevId = selectedId;
     selectedId = id;
-    renderMessageList();
+    updateRowSelection(prevId, id);
     saveSession();
 
     try {
@@ -1512,6 +1653,7 @@ async function clearMessages() {
         if (!resp.ok) throw new Error(`Server error: ${resp.status}`);
         messages = [];
         pendingMessages = [];
+        sourceCounts.clear();
         rateWindow.length = 0;
         lastMessageReceivedAt = null;
         selectedId = null;
