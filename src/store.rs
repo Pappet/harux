@@ -1,6 +1,6 @@
 use crate::config::StoreConfig;
 use crate::hl7::types::{Hl7Message, Hl7MessageSummary};
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 use tokio::sync::{broadcast, RwLock};
 use tracing::{info, warn};
@@ -23,8 +23,15 @@ pub struct MessageStore {
     tx: broadcast::Sender<StoreEvent>,
 }
 
+// Messages are addressed by ID through `messages` (O(1) lookup) and ordered
+// for iteration / eviction through `order`. Arc-wrapping lets `get_by_id`
+// hand out a cheap reference-counted snapshot instead of cloning the whole
+// message (raw + parsed segments + validation warnings can be multi-MB for
+// MDM payloads). Mutations (tags, bookmark) use `Arc::make_mut` — copy-on-
+// write that only allocates when a reader holds a concurrent snapshot.
 struct StoreInner {
-    messages: VecDeque<Hl7Message>,
+    order: VecDeque<String>,
+    messages: HashMap<String, Arc<Hl7Message>>,
     capacity: usize,
     max_bytes: usize,
     current_bytes: usize,
@@ -35,7 +42,8 @@ impl MessageStore {
         let (tx, _) = broadcast::channel(BROADCAST_CAPACITY);
         Self {
             inner: Arc::new(RwLock::new(StoreInner {
-                messages: VecDeque::with_capacity(1024),
+                order: VecDeque::with_capacity(1024),
+                messages: HashMap::with_capacity(1024),
                 capacity: config.max_messages,
                 max_bytes: config.max_memory_bytes(),
                 current_bytes: 0,
@@ -53,33 +61,37 @@ impl MessageStore {
         // Evict oldest 10% when either size or count limit is breached.
         // Bookmarked messages are protected — they are popped off the front
         // alongside eviction candidates and pushed back to the front in their
-        // original relative order. This runs in O(n) on the number of
-        // messages scanned (was O(n²) with `VecDeque::remove(i)` per evict).
-        if inner.current_bytes >= inner.max_bytes || inner.messages.len() >= inner.capacity {
-            let target_count = inner.messages.len() / 10;
+        // original relative order. Single linear pass.
+        if inner.current_bytes >= inner.max_bytes || inner.order.len() >= inner.capacity {
+            let target_count = inner.order.len() / 10;
             if target_count == 0 {
                 // Single message over limit — nothing meaningful to evict.
             } else {
-                let mut kept_bookmarks: Vec<Hl7Message> = Vec::new();
+                let mut kept_bookmarks: Vec<String> = Vec::new();
                 let mut freed_bytes: usize = 0;
                 let mut evicted: usize = 0;
 
                 while evicted < target_count {
-                    let m = match inner.messages.pop_front() {
-                        Some(m) => m,
+                    let id = match inner.order.pop_front() {
+                        Some(id) => id,
                         None => break,
                     };
-                    if m.bookmarked {
-                        kept_bookmarks.push(m);
-                    } else {
-                        freed_bytes += m.raw.len();
+                    let bookmarked = inner
+                        .messages
+                        .get(&id)
+                        .map(|m| m.bookmarked)
+                        .unwrap_or(false);
+                    if bookmarked {
+                        kept_bookmarks.push(id);
+                    } else if let Some(removed) = inner.messages.remove(&id) {
+                        freed_bytes += removed.raw.len();
                         evicted += 1;
                     }
                 }
 
-                // Restore bookmarked messages at the front in original order.
-                for m in kept_bookmarks.into_iter().rev() {
-                    inner.messages.push_front(m);
+                // Restore bookmarked IDs at the front in original order.
+                for id in kept_bookmarks.into_iter().rev() {
+                    inner.order.push_front(id);
                 }
 
                 if evicted == 0 {
@@ -92,16 +104,19 @@ impl MessageStore {
                         "Evicted {} messages from store ({} MB freed, store now {} messages / {} MB)",
                         evicted,
                         freed_bytes / 1024 / 1024,
-                        inner.messages.len(),
+                        inner.order.len(),
                         inner.current_bytes / 1024 / 1024,
                     );
                 }
             }
         }
 
-        inner.current_bytes += msg.raw.len();
-        inner.messages.push_back(msg);
-        let count = inner.messages.len();
+        let raw_len = msg.raw.len();
+        let id = msg.id.clone();
+        inner.current_bytes += raw_len;
+        inner.order.push_back(id.clone());
+        inner.messages.insert(id, Arc::new(msg));
+        let count = inner.order.len();
         drop(inner);
 
         // Broadcast to WebSocket subscribers (ignore if no receivers)
@@ -121,19 +136,19 @@ impl MessageStore {
     pub async fn list_summaries(&self, offset: usize, limit: usize) -> Vec<Hl7MessageSummary> {
         let inner = self.inner.read().await;
         inner
-            .messages
+            .order
             .iter()
             .rev() // newest first
             .skip(offset)
             .take(limit)
-            .map(Hl7MessageSummary::from)
+            .filter_map(|id| inner.messages.get(id))
+            .map(|arc| Hl7MessageSummary::from(arc.as_ref()))
             .collect()
     }
 
-    /// Get a full message by ID
-    pub async fn get_by_id(&self, id: &str) -> Option<Hl7Message> {
-        let inner = self.inner.read().await;
-        inner.messages.iter().find(|m| m.id == id).cloned()
+    /// Get a full message by ID. Returns an `Arc` snapshot — no deep clone.
+    pub async fn get_by_id(&self, id: &str) -> Option<Arc<Hl7Message>> {
+        self.inner.read().await.messages.get(id).cloned()
     }
 
     /// Search messages by filter text (matches message type, patient name, facility, etc.)
@@ -141,9 +156,10 @@ impl MessageStore {
         let query_lower = query.to_lowercase();
         let inner = self.inner.read().await;
         inner
-            .messages
+            .order
             .iter()
             .rev()
+            .filter_map(|id| inner.messages.get(id))
             .filter(|m| {
                 m.message_type.to_lowercase().contains(&query_lower)
                     || m.sending_facility.to_lowercase().contains(&query_lower)
@@ -161,22 +177,22 @@ impl MessageStore {
                     || m.source_addr.contains(&query_lower)
             })
             .take(limit)
-            .map(Hl7MessageSummary::from)
+            .map(|arc| Hl7MessageSummary::from(arc.as_ref()))
             .collect()
     }
 
     /// Total message count
     pub async fn count(&self) -> usize {
-        self.inner.read().await.messages.len()
+        self.inner.read().await.order.len()
     }
 
     /// Add a tag to a message and broadcast the update
     pub async fn add_tag(&self, id: &str, tag: String) -> bool {
         let mut inner = self.inner.write().await;
-        if let Some(msg) = inner.messages.iter_mut().find(|m| m.id == id) {
-            if !msg.tags.contains(&tag) {
-                msg.tags.push(tag);
-                let summary = Hl7MessageSummary::from(&*msg);
+        if let Some(arc) = inner.messages.get_mut(id) {
+            if !arc.tags.contains(&tag) {
+                Arc::make_mut(arc).tags.push(tag);
+                let summary = Hl7MessageSummary::from(arc.as_ref());
                 drop(inner);
                 let _ = self.tx.send(StoreEvent::TagsUpdated(Box::new(summary)));
                 return true;
@@ -188,10 +204,10 @@ impl MessageStore {
     /// Remove a tag from a message and broadcast the update
     pub async fn remove_tag(&self, id: &str, tag: &str) -> bool {
         let mut inner = self.inner.write().await;
-        if let Some(msg) = inner.messages.iter_mut().find(|m| m.id == id) {
-            if let Some(pos) = msg.tags.iter().position(|t| t == tag) {
-                msg.tags.remove(pos);
-                let summary = Hl7MessageSummary::from(&*msg);
+        if let Some(arc) = inner.messages.get_mut(id) {
+            if let Some(pos) = arc.tags.iter().position(|t| t == tag) {
+                Arc::make_mut(arc).tags.remove(pos);
+                let summary = Hl7MessageSummary::from(arc.as_ref());
                 drop(inner);
                 let _ = self.tx.send(StoreEvent::TagsUpdated(Box::new(summary)));
                 return true;
@@ -203,10 +219,11 @@ impl MessageStore {
     /// Toggle bookmark on a message, returns the new bookmark state or None if not found
     pub async fn toggle_bookmark(&self, id: &str) -> Option<bool> {
         let mut inner = self.inner.write().await;
-        if let Some(msg) = inner.messages.iter_mut().find(|m| m.id == id) {
-            msg.bookmarked = !msg.bookmarked;
-            let new_state = msg.bookmarked;
-            let summary = Hl7MessageSummary::from(&*msg);
+        if let Some(arc) = inner.messages.get_mut(id) {
+            let mut_msg = Arc::make_mut(arc);
+            mut_msg.bookmarked = !mut_msg.bookmarked;
+            let new_state = mut_msg.bookmarked;
+            let summary = Hl7MessageSummary::from(arc.as_ref());
             drop(inner);
             let _ = self.tx.send(StoreEvent::BookmarkToggled(Box::new(summary)));
             return Some(new_state);
@@ -217,6 +234,7 @@ impl MessageStore {
     /// Clear all messages
     pub async fn clear(&self) {
         let mut inner = self.inner.write().await;
+        inner.order.clear();
         inner.messages.clear();
         inner.current_bytes = 0;
         info!("Message store cleared");
@@ -332,5 +350,18 @@ mod tests {
         assert!(store.get_by_id("msg-3").await.is_none());
         // msg-5 (next non-bookmarked candidate) should still be there
         assert!(store.get_by_id("msg-5").await.is_some());
+    }
+
+    #[tokio::test]
+    async fn test_get_by_id_returns_shared_snapshot() {
+        let store = make_store(10);
+        store.insert(make_msg("shared")).await;
+
+        let a = store.get_by_id("shared").await.unwrap();
+        let b = store.get_by_id("shared").await.unwrap();
+
+        // Both snapshots point at the same Arc (no deep clone).
+        assert!(Arc::ptr_eq(&a, &b));
+        assert_eq!(a.id, "shared");
     }
 }

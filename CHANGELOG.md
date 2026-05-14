@@ -16,6 +16,7 @@ and this project follows [Semantic Versioning](https://semver.org/lang/en/).
 ### Changed
 - **Performance — detail panel DOM builders** — replaced the parsed/raw/ack tab `innerHTML` mega-string concatenation (nested `msg.segments.map().join('')` × `seg.fields.map().join('')`) with real `document.createElement` builders that `replaceChildren` once. Opening a message with many segments/fields no longer pays for thousands of intermediate string allocations. Segment collapse is now a CSS class on `.segment-block` — the field table is rendered once and hidden via `.segment-block.collapsed .field-table { display: none }`, so expanding/collapsing never rebuilds the DOM. JSON tab caches the `JSON.stringify` output on a non-enumerable `_jsonCache` property and invalidates it when tags/bookmark change.
 - **Performance — store eviction in O(n)** — rewrote the eviction loop in `MessageStore::insert`. The previous code collected indices and called `VecDeque::remove(i)` per candidate, which is O(n) each — combined with the candidate loop this was O(n²) and kept the write lock held during the whole pass, blocking MLLP ingestion and UI reads. The new loop pops candidates from the front, sets bookmarked ones aside, evicts the rest, and pushes the bookmarks back. Single linear pass, no per-element shift. Added test `test_eviction_skips_scattered_bookmarks` covering scattered bookmarks among eviction candidates.
+- **Performance — Arc-backed message storage with HashMap index** — split `StoreInner` into `order: VecDeque<String>` (insertion order) and `messages: HashMap<String, Arc<Hl7Message>>` (lookup). `get_by_id` is now O(1) and hands out an `Arc` snapshot — no deep clone of the (potentially multi-MB) `raw` + `segments` + `validation_warnings` payload on every detail-panel click. `GET /api/messages/:id` returns `Json(msg)` where `msg: Arc<Hl7Message>` serializes directly (enabled `serde/rc`), eliminating the previous `serde_json::to_value` intermediate `Value`. Tag / bookmark mutations use `Arc::make_mut` (copy-on-write) — only allocate when a reader holds a concurrent snapshot. Added test `test_get_by_id_returns_shared_snapshot` confirming the `Arc::ptr_eq` invariant.
 
 ### Commit History (chronological)
 
@@ -24,7 +25,8 @@ and this project follows [Semantic Versioning](https://semver.org/lang/en/).
 | Commit | Description |
 |--------|-------------|
 | [`6f1d19a`](https://github.com/Pappet/harux/commit/6f1d19a86fc580f28d1a031eb059d854e72786b8) | `perf(ui):` rebuild detail panel via DOM builders + CSS collapse |
-| [`{HASH7}`](https://github.com/Pappet/harux/commit/{HASHFULL}) | `perf(store):` rewrite eviction loop in O(n) |
+| [`5994df0`](https://github.com/Pappet/harux/commit/5994df03294bf215d3d5ea16d6061c548b6bd0cb) | `perf(store):` rewrite eviction loop in O(n) |
+| [`{HASH7}`](https://github.com/Pappet/harux/commit/{HASHFULL}) | `perf(store):` Arc-backed messages with HashMap index |
 
 #### 2026-05-09
 
