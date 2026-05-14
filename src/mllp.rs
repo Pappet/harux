@@ -28,6 +28,12 @@ pub struct MllpStats {
 
 impl MllpStats {
     pub fn new() -> Self {
+        Self::default()
+    }
+}
+
+impl Default for MllpStats {
+    fn default() -> Self {
         Self {
             received: Arc::new(AtomicU64::new(0)),
             parsed_ok: Arc::new(AtomicU64::new(0)),
