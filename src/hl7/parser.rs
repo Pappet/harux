@@ -8,8 +8,8 @@ pub fn parse_message(raw: &str, source_addr: &str) -> Result<Hl7Message, String>
     let msg = enrich_pid(msg, delimiters);
     let msg = inject_descriptions(msg);
     let msg = annotate_message_type(msg);
-    let (mut msg, warnings) = validate(msg);
-    msg.validation_warnings = warnings;
+    let mut msg = msg;
+    msg.validation_warnings = validate(&msg);
 
     Ok(msg)
 }
@@ -131,10 +131,9 @@ fn annotate_message_type(mut msg: Hl7Message) -> Hl7Message {
     msg
 }
 
-fn validate(msg: Hl7Message) -> (Hl7Message, Vec<crate::validation::ValidationWarning>) {
+fn validate(msg: &Hl7Message) -> Vec<crate::validation::ValidationWarning> {
     // Fourth pass: validate required segments and fields
-    let warnings = crate::validation::validate_message(&msg);
-    (msg, warnings)
+    crate::validation::validate_message(msg)
 }
 
 fn parse_delimiters(raw: &str) -> Result<Delimiters, String> {
@@ -358,10 +357,11 @@ mod tests {
 
     #[test]
     fn test_validate() {
-        let (msg, _) = parse_structure(SAMPLE_ADT, "127.0.0.1:9999").unwrap();
-        let (_, warnings) = validate(msg);
-        // Without full enrichment, the validation should probably return warnings
-        // but we just test that it runs without panicking.
-        assert!(warnings.len() >= 0); // valid type, just check it returns
+        let valid_adt = "MSH|^~\\&|APP|FAC|APP|FAC|2024||ADT^A01|MSG001|P|2.5\rEVN||2024\rPID|||12345||Smith^John||1980|M\rPV1||I";
+        let (msg, delimiters) = parse_structure(valid_adt, "127.0.0.1:9999").unwrap();
+        let msg = enrich_msh(msg, delimiters);
+        let msg = enrich_pid(msg, delimiters);
+        let warnings = validate(&msg);
+        assert!(warnings.is_empty(), "Expected no warnings for valid ADT, got: {:?}", warnings);
     }
 }
