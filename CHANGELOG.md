@@ -22,7 +22,7 @@ and this project follows [Semantic Versioning](https://semver.org/lang/en/).
 
 | Commit | Description |
 |--------|-------------|
-| [`{HASH7}`](https://github.com/Pappet/harux/commit/{HASHFULL}) | `perf(ui):` rebuild detail panel via DOM builders + CSS collapse |
+| [`6f1d19a`](https://github.com/Pappet/harux/commit/6f1d19a86fc580f28d1a031eb059d854e72786b8) | `perf(ui):` rebuild detail panel via DOM builders + CSS collapse |
 
 #### 2026-05-09
 
