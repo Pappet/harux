@@ -114,8 +114,8 @@ hsl(260, 65%, 60%)  — Indigo      hsl(15,  90%, 58%)  — Coral
 
 ## 2. Typography
 
-- **UI elements:** System fonts — `-apple-system, system-ui, sans-serif`
-- **Data / code:** Monospace — `SF Mono, Cascadia Code, Consolas, monospace`
+- **UI elements:** `Inter`, `-apple-system, system-ui, sans-serif`
+- **Data / code:** `JetBrains Mono`, `SF Mono, Cascadia Code, Consolas, monospace`
 - **Base font size:** 12–13 px for data-dense views
 - **Headers:** Subtle uppercase with small letter-spacing for grid/table headers
 
@@ -161,16 +161,18 @@ Two tooltip styles are in use — choose based on the element:
 
 | Context | Style | Implementation |
 |---|---|---|
-| Field index cell (`field-idx`) | Custom CSS `::after`/`::before` — right of cell, fade-in | `data-desc` attribute + `.has-tooltip` class |
+| Field index cell (`field-idx`) | Inline sub-line text | `.desc-text` element within the cell |
 | Segment header row | Custom CSS `::after` — below header, fade-in | `data-desc` attribute + `.has-seg-tooltip` class |
 | Typical-segment badges | Native `title` attribute | `title="SEG: Description"` on `<span>` |
 
 ### Detail Header Layout
 
-The `.detail-header` is a flex row:
+The `.detail-header` uses a layered structure:
 
-- **Left** (`.detail-header-info`, `flex: 1`): message title → type description → meta line — vertical stack
-- **Right** (`#detail-tags` / `.detail-tags-container`, `flex-shrink: 0`): Bookmark button, tag chips, Add tag input — right-aligned
+- **Row 1:** Type chip + Human-readable title
+- **Row 2 (Optional):** Segment description or validation summary
+- **Row 3:** Monospace metadata string (`patient · MRN · control · version · received`)
+- **Tags Row:** Bookmark button, tag chips, Add tag input in a flex container
 
 ### Validation Badge Colour Semantics
 
@@ -184,12 +186,12 @@ Three distinct colours are used for validation — do not mix them:
 
 The same three-tier logic applies to **typical-segment badges** in the detail view:
 
-| Badge colour | CSS class | Condition |
-|---|---|---|
-| Red | `.typical-seg.missing` | `MISSING_SEGMENT` warning for this segment |
-| Amber | `.typical-seg.warn` | `MISSING_FIELD` warning for a field in this segment |
-| Blue | `.typical-seg.present` | Segment is present with no structural warnings (`INVALID_DATATYPE` alone does **not** turn a badge amber) |
-| Grey | `.typical-seg.absent` | Segment is not present and not required |
+| Badge colour | Symbol | CSS class | Condition |
+|---|---|---|---|
+| Red | `✕` | `.typical-seg.missing` | `MISSING_SEGMENT` warning for this segment |
+| Amber | `⚠` | `.typical-seg.warn` | `MISSING_FIELD` warning for a field in this segment |
+| Blue | `✓` | `.typical-seg.present` | Segment is present with no structural warnings (`INVALID_DATATYPE` alone does **not** turn a badge amber) |
+| Grey | (blank) | `.typical-seg.absent` | Segment is not present and not required |
 
 **Rule:** `INVALID_DATATYPE` warnings appear in the validation panel only. They must never affect typical-segment badge colours — the segment and field are present, only the value format is suspect.
 
