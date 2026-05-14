@@ -65,8 +65,10 @@ async fn list_messages(
 }
 
 async fn get_message(State(state): State<AppState>, Path(id): Path<String>) -> impl IntoResponse {
+    // `Arc<Hl7Message>: Serialize` via serde's blanket impl — no deep clone,
+    // and no intermediate `serde_json::Value` allocation.
     match state.store.get_by_id(&id).await {
-        Some(msg) => Json(serde_json::to_value(msg).unwrap()).into_response(),
+        Some(msg) => Json(msg).into_response(),
         None => (StatusCode::NOT_FOUND, "Message not found").into_response(),
     }
 }

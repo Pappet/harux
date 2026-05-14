@@ -87,6 +87,10 @@ const SOURCE_PALETTE = [
 let seenSources = new Set();
 let colorByPort = false;
 let highlightedSource = null;
+// Per-source message counts maintained incrementally so renderSourceLegend
+// does not iterate `messages[]` on every flush. Recomputed only when
+// labelling changes (toggleColorByPort) or the buffer is replaced.
+let sourceCounts = new Map();
 
 function hashString(str) {
     let hash = 0;
@@ -109,6 +113,8 @@ function registerSource(addr) {
 function toggleColorByPort(e) {
     colorByPort = e.target.checked;
     highlightedSource = null; // reset highlight on toggle
+    // Labels change between "host" and "host:port" — rebuild the count cache.
+    recomputeSourceCounts();
     renderMessageList();
     renderSourceLegend();
     saveSession();
@@ -124,6 +130,15 @@ function toggleHighlightSource(label) {
 function srcLabelFor(addr) {
     if (!addr) return '';
     return colorByPort ? addr : addr.split(':')[0];
+}
+
+function recomputeSourceCounts() {
+    sourceCounts.clear();
+    for (const m of messages) {
+        const label = srcLabelFor(m.source_addr);
+        if (!label) continue;
+        sourceCounts.set(label, (sourceCounts.get(label) || 0) + 1);
+    }
 }
 
 function renderSourceLegend() {
@@ -149,14 +164,6 @@ function renderSourceLegend() {
         return;
     }
 
-    // Build per-source counts from the messages array.
-    const counts = new Map();
-    for (const m of messages) {
-        const label = srcLabelFor(m.source_addr);
-        if (!label) continue;
-        counts.set(label, (counts.get(label) || 0) + 1);
-    }
-
     const uniqueLabels = new Set();
     seenSources.forEach(addr => uniqueLabels.add(srcLabelFor(addr)));
     const sortedLabels = Array.from(uniqueLabels).sort();
@@ -166,7 +173,7 @@ function renderSourceLegend() {
         const isActive = highlightedSource === label;
         const isDimmed = highlightedSource && highlightedSource !== label;
         const classes = `source-chip${isActive ? ' active' : ''}${isDimmed ? ' dimmed' : ''}`;
-        const num = counts.get(label) || 0;
+        const num = sourceCounts.get(label) || 0;
         return `<span class="${classes}" tabindex="0" role="button" aria-label="Filter by source ${escAttr(label)}" onclick="toggleHighlightSource('${escAttr(escJS(label))}')" onkeydown="if(event.key === 'Enter' || event.key === ' ') { event.preventDefault(); toggleHighlightSource('${escAttr(escJS(label))}'); }">
             <span class="dot" style="background:${color};color:${color}"></span>
             ${esc(label)}
@@ -275,6 +282,7 @@ function connectWs() {
             console.info("Server cleared messages via Web UI or API");
             messages = [];
             pendingMessages = [];
+            sourceCounts.clear();
             totalMessagesCount = 0;
             rateWindow.length = 0;
             lastMessageReceivedAt = null;
@@ -299,10 +307,11 @@ function updateMessageTags(summary) {
 
     if (selectedMessage && selectedMessage.id === summary.id) {
         selectedMessage.tags = summary.tags;
+        detailJsonCache.delete(selectedMessage);
         renderDetail();
     }
 
-    renderMessageList();
+    patchRow(summary.id, { tags: summary.tags });
 }
 
 function updateMessageBookmark(summary) {
@@ -314,10 +323,18 @@ function updateMessageBookmark(summary) {
 
     if (selectedMessage && selectedMessage.id === summary.id) {
         selectedMessage.bookmarked = summary.bookmarked;
+        detailJsonCache.delete(selectedMessage);
         renderDetail();
     }
 
-    renderMessageList();
+    // If the bookmarks-only filter is active and a row toggles off, it
+    // needs to vanish from the list — fall back to a full rebuild in that
+    // case. Otherwise just patch the visible row in place.
+    if (showBookmarkedOnly && !summary.bookmarked) {
+        renderMessageList();
+    } else {
+        patchRow(summary.id, { bookmarked: summary.bookmarked });
+    }
 }
 
 // Task 2: buffer incoming messages, flush at most every 250 ms
@@ -325,6 +342,10 @@ function addMessage(summary) {
     pendingMessages.unshift(summary);
     // Register source for color mapping
     registerSource(summary.source_addr);
+    // Keep the source-counts cache current — avoids re-iterating messages[]
+    // on every renderSourceLegend call.
+    const label = srcLabelFor(summary.source_addr);
+    if (label) sourceCounts.set(label, (sourceCounts.get(label) || 0) + 1);
     totalMessagesCount++;
     const now = Date.now();
     rateWindow.push(now);
@@ -344,11 +365,21 @@ function scheduleRender() {
 }
 
 function flushAndRender() {
-    if (pendingMessages.length > 0) {
-        messages = [...pendingMessages, ...messages];
-        pendingMessages = [];
+    if (pendingMessages.length === 0) {
+        updateHeaderCounters();
+        return;
     }
-    renderMessageList();
+    const newOnes = pendingMessages;
+    messages = [...newOnes, ...messages];
+    pendingMessages = [];
+
+    // Hot path: no client-side filters → DOM diff via prepend instead of
+    // tearing down and rebuilding every row.
+    if (canPrependOnly()) {
+        prependMessagesToList(newOnes);
+    } else {
+        renderMessageList();
+    }
     renderSourceLegend();
     updateHeaderCounters();
 }
@@ -363,6 +394,7 @@ async function loadMessages() {
         for (const m of messages) {
             registerSource(m.source_addr);
         }
+        recomputeSourceCounts();
         renderMessageList();
         renderSourceLegend();
         updateHeaderCounters();
@@ -718,6 +750,115 @@ function getParsedQuery(query) {
     return result;
 }
 
+// True when no client-side filters are active, so new messages can be
+// prepended to the DOM directly instead of rebuilding the whole list.
+function canPrependOnly() {
+    return !searchQuery && !showBookmarkedOnly && validationFilter === 0;
+}
+
+// Insert freshly-arrived messages at the top of the list without touching
+// existing rows. Group-header continuity is preserved via a `data-bucket`
+// attribute on each header.
+function prependMessagesToList(newSummaries) {
+    const list = document.getElementById('message-list');
+    const empty = document.getElementById('empty-state');
+    if (!list || !newSummaries.length) return;
+
+    empty.style.display = 'none';
+
+    const firstChild = list.firstElementChild;
+    const firstExistingBucket = firstChild && firstChild.classList && firstChild.classList.contains('group-header')
+        ? firstChild.dataset.bucket || null
+        : null;
+
+    const fragment = document.createDocumentFragment();
+    const now = Date.now();
+    let lastBucket = null;
+    for (const msg of newSummaries) {
+        const bucket = bucketKey(msg, now);
+        if (bucket !== lastBucket) {
+            lastBucket = bucket;
+            if (bucket !== firstExistingBucket) {
+                const header = document.createElement('div');
+                header.className = 'group-header';
+                header.dataset.bucket = bucket;
+                header.textContent = bucketLabel(bucket);
+                fragment.appendChild(header);
+            }
+        }
+        fragment.appendChild(buildMessageRow(msg));
+    }
+    list.insertBefore(fragment, list.firstChild);
+
+    if (autoscroll) {
+        list.scrollTop = 0;
+    }
+}
+
+// Patch a single existing row's mutable fields (tags / bookmark) without
+// re-rendering the whole list. Safe no-op if the row is not currently
+// in the DOM (e.g. filtered out).
+function patchRow(id, mutations) {
+    const list = document.getElementById('message-list');
+    if (!list) return;
+    const row = list.querySelector(`.message-row[data-id="${CSS.escape(id)}"]`);
+    if (!row) return;
+
+    if ('bookmarked' in mutations) {
+        const on = !!mutations.bookmarked;
+        row.classList.toggle('bookmarked', on);
+        const btn = row.querySelector('.msg-bookmark');
+        if (btn) {
+            btn.classList.toggle('active', on);
+            btn.innerHTML = on ? ICONS.starFilled : ICONS.starOutline;
+            btn.setAttribute('aria-label', on ? 'Remove bookmark' : 'Add bookmark');
+        }
+    }
+
+    if ('tags' in mutations) {
+        const row1 = row.querySelector('.msg-row1');
+        if (!row1) return;
+        const oldTags = row1.querySelector('.msg-tags-list');
+        if (oldTags) oldTags.remove();
+        const tagsArr = mutations.tags || [];
+        if (tagsArr.length === 0) return;
+        const tagsEl = document.createElement('span');
+        tagsEl.className = 'msg-tags-list';
+        tagsEl.style.marginTop = '0';
+        const visible = tagsArr.slice(0, 2);
+        for (const t of visible) {
+            const span = document.createElement('span');
+            span.className = 'msg-tag-small';
+            span.textContent = t;
+            tagsEl.appendChild(span);
+        }
+        if (tagsArr.length > 2) {
+            const over = document.createElement('span');
+            over.className = 'msg-tag-small';
+            over.textContent = '+' + (tagsArr.length - 2);
+            tagsEl.appendChild(over);
+        }
+        // Insert before the ACK chip to match buildMessageRow's ordering.
+        const ackEl = row1.querySelector('.msg-ack');
+        if (ackEl) row1.insertBefore(tagsEl, ackEl);
+        else row1.appendChild(tagsEl);
+    }
+}
+
+// Move the .selected class from the previously-selected row to the new one.
+function updateRowSelection(prevId, newId) {
+    const list = document.getElementById('message-list');
+    if (!list) return;
+    if (prevId) {
+        const prev = list.querySelector(`.message-row[data-id="${CSS.escape(prevId)}"]`);
+        if (prev) prev.classList.remove('selected');
+    }
+    if (newId) {
+        const next = list.querySelector(`.message-row[data-id="${CSS.escape(newId)}"]`);
+        if (next) next.classList.add('selected');
+    }
+}
+
 function renderMessageList() {
     const list = document.getElementById('message-list');
     const empty = document.getElementById('empty-state');
@@ -760,6 +901,7 @@ function renderMessageList() {
             currentBucket = bucket;
             const header = document.createElement('div');
             header.className = 'group-header';
+            header.dataset.bucket = bucket;
             header.textContent = bucketLabel(bucket);
             fragment.appendChild(header);
         }
@@ -800,8 +942,9 @@ function matchesSearch(msg, parsedQuery) {
 }
 
 async function selectMessage(id) {
+    const prevId = selectedId;
     selectedId = id;
-    renderMessageList();
+    updateRowSelection(prevId, id);
     saveSession();
 
     try {
@@ -982,176 +1125,334 @@ function switchTab(tab) {
     saveSession();
 }
 
+// --- Detail tab DOM builders ---
+// Helpers build real DOM nodes (no innerHTML on the hot path) so that opening a
+// message with many segments/fields stays cheap and predictable. Segment
+// collapse is a CSS class on .segment-block — the field table is always built
+// once and hidden via styles, so toggling never rebuilds the DOM.
+
+function buildParseErrorEl(parseError) {
+    const wrap = document.createElement('div');
+    wrap.style.cssText = 'color:var(--error);font-family:var(--font-mono);padding:16px;line-height:1.6;';
+    wrap.appendChild(document.createTextNode('⚠ Parse Error'));
+    wrap.appendChild(document.createElement('br'));
+    wrap.appendChild(document.createElement('br'));
+    const inner = document.createElement('span');
+    inner.style.color = 'var(--text-secondary)';
+    inner.textContent = parseError;
+    wrap.appendChild(inner);
+    wrap.appendChild(document.createElement('br'));
+    wrap.appendChild(document.createElement('br'));
+    const hint = document.createElement('span');
+    hint.style.color = 'var(--text-muted)';
+    hint.textContent = 'Raw message is available in the Raw tab.';
+    wrap.appendChild(hint);
+    return wrap;
+}
+
+function buildTypicalChecklist(msg, missingSegWarnings, fieldWarningSegs) {
+    const div = document.createElement('div');
+    div.className = 'seg-checklist';
+    const label = document.createElement('span');
+    label.className = 'seg-checklist-label';
+    label.textContent = 'Typical segments';
+    div.appendChild(label);
+    const presentNames = new Set(msg.segments.map(s => s.name));
+    const descs = msg.typical_segment_descriptions || {};
+    for (const s of msg.typical_segments) {
+        const desc = descs[s];
+        let cls, symbol, titleText;
+        if (missingSegWarnings[s]) {
+            cls = 'missing'; symbol = '✕'; titleText = missingSegWarnings[s];
+        } else if (fieldWarningSegs[s]) {
+            cls = 'warn'; symbol = '⚠'; titleText = (desc ? desc + ' — ' : '') + 'has required fields missing';
+        } else if (presentNames.has(s)) {
+            cls = 'present'; symbol = '✓'; titleText = desc || null;
+        } else {
+            cls = 'absent'; symbol = ''; titleText = desc || null;
+        }
+        const pill = document.createElement('span');
+        pill.className = 'seg-pill ' + cls;
+        if (titleText) pill.title = titleText;
+        pill.textContent = symbol ? s + ' ' + symbol : s;
+        div.appendChild(pill);
+    }
+    return div;
+}
+
+function buildValidationBanner(warnings) {
+    const hasSegErrors = warnings.some(w => w.code === 'MISSING_SEGMENT');
+    const details = document.createElement('details');
+    details.className = hasSegErrors ? 'validation-summary error' : 'validation-summary';
+
+    const summary = document.createElement('summary');
+    const iconSpan = document.createElement('span');
+    iconSpan.className = 'summary-icon';
+    iconSpan.innerHTML = ICONS.warning;
+    summary.appendChild(iconSpan);
+
+    const textSpan = document.createElement('span');
+    textSpan.className = 'summary-text';
+    const strongEl = document.createElement('strong');
+    strongEl.textContent = `${warnings.length} validation ${warnings.length === 1 ? 'warning' : 'warnings'}`;
+    textSpan.appendChild(strongEl);
+
+    const segMissing = warnings.filter(w => w.code === 'MISSING_SEGMENT').map(w => w.segment);
+    const fieldMissing = warnings.filter(w => w.code === 'MISSING_FIELD').map(w => `${w.segment}-${w.field}`);
+    const datatype = warnings.filter(w => w.code === 'INVALID_DATATYPE').map(w => `${w.segment}-${w.field}`);
+
+    function appendListPart(prefix, items, listCls) {
+        textSpan.appendChild(document.createTextNode(' · ' + prefix));
+        const listSpan = document.createElement('span');
+        listSpan.className = listCls;
+        const head = items.slice(0, 3).join(', ');
+        const rest = items.length > 3 ? ` +${items.length - 3} more` : '';
+        listSpan.textContent = head + rest;
+        textSpan.appendChild(listSpan);
+    }
+    if (fieldMissing.length) appendListPart('required field missing in ', fieldMissing, 'seg-list');
+    if (segMissing.length) appendListPart('expected segment not sent: ', segMissing, 'seg-list');
+    if (datatype.length) appendListPart('invalid datatype in ', datatype, 'seg-list-type');
+
+    summary.appendChild(textSpan);
+
+    const chevSpan = document.createElement('span');
+    chevSpan.className = 'summary-chevron';
+    chevSpan.innerHTML = ICONS.chevronRight;
+    summary.appendChild(chevSpan);
+
+    details.appendChild(summary);
+
+    const ul = document.createElement('ul');
+    ul.className = 'validation-warnings-list';
+    for (const w of warnings) {
+        const li = document.createElement('li');
+        const badge = document.createElement('span');
+        badge.className = w.code === 'MISSING_SEGMENT' ? 'validation-seg error'
+            : w.code === 'INVALID_DATATYPE' ? 'validation-seg type'
+            : 'validation-seg';
+        badge.textContent = w.segment + (w.field != null ? '-' + w.field : '');
+        li.appendChild(badge);
+        li.appendChild(document.createTextNode(' ' + w.message));
+        ul.appendChild(li);
+    }
+    details.appendChild(ul);
+    return details;
+}
+
+function buildSegmentBlock(seg, segIdx, key, collapsed, warnFields) {
+    const block = document.createElement('div');
+    block.className = collapsed ? 'segment-block collapsed' : 'segment-block';
+
+    const name = document.createElement('div');
+    name.className = seg.description ? 'segment-name has-seg-tooltip' : 'segment-name';
+    name.dataset.segKey = key;
+    if (seg.description) name.dataset.desc = seg.name + ': ' + seg.description;
+    name.setAttribute('role', 'button');
+    name.tabIndex = 0;
+    name.setAttribute('aria-expanded', String(!collapsed));
+
+    const icon = document.createElement('span');
+    icon.className = 'collapse-icon';
+    icon.innerHTML = collapsed ? ICONS.chevronRight : ICONS.chevronDown;
+    name.appendChild(icon);
+
+    name.appendChild(document.createTextNode(' ' + seg.name + ' '));
+
+    const count = document.createElement('span');
+    count.className = 'field-count';
+    count.textContent = `(${seg.fields.length})`;
+    name.appendChild(count);
+
+    const copyBtn = document.createElement('span');
+    copyBtn.className = 'copy-btn';
+    copyBtn.setAttribute('role', 'button');
+    copyBtn.tabIndex = 0;
+    copyBtn.setAttribute('aria-label', 'Copy segment');
+    copyBtn.title = 'Copy segment';
+    copyBtn.innerHTML = ICONS.copy;
+    copyBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        copySegment(segIdx, copyBtn);
+    });
+    name.appendChild(copyBtn);
+
+    block.appendChild(name);
+
+    const table = document.createElement('table');
+    table.className = 'field-table';
+    const tbody = document.createElement('tbody');
+    for (const f of seg.fields) {
+        tbody.appendChild(buildFieldRow(seg, f, warnFields && warnFields.has(f.index)));
+    }
+    table.appendChild(tbody);
+    block.appendChild(table);
+
+    return block;
+}
+
+function buildFieldRow(seg, f, isWarn) {
+    const tr = document.createElement('tr');
+    if (isWarn) tr.className = 'warn';
+
+    const tdIdx = document.createElement('td');
+    tdIdx.className = 'field-idx';
+    tdIdx.appendChild(document.createTextNode(`${seg.name}-${f.index}`));
+    if (f.description) {
+        const desc = document.createElement('span');
+        desc.className = 'desc-text';
+        desc.textContent = f.description;
+        tdIdx.appendChild(desc);
+    }
+    tr.appendChild(tdIdx);
+
+    const tdVal = document.createElement('td');
+    tdVal.className = 'field-val';
+    if (f.value) {
+        tdVal.setAttribute('role', 'button');
+        tdVal.tabIndex = 0;
+        tdVal.setAttribute('aria-label', 'Copy field value');
+        tdVal.textContent = f.value;
+    } else {
+        const emptySpan = document.createElement('span');
+        emptySpan.className = 'field-empty';
+        emptySpan.textContent = 'empty';
+        tdVal.appendChild(emptySpan);
+    }
+    tr.appendChild(tdVal);
+
+    const tdComp = document.createElement('td');
+    tdComp.className = 'field-components';
+    if (f.components.length > 1) {
+        for (let i = 0; i < f.components.length; i++) {
+            if (i > 0) {
+                const sep = document.createElement('span');
+                sep.style.color = 'var(--text-muted)';
+                sep.textContent = ' ^ ';
+                tdComp.appendChild(sep);
+            }
+            const cs = document.createElement('span');
+            cs.title = `${seg.name}-${f.index}.${i + 1}`;
+            cs.textContent = f.components[i];
+            tdComp.appendChild(cs);
+        }
+    }
+    tr.appendChild(tdComp);
+
+    return tr;
+}
+
+function renderParsedTab(content, msg) {
+    if (msg.parse_error) {
+        content.replaceChildren(buildParseErrorEl(msg.parse_error));
+        return;
+    }
+
+    const warnings = msg.validation_warnings || [];
+    const missingSegWarnings = {};
+    const fieldWarningSegs = {};
+    const missingFieldByseg = new Map();
+    for (const w of warnings) {
+        if (w.code === 'MISSING_SEGMENT') {
+            missingSegWarnings[w.segment] = w.message;
+        } else if (w.code === 'MISSING_FIELD') {
+            fieldWarningSegs[w.segment] = true;
+            if (w.segment != null && w.field != null) {
+                if (!missingFieldByseg.has(w.segment)) missingFieldByseg.set(w.segment, new Set());
+                missingFieldByseg.get(w.segment).add(w.field);
+            }
+        }
+    }
+
+    const children = [];
+    if (msg.typical_segments && msg.typical_segments.length) {
+        children.push(buildTypicalChecklist(msg, missingSegWarnings, fieldWarningSegs));
+    }
+    if (warnings.length) {
+        children.push(buildValidationBanner(warnings));
+    }
+    for (let segIdx = 0; segIdx < msg.segments.length; segIdx++) {
+        const seg = msg.segments[segIdx];
+        const key = `${msg.id}-${segIdx}`;
+        children.push(buildSegmentBlock(seg, segIdx, key, collapsedSegments.has(key), missingFieldByseg.get(seg.name)));
+    }
+    content.replaceChildren(...children);
+}
+
+function renderRawLinesView(container, raw, withCopyButton) {
+    const lines = raw.split(/\r?\n|\r/).filter(l => l.trim());
+    const children = [];
+    if (withCopyButton) {
+        const top = document.createElement('div');
+        top.style.cssText = 'display:flex;justify-content:flex-end;margin-bottom:8px;';
+        const btn = document.createElement('button');
+        btn.className = 'copy-raw-btn';
+        btn.title = 'Copy entire message';
+        btn.innerHTML = ICONS.copy + ' Copy All';
+        btn.addEventListener('click', () => copyRawMessage(btn));
+        top.appendChild(btn);
+        children.push(top);
+    }
+    const view = document.createElement('div');
+    view.className = 'raw-view';
+    for (const line of lines) {
+        const row = document.createElement('div');
+        row.className = 'segment-line';
+        const span = document.createElement('span');
+        span.style.cssText = 'color:var(--accent);font-weight:600';
+        span.textContent = line.substring(0, 3);
+        row.appendChild(span);
+        row.appendChild(document.createTextNode(line.substring(3)));
+        view.appendChild(row);
+    }
+    children.push(view);
+    container.replaceChildren(...children);
+}
+
+function renderAckTab(content, ack) {
+    if (!ack) {
+        const empty = document.createElement('div');
+        empty.className = 'empty-state';
+        const p = document.createElement('p');
+        p.textContent = 'No ACK was generated for this message';
+        empty.appendChild(p);
+        content.replaceChildren(empty);
+        return;
+    }
+    renderRawLinesView(content, ack, false);
+}
+
+// Cache for the JSON tab's stringified payload. WeakMap keys the cache on
+// the message object itself so we don't mutate the data model with a
+// presentation-layer property, and entries are reclaimed automatically when
+// a message is no longer referenced (e.g. after switching selection).
+const detailJsonCache = new WeakMap();
+
+function renderJsonTab(content, msg) {
+    let json = detailJsonCache.get(msg);
+    if (json === undefined) {
+        json = JSON.stringify(msg, null, 2);
+        detailJsonCache.set(msg, json);
+    }
+    const pre = document.createElement('pre');
+    pre.className = 'raw-view';
+    pre.textContent = json;
+    content.replaceChildren(pre);
+}
+
 function renderTab() {
     const content = document.getElementById('detail-content');
     if (!selectedMessage) return;
     const msg = selectedMessage;
 
     if (activeTab === 'parsed') {
-        // Task 1: show parse error banner instead of empty segment table
-        if (msg.parse_error) {
-            content.innerHTML = `<div style="color:var(--error);font-family:var(--font-mono);padding:16px;line-height:1.6;">
-                ⚠ Parse Error<br><br>
-                <span style="color:var(--text-secondary)">${esc(msg.parse_error)}</span><br><br>
-                <span style="color:var(--text-muted)">Raw message is available in the Raw tab.</span>
-            </div>`;
-            return;
-        }
-        // Build warning maps so typical-segment badges can reflect validation state.
-        // missingSegWarnings: segName → warning message (MISSING_SEGMENT)
-        // fieldWarningSegs:   segName → true (has at least one MISSING_FIELD warning)
-        const warnings = msg.validation_warnings || [];
-        const missingSegWarnings = {};
-        const fieldWarningSegs = {};
-        for (const w of warnings) {
-            if (w.code === 'MISSING_SEGMENT') missingSegWarnings[w.segment] = w.message;
-            else if (w.code === 'MISSING_FIELD') fieldWarningSegs[w.segment] = true;
-        }
-
-        const typicalChecklist = (msg.typical_segments && msg.typical_segments.length)
-            ? `<div class="seg-checklist">
-                <span class="seg-checklist-label">Typical segments</span>
-                ${msg.typical_segments.map(s => {
-                const present = msg.segments.some(seg => seg.name === s);
-                const desc = (msg.typical_segment_descriptions || {})[s];
-                let cls, symbol, titleText;
-                if (missingSegWarnings[s]) {
-                    cls = 'missing';
-                    symbol = '✕';
-                    titleText = missingSegWarnings[s];
-                } else if (fieldWarningSegs[s]) {
-                    cls = 'warn';
-                    symbol = '⚠';
-                    titleText = (desc ? desc + ' — ' : '') + 'has required fields missing';
-                } else if (present) {
-                    cls = 'present';
-                    symbol = '✓';
-                    titleText = desc || null;
-                } else {
-                    cls = 'absent';
-                    symbol = '';
-                    titleText = desc || null;
-                }
-                const titleAttr = titleText ? ` title="${escAttr(titleText)}"` : '';
-                const symbolHtml = symbol ? ` ${symbol}` : '';
-                return `<span class="seg-pill ${cls}"${titleAttr}>${esc(s)}${symbolHtml}</span>`;
-            }).join('')}
-               </div>`
-            : '';
-
-        // Validation summary banner — one-line aggregate + collapsible full list.
-        let validationBanner = '';
-        if (warnings.length) {
-            const hasSegErrors = warnings.some(w => w.code === 'MISSING_SEGMENT');
-            const summaryClass = hasSegErrors ? 'validation-summary error' : 'validation-summary';
-
-            const segMissing = warnings.filter(w => w.code === 'MISSING_SEGMENT').map(w => w.segment);
-            const fieldMissing = warnings.filter(w => w.code === 'MISSING_FIELD').map(w => `${w.segment}-${w.field}`);
-            const datatype = warnings.filter(w => w.code === 'INVALID_DATATYPE').map(w => `${w.segment}-${w.field}`);
-
-            const fmtList = (items, max) => {
-                const head = items.slice(0, max).map(x => esc(x)).join(', ');
-                const rest = items.length > max ? ` +${items.length - max} more` : '';
-                return head + rest;
-            };
-
-            const parts = [];
-            if (fieldMissing.length) {
-                parts.push(`required field missing in <span class="seg-list">${fmtList(fieldMissing, 3)}</span>`);
-            }
-            if (segMissing.length) {
-                parts.push(`expected segment not sent: <span class="seg-list">${fmtList(segMissing, 3)}</span>`);
-            }
-            if (datatype.length) {
-                parts.push(`invalid datatype in <span class="seg-list-type">${fmtList(datatype, 3)}</span>`);
-            }
-            const summaryLine = parts.join(' · ');
-            const headline = `${warnings.length} validation ${warnings.length === 1 ? 'warning' : 'warnings'}`;
-
-            validationBanner = `<details class="${summaryClass}">
-                <summary>
-                    <span class="summary-icon">${ICONS.warning}</span>
-                    <span class="summary-text"><strong>${headline}</strong> · ${summaryLine}</span>
-                    <span class="summary-chevron">${ICONS.chevronRight}</span>
-                </summary>
-                <ul class="validation-warnings-list">
-                    ${warnings.map(w => {
-                const badgeCls = w.code === 'MISSING_SEGMENT' ? 'validation-seg error'
-                    : w.code === 'INVALID_DATATYPE' ? 'validation-seg type'
-                    : 'validation-seg';
-                const label = w.segment + (w.field != null ? '-' + w.field : '');
-                return `<li><span class="${badgeCls}">${esc(label)}</span> ${esc(w.message)}</li>`;
-            }).join('')}
-                </ul>
-            </details>`;
-        }
-
-        // Field-level warning lookup: segName → Set of field indices flagged as MISSING_FIELD.
-        const missingFieldByseg = new Map();
-        for (const w of warnings) {
-            if (w.code === 'MISSING_FIELD' && w.segment != null && w.field != null) {
-                if (!missingFieldByseg.has(w.segment)) missingFieldByseg.set(w.segment, new Set());
-                missingFieldByseg.get(w.segment).add(w.field);
-            }
-        }
-
-        content.innerHTML = typicalChecklist + validationBanner + msg.segments.map((seg, segIdx) => {
-            const key = `${msg.id}-${segIdx}`;
-            const collapsed = collapsedSegments.has(key);
-            const icon = collapsed ? ICONS.chevronRight : ICONS.chevronDown;
-            const warnFields = missingFieldByseg.get(seg.name);
-            return `
-            <div class="segment-block">
-                <div class="segment-name ${seg.description ? 'has-seg-tooltip' : ''}" data-seg-key="${key}"${seg.description ? ` data-desc="${escAttr(seg.name + ': ' + seg.description)}"` : ''} role="button" tabindex="0" aria-expanded="${!collapsed}">
-                    <span class="collapse-icon">${icon}</span>
-                    ${esc(seg.name)}
-                    <span class="field-count">(${seg.fields.length})</span>
-                    <span class="copy-btn" onclick="event.stopPropagation(); copySegment(${segIdx}, this)" title="Copy segment" role="button" tabindex="0" aria-label="Copy segment">${ICONS.copy}</span>
-                </div>
-                ${collapsed ? '' : `<table class="field-table">
-                    <tbody>
-                    ${seg.fields.map(f => {
-                const trCls = warnFields && warnFields.has(f.index) ? ' class="warn"' : '';
-                const descLine = f.description ? `<span class="desc-text">${esc(f.description)}</span>` : '';
-                return `
-                        <tr${trCls}>
-                            <td class="field-idx">${esc(seg.name)}-${f.index}${descLine}</td>
-                            <td class="field-val" ${f.value ? 'role="button" tabindex="0" aria-label="Copy field value"' : ''}>${esc(f.value) || '<span class="field-empty">empty</span>'}</td>
-                            <td class="field-components">${f.components.length > 1
-                        ? f.components.map((c, i) => `<span title="${escAttr(seg.name + '-' + f.index + '.' + (i + 1))}">${esc(c)}</span>`).join(' <span style="color:var(--text-muted)">^</span> ')
-                        : ''
-                    }</td>
-                        </tr>`;
-            }).join('')}
-                    </tbody>
-                </table>`}
-            </div>`;
-        }).join('');
+        renderParsedTab(content, msg);
     } else if (activeTab === 'raw') {
-        const lines = msg.raw.split(/\r?\n|\r/).filter(l => l.trim());
-        content.innerHTML = `
-            <div style="display:flex;justify-content:flex-end;margin-bottom:8px;">
-                <button class="copy-raw-btn" onclick="copyRawMessage(this)" title="Copy entire message">${ICONS.copy} Copy All</button>
-            </div>
-            <div class="raw-view">${lines.map(line => {
-            const segName = line.substring(0, 3);
-            return `<div class="segment-line"><span style="color:var(--accent);font-weight:600">${esc(segName)}</span>${esc(line.substring(3))}</div>`;
-        }).join('')
-            }</div>`;
+        renderRawLinesView(content, msg.raw, true);
     } else if (activeTab === 'ack') {
-        const ack = msg.ack_response;
-        if (!ack) {
-            content.innerHTML = `<div class="empty-state"><p>No ACK was generated for this message</p></div>`;
-        } else {
-            const lines = ack.split(/\r?\n|\r/).filter(l => l.trim());
-            content.innerHTML = `<div class="raw-view">${lines.map(line => {
-                const segName = line.substring(0, 3);
-                return `<div class="segment-line"><span style="color:var(--accent);font-weight:600">${esc(segName)}</span>${esc(line.substring(3))}</div>`;
-            }).join('')
-                }</div>`;
-        }
+        renderAckTab(content, msg.ack_response);
     } else if (activeTab === 'json') {
-        content.innerHTML = `<pre class="raw-view">${esc(JSON.stringify(msg, null, 2))}</pre>`;
+        renderJsonTab(content, msg);
     } else if (activeTab === 'diff') {
         renderDiffTab(content, msg);
     }
@@ -1279,12 +1580,25 @@ function toggleDiffIgnoreDynamic(e) {
 }
 
 function toggleSegment(key) {
-    if (collapsedSegments.has(key)) {
-        collapsedSegments.delete(key);
-    } else {
+    const isCollapsed = !collapsedSegments.has(key);
+    if (isCollapsed) {
         collapsedSegments.add(key);
+    } else {
+        collapsedSegments.delete(key);
     }
-    renderTab();
+    // Only update the affected segment-block — no DOM rebuild. The field
+    // table is always rendered; .collapsed hides it via CSS.
+    const content = document.getElementById('detail-content');
+    if (content) {
+        const nameEl = content.querySelector(`.segment-name[data-seg-key="${CSS.escape(key)}"]`);
+        if (nameEl) {
+            const block = nameEl.closest('.segment-block');
+            if (block) block.classList.toggle('collapsed', isCollapsed);
+            nameEl.setAttribute('aria-expanded', String(!isCollapsed));
+            const iconEl = nameEl.querySelector('.collapse-icon');
+            if (iconEl) iconEl.innerHTML = isCollapsed ? ICONS.chevronRight : ICONS.chevronDown;
+        }
+    }
     saveSession();
 }
 
@@ -1338,6 +1652,7 @@ async function clearMessages() {
         if (!resp.ok) throw new Error(`Server error: ${resp.status}`);
         messages = [];
         pendingMessages = [];
+        sourceCounts.clear();
         rateWindow.length = 0;
         lastMessageReceivedAt = null;
         selectedId = null;
