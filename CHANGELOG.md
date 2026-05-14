@@ -25,6 +25,7 @@ and this project follows [Semantic Versioning](https://semver.org/lang/en/).
 
 | Commit | Description |
 |--------|-------------|
+| [`4f0fc13`](https://github.com/Pappet/harux/commit/4f0fc130b439b196b1e12b2ade00295a47e1c441) | `test:` address PR review feedback on parser tests |
 | [`375af95`](https://github.com/Pappet/harux/commit/375af9513e4124d69774d4ba25fc4cc73bf37f9c) | `style:` run cargo fmt and fix clippy |
 | [`40bd525`](https://github.com/Pappet/harux/commit/40bd525d4d7a445c57cba0e41f8ccb7b5a577b9c) | `test:` add parser integration test suite |
 | [`655edfb`](https://github.com/Pappet/harux/commit/655edfbad9d434f75f6428bbb5152bc0a63143a9) | `chore:` organize repo — add docs/ folder, move project docs |

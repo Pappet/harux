@@ -53,10 +53,12 @@ fn test_error_fixtures() {
             let msg = parse_message(&content, "127.0.0.1:9999");
             match msg {
                 Ok(m) => {
-                    let is_error = m.parse_error.is_some()
-                        || !m.validation_warnings.is_empty()
-                        || m.message_type_description.is_none();
-                    assert!(is_error, "Error fixture {:?} parsed cleanly with no warnings, parse errors, or unknown type", path.file_name());
+                    let is_error = m.parse_error.is_some() || !m.validation_warnings.is_empty();
+                    assert!(
+                        is_error,
+                        "Error fixture {:?} parsed cleanly with no warnings or parse errors",
+                        path.file_name()
+                    );
                 }
                 Err(_) => {
                     // Failing parse_message is also an acceptable error outcome
@@ -68,8 +70,41 @@ fn test_error_fixtures() {
 }
 
 #[test]
-fn test_escape_sequence_roundtrip() {
-    // Test that escape sequences are preserved correctly
+fn test_unknown_type_fixtures() {
+    let dir = get_fixture_path("unknown_types");
+    let mut count = 0;
+    for entry in fs::read_dir(dir).expect("unknown_types messages dir not found") {
+        let entry = entry.unwrap();
+        let path = entry.path();
+        if path.is_file() {
+            count += 1;
+            let content = fs::read_to_string(&path).unwrap();
+            let msg = parse_message(&content, "127.0.0.1:9999");
+            match msg {
+                Ok(m) => {
+                    assert!(
+                        m.message_type_description.is_none(),
+                        "Unknown type fixture {:?} unexpectedly had a known type",
+                        path.file_name()
+                    );
+                }
+                Err(e) => {
+                    panic!(
+                        "Unknown type fixture {:?} failed to parse completely: {}",
+                        path.file_name(),
+                        e
+                    );
+                }
+            }
+        }
+    }
+    assert!(count > 0, "No unknown type fixtures found");
+}
+
+#[test]
+fn test_escape_sequence_pass_through() {
+    // Test that escape sequences are preserved literally without being decoded.
+    // Note: Full escape decoding (e.g. \E\ -> \) is deferred to a future milestone.
     let raw = "MSH|^~\\&|SENDING|FAC|||2024||ADT^A01|123|P|2.5\rPID|||123||Smith^John\\E\\Doe";
     let msg = parse_message(raw, "127.0.0.1:9999").unwrap();
     let pid = msg.segments.iter().find(|s| s.name == "PID").unwrap();
@@ -119,7 +154,9 @@ fn test_windows_line_endings() {
 
 #[test]
 fn test_repeated_pid_3() {
-    // Repeated PID-3 using ~
+    // Repeated PID-3 using ~.
+    // Note: This tests a known limitation. Repetitions are currently not split into
+    // separate field objects, so the raw string including the ~ is retained.
     let raw = "MSH|^~\\&|SENDING|FAC|||2024||ADT^A01|123|P|2.5\rPID|||ID1~ID2||Smith^John";
     let msg = parse_message(raw, "127.0.0.1:9999").unwrap();
     assert_eq!(msg.patient_id.unwrap(), "ID1~ID2");
