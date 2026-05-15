@@ -28,19 +28,26 @@ async fn main() -> anyhow::Result<()> {
         if !file_path.is_empty() {
             let condition = rolling_file::RollingConditionBasic::new()
                 .max_size(config.logging.max_size_mb * 1024 * 1024);
-            let appender = rolling_file::BasicRollingFileAppender::new(
+            match rolling_file::BasicRollingFileAppender::new(
                 file_path,
                 condition,
                 config.logging.max_files,
-            )
-            .unwrap_or_else(|e| panic!("Failed to setup file logging at {}: {}", file_path, e));
-
-            let (non_blocking, guard) = tracing_appender::non_blocking(appender);
-            let layer = tracing_subscriber::fmt::layer()
-                .with_ansi(false)
-                .with_writer(non_blocking);
-
-            (Some(layer), Some(guard))
+            ) {
+                Ok(appender) => {
+                    let (non_blocking, guard) = tracing_appender::non_blocking(appender);
+                    let layer = tracing_subscriber::fmt::layer()
+                        .with_ansi(false)
+                        .with_writer(non_blocking);
+                    (Some(layer), Some(guard))
+                }
+                Err(e) => {
+                    // Tracing is not yet initialized — eprintln is the only output channel.
+                    eprintln!(
+                        "WARN harux: failed to set up file logging at '{file_path}': {e}; falling back to stdout"
+                    );
+                    (None, None)
+                }
+            }
         } else {
             (None, None)
         }
