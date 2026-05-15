@@ -1,24 +1,22 @@
 # Harux Configuration
-# All values shown below are the built-in defaults.
-# Uncomment and change only the settings you need.
+# All values shown are the built-in defaults.
+# Change only the settings you need; delete or comment out the rest.
 # Environment variables (MLLP_PORT, WEB_PORT, RUST_LOG) override this file.
 
-# [server]
-# mllp_port = 2575
-# web_port = 8080
+[server]
+mllp_port = 2575
+web_port = 8080
 
-# [logging]
-# level = "info"
-# file = "logs/harux.log" # omit or empty = no file logging
-# max_size_mb = 50            # rotate when file exceeds this size
-# max_files = 5               # keep at most N rotated files
+[logging]
+level = "info"
+# file = "logs/harux.log"  # uncomment to enable file logging (daily rotation)
 
-# [store]
-# max_messages = 10000
-# max_memory_mb = 512
+[store]
+max_messages = 10000
+max_memory_mb = 512
 
-# [mllp]
-# max_message_size_mb = 10
-# read_timeout_secs = 60
-# write_timeout_secs = 30
-# max_connections = 100
+[mllp]
+max_message_size_mb = 10
+read_timeout_secs = 60
+write_timeout_secs = 30
+max_connections = 100

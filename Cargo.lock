@@ -416,7 +416,6 @@ dependencies = [
  "chrono",
  "encoding_rs",
  "mime_guess",
- "rolling-file",
  "rust-embed",
  "serde",
  "serde_json",
@@ -816,15 +815,6 @@ name = "regex-syntax"
 version = "0.8.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a96887878f22d7bad8a3b6dc5b7440e0ada9a245242924394987b21cf2210a4c"
-
-[[package]]
-name = "rolling-file"
-version = "0.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8395b4f860856b740f20a296ea2cd4d823e81a2658cf05ef61be22916026a906"
-dependencies = [
- "chrono",
-]
 
 [[package]]
 name = "rust-embed"

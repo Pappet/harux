@@ -26,28 +26,18 @@ async fn main() -> anyhow::Result<()> {
 
     let (file_layer, _appender_guard) = if let Some(file_path) = &config.logging.file {
         if !file_path.is_empty() {
-            let condition = rolling_file::RollingConditionBasic::new()
-                .max_size(config.logging.max_size_mb * 1024 * 1024);
-            match rolling_file::BasicRollingFileAppender::new(
-                file_path,
-                condition,
-                config.logging.max_files,
-            ) {
-                Ok(appender) => {
-                    let (non_blocking, guard) = tracing_appender::non_blocking(appender);
-                    let layer = tracing_subscriber::fmt::layer()
-                        .with_ansi(false)
-                        .with_writer(non_blocking);
-                    (Some(layer), Some(guard))
-                }
-                Err(e) => {
-                    // Tracing is not yet initialized — eprintln is the only output channel.
-                    eprintln!(
-                        "WARN harux: failed to set up file logging at '{file_path}': {e}; falling back to stdout"
-                    );
-                    (None, None)
-                }
-            }
+            let path = std::path::Path::new(file_path);
+            let dir = path.parent().unwrap_or(std::path::Path::new("."));
+            let file_name = path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("harux.log");
+            let appender = tracing_appender::rolling::daily(dir, file_name);
+            let (non_blocking, guard) = tracing_appender::non_blocking(appender);
+            let layer = tracing_subscriber::fmt::layer()
+                .with_ansi(false)
+                .with_writer(non_blocking);
+            (Some(layer), Some(guard))
         } else {
             (None, None)
         }
