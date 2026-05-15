@@ -109,6 +109,7 @@ async function clearMessages() {
         state.messages = [];
         state.pendingMessages = [];
         state.sourceCounts.clear();
+        state.seenSources.clear();
         state.rateWindow.length = 0;
         state.lastMessageReceivedAt = null;
         state.selectedId = null;

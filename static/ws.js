@@ -55,6 +55,7 @@ function connectWs() {
             state.messages = [];
             state.pendingMessages = [];
             state.sourceCounts.clear();
+            state.seenSources.clear();
             state.totalMessagesCount = 0;
             state.rateWindow.length = 0;
             state.lastMessageReceivedAt = null;
