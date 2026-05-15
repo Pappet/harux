@@ -110,8 +110,8 @@
                         <p>No messages received yet.</p>
                         <div class="cli-block" id="cli-block">
                             <span class="prompt">$</span>
-                            <span class="cmd"><span id="cli-snippet">echo "MSH|^~\\&|TEST|FAC|RECV|ORG|20260101120000||ADT^A01|MSG001|P|2.5" \
-    | mllp-send localhost <span id="cli-port">2575</span></span></span>
+                            <span class="cmd"><span id="cli-snippet">printf '\x0bMSH|^~\\&|TEST|FAC|RECV|ORG|20260101120000||ADT^A01|MSG001|P|2.5\r\x1c\r' \
+    | nc localhost <span id="cli-port">2575</span></span></span>
                             <button class="cmd-copy" id="btn-copy-cli" title="Copy command" aria-label="Copy command">
                                 <svg class="i-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                                     <rect x="9" y="9" width="13" height="13" rx="2" ry="2"/>
