@@ -28,6 +28,7 @@ and this project follows [Semantic Versioning](https://semver.org/lang/en/).
 
 | Commit | Description |
 |--------|-------------|
+| `fix:` Reset parse-error + received counters on /api/clear |
 | [`8534b35`](https://github.com/Pappet/harux/commit/8534b35) | `fix(ui):` Bookmark count badge live update + detail restore on refresh |
 | [`b3ffbfa`](https://github.com/Pappet/harux/commit/b3ffbfa5b0c4b4ce25881264bdda87773ba14504) | `refactor(ui):` split app.js into modules (#136) |
 | [`fb41636`](https://github.com/Pappet/harux/commit/fb41636315214e0195ef1030ae4eb20e454ad35d) | `refactor:` split parse_message into composable passes |

@@ -30,6 +30,15 @@ impl MllpStats {
     pub fn new() -> Self {
         Self::default()
     }
+
+    /// Reset message-derived counters when the store is cleared.
+    /// `active_connections` and `rejected_connections` are live network
+    /// state and are intentionally left untouched.
+    pub fn reset_message_counters(&self) {
+        self.received.store(0, Ordering::Relaxed);
+        self.parsed_ok.store(0, Ordering::Relaxed);
+        self.parse_errors.store(0, Ordering::Relaxed);
+    }
 }
 
 impl Default for MllpStats {
