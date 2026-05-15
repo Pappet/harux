@@ -32,6 +32,12 @@ and this project follows [Semantic Versioning](https://semver.org/lang/en/).
 
 | Commit | Description |
 |--------|-------------|
+| [`661932e`](https://github.com/Pappet/harux/commit/661932e) | `fix:` Graceful file-logger fallback + distinct MLLP error arms (#113, #152) |
+
+#### 2026-05-15 (earlier)
+
+| Commit | Description |
+|--------|-------------|
 | [`279e226`](https://github.com/Pappet/harux/commit/279e226) | `fix(ui):` Drop stale diff pin on clear, rebuild seenSources on lag |
 | [`7536190`](https://github.com/Pappet/harux/commit/7536190) | `fix(ui):` Clear source rail on message clear |
 | [`aa51d74`](https://github.com/Pappet/harux/commit/aa51d74) | `fix(ui):` Persist diff-pinned message across page refresh |
