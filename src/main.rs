@@ -28,7 +28,10 @@ async fn main() -> anyhow::Result<()> {
         if !file_path.is_empty() {
             let path = std::path::Path::new(file_path);
             let dir = path.parent().unwrap_or(std::path::Path::new("."));
-            let file_name = path.file_name().and_then(|n| n.to_str()).unwrap_or("harux.log");
+            let file_name = path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("harux.log");
             let appender = tracing_appender::rolling::daily(dir, file_name);
             let (non_blocking, guard) = tracing_appender::non_blocking(appender);
             let layer = tracing_subscriber::fmt::layer()
