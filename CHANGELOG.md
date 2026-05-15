@@ -34,7 +34,7 @@ and this project follows [Semantic Versioning](https://semver.org/lang/en/).
 
 | Commit | Description |
 |--------|-------------|
-| [`abe3d66`](https://github.com/Pappet/harux/commit/abe3d66aa47d2277f4f786befe776fc10f6f2786) | `fix(export):` include original HL7 payload in Export download |
+| [`f162e12`](https://github.com/Pappet/harux/commit/f162e12b3741a65ae1794f813829ef9e7b76ae5c) | `fix(export):` include original HL7 payload in Export download |
 | [`599b45a`](https://github.com/Pappet/harux/commit/599b45a76eebd19a0434d227ee2a1888cf57d6ed) | `fix(ui):` tone down Raw-tab separators to muted grey |
 | [`dbf409c`](https://github.com/Pappet/harux/commit/dbf409cbe160aa6a6d1b5a98d91b601f25cbb0ec) | `fix(ui):` skip delimiter highlighting when MSH is absent |
 | [`2217b44`](https://github.com/Pappet/harux/commit/2217b44b4b35df73391c176bcb1d791a725c84bd) | `feat(ui):` colourise HL7 delimiters and JSON tokens in detail tabs |
