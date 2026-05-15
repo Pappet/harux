@@ -33,7 +33,7 @@ and this project follows [Semantic Versioning](https://semver.org/lang/en/).
 
 | Commit | Description |
 |--------|-------------|
-| [`9ead1a9`](https://github.com/Pappet/harux/commit/9ead1a9320ac60bdea0a66a2181aa6d2664a6754) | `feat(ui):` colourise HL7 delimiters and JSON tokens in detail tabs |
+| [`2217b44`](https://github.com/Pappet/harux/commit/2217b44b4b35df73391c176bcb1d791a725c84bd) | `feat(ui):` colourise HL7 delimiters and JSON tokens in detail tabs |
 | [`661932e`](https://github.com/Pappet/harux/commit/661932e) | `fix:` Graceful file-logger fallback + distinct MLLP error arms (#113, #152) |
 
 #### 2026-05-15 (earlier)
