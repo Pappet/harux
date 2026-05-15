@@ -10,6 +10,7 @@ and this project follows [Semantic Versioning](https://semver.org/lang/en/).
 ## [Unreleased]
 
 ### Added
+- **Syntax highlighting in Raw / ACK / JSON tabs** — segment names keep their accent colour and now sit alongside coloured HL7 delimiters. The 5 delimiters are auto-detected from MSH-1 / MSH-2, so non-standard separator characters are highlighted just as well as the spec defaults. The JSON tab now distinguishes keys, strings, numbers, booleans and `null` with dedicated colours; pretty-print whitespace is preserved and arbitrary string values are still safely HTML-escaped.
 - **Keyboard accessibility for custom elements** — added `tabindex`, `role="button"`, and Enter/Space keyboard activation for segment headers, copy buttons, field value cells, and tagging elements.
 - **Keyboard accessibility for source chips** — added `tabindex="0"`, `role="button"`, and Enter/Space keyboard activation for source chips in the message list header, allowing filter toggling via keyboard navigation.
 
@@ -32,6 +33,7 @@ and this project follows [Semantic Versioning](https://semver.org/lang/en/).
 
 | Commit | Description |
 |--------|-------------|
+| [`9ead1a9`](https://github.com/Pappet/harux/commit/9ead1a9320ac60bdea0a66a2181aa6d2664a6754) | `feat(ui):` colourise HL7 delimiters and JSON tokens in detail tabs |
 | [`661932e`](https://github.com/Pappet/harux/commit/661932e) | `fix:` Graceful file-logger fallback + distinct MLLP error arms (#113, #152) |
 
 #### 2026-05-15 (earlier)
