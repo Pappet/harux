@@ -28,6 +28,7 @@ and this project follows [Semantic Versioning](https://semver.org/lang/en/).
 
 | Commit | Description |
 |--------|-------------|
+| `fix(ui):` Drop stale diff pin on clear, rebuild seenSources on lag |
 | [`7536190`](https://github.com/Pappet/harux/commit/7536190) | `fix(ui):` Clear source rail on message clear |
 | [`aa51d74`](https://github.com/Pappet/harux/commit/aa51d74) | `fix(ui):` Persist diff-pinned message across page refresh |
 | [`f36ca35`](https://github.com/Pappet/harux/commit/f36ca35) | `fix:` Reset parse-error + received counters on /api/clear |

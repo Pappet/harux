@@ -56,6 +56,7 @@ function connectWs() {
             state.pendingMessages = [];
             state.sourceCounts.clear();
             state.seenSources.clear();
+            state.diffPinnedMessage = null;
             state.totalMessagesCount = 0;
             state.rateWindow.length = 0;
             state.lastMessageReceivedAt = null;
@@ -163,6 +164,10 @@ async function loadMessages() {
         if (!resp.ok) return;
         state.messages = await resp.json();
         state.pendingMessages = [];
+        // Rebuild seenSources from the freshly-loaded buffer. Without this,
+        // a `lagged`-triggered reload would leave stale chips behind for
+        // sources whose messages were evicted on the server.
+        state.seenSources.clear();
         for (const m of state.messages) {
             registerSource(m.source_addr);
         }
