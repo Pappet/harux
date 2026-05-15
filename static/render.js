@@ -866,8 +866,50 @@ function renderParsedTab(content, msg) {
     content.replaceChildren(...children);
 }
 
+// Pull the 5 HL7 delimiter chars from the first MSH segment. Returns null
+// when MSH is absent (e.g. a malformed payload starting with PID): we have
+// no way to know the separators, so colourising guessed defaults would be
+// misleading.
+function detectDelimiters(raw) {
+    const m = raw && raw.match(/MSH(.)(.{0,4})/);
+    if (!m) return null;
+    const field = m[1];
+    const enc = m[2] || '';
+    const chars = [field];
+    if (enc.charAt(0)) chars.push(enc.charAt(0));
+    if (enc.charAt(1)) chars.push(enc.charAt(1));
+    if (enc.charAt(2)) chars.push(enc.charAt(2));
+    if (enc.charAt(3)) chars.push(enc.charAt(3));
+    return new Set(chars);
+}
+
+function appendColorizedSegmentBody(row, text, delimSet) {
+    if (!delimSet || delimSet.size === 0) {
+        row.appendChild(document.createTextNode(text));
+        return;
+    }
+    let buf = '';
+    for (let i = 0; i < text.length; i++) {
+        const ch = text.charAt(i);
+        if (delimSet.has(ch)) {
+            if (buf) {
+                row.appendChild(document.createTextNode(buf));
+                buf = '';
+            }
+            const s = document.createElement('span');
+            s.className = 'hl-delim';
+            s.textContent = ch;
+            row.appendChild(s);
+        } else {
+            buf += ch;
+        }
+    }
+    if (buf) row.appendChild(document.createTextNode(buf));
+}
+
 function renderRawLinesView(container, raw, withCopyButton) {
     const lines = raw.split(/\r?\n|\r/).filter(l => l.trim());
+    const delimSet = detectDelimiters(raw);
     const children = [];
     if (withCopyButton) {
         const top = document.createElement('div');
@@ -886,10 +928,10 @@ function renderRawLinesView(container, raw, withCopyButton) {
         const row = document.createElement('div');
         row.className = 'segment-line';
         const span = document.createElement('span');
-        span.style.cssText = 'color:var(--accent);font-weight:600';
+        span.className = 'hl-seg-name';
         span.textContent = line.substring(0, 3);
         row.appendChild(span);
-        row.appendChild(document.createTextNode(line.substring(3)));
+        appendColorizedSegmentBody(row, line.substring(3), delimSet);
         view.appendChild(row);
     }
     children.push(view);
@@ -909,6 +951,33 @@ function renderAckTab(content, ack) {
     renderRawLinesView(content, ack, false);
 }
 
+// Highlights a pretty-printed JSON string. Walks via regex so whitespace and
+// indentation are preserved verbatim; non-token text is HTML-escaped to keep
+// arbitrary string values safe.
+function highlightJson(json) {
+    const re = /("(?:\\.|[^"\\])*")(\s*:)?|\b(true|false|null)\b|(-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?)/g;
+    let out = '';
+    let last = 0;
+    let m;
+    while ((m = re.exec(json)) !== null) {
+        if (m.index > last) out += esc(json.slice(last, m.index));
+        if (m[1] !== undefined) {
+            const isKey = m[2] !== undefined;
+            const cls = isKey ? 'json-key' : 'json-str';
+            out += `<span class="${cls}">${esc(m[1])}</span>`;
+            if (isKey) out += esc(m[2]);
+        } else if (m[3] !== undefined) {
+            const cls = m[3] === 'null' ? 'json-null' : 'json-bool';
+            out += `<span class="${cls}">${m[3]}</span>`;
+        } else if (m[4] !== undefined) {
+            out += `<span class="json-num">${m[4]}</span>`;
+        }
+        last = re.lastIndex;
+    }
+    if (last < json.length) out += esc(json.slice(last));
+    return out;
+}
+
 function renderJsonTab(content, msg) {
     let json = detailJsonCache.get(msg);
     if (json === undefined) {
@@ -916,8 +985,8 @@ function renderJsonTab(content, msg) {
         detailJsonCache.set(msg, json);
     }
     const pre = document.createElement('pre');
-    pre.className = 'raw-view';
-    pre.textContent = json;
+    pre.className = 'raw-view json-view';
+    pre.innerHTML = highlightJson(json);
     content.replaceChildren(pre);
 }
 

@@ -1404,6 +1404,36 @@ body.resizing * {
     background: var(--bg-tertiary);
 }
 
+.raw-view .hl-seg-name {
+    color: var(--accent);
+    font-weight: 600;
+}
+
+.raw-view .hl-delim {
+    color: var(--text-muted);
+}
+
+.raw-view.json-view .json-key {
+    color: var(--accent);
+}
+
+.raw-view.json-view .json-str {
+    color: var(--success);
+}
+
+.raw-view.json-view .json-num {
+    color: var(--warning);
+}
+
+.raw-view.json-view .json-bool {
+    color: #c678dd;
+}
+
+.raw-view.json-view .json-null {
+    color: var(--text-muted);
+    font-style: italic;
+}
+
 /* Connection indicator */
 .ws-indicator {
     display: flex;
