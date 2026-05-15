@@ -23,6 +23,8 @@ pub struct MessageStore {
     tx: broadcast::Sender<StoreEvent>,
     eviction_notify: Arc<tokio::sync::Notify>,
     eviction_flag: Arc<std::sync::atomic::AtomicBool>,
+    /// Unix-seconds timestamp of the last "all bookmarked" eviction warning (rate-limit to 30 s)
+    last_all_bookmarked_warn: Arc<std::sync::atomic::AtomicI64>,
 }
 
 // Messages are addressed by ID through `messages` (O(1) lookup) and ordered
@@ -56,6 +58,7 @@ impl MessageStore {
             tx,
             eviction_notify: Arc::new(tokio::sync::Notify::new()),
             eviction_flag: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            last_all_bookmarked_warn: Arc::new(std::sync::atomic::AtomicI64::new(0)),
         };
 
         // Spawn background eviction task
@@ -73,7 +76,7 @@ impl MessageStore {
 
         let mut inner = self.inner.write().await;
 
-        let raw_len = msg.raw.len();
+        let raw_len = msg.estimated_bytes();
         let id = msg.id.clone();
         inner.current_bytes += raw_len;
         inner.order.push_back(id.clone());
@@ -262,7 +265,7 @@ impl MessageStore {
                     if bookmarked {
                         kept_bookmarks.push(id);
                     } else if let Some(removed) = inner.messages.remove(&id) {
-                        freed_bytes += removed.raw.len();
+                        freed_bytes += removed.estimated_bytes();
                         evicted += 1;
                     }
                 }
@@ -273,9 +276,21 @@ impl MessageStore {
                 }
 
                 if evicted == 0 {
-                    warn!(
-                        "Eviction triggered but all candidate messages are bookmarked — skipping eviction"
-                    );
+                    let now = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_secs() as i64;
+                    let last = self
+                        .last_all_bookmarked_warn
+                        .load(std::sync::atomic::Ordering::Relaxed);
+                    if now - last >= 30 {
+                        warn!(
+                            "Eviction triggered but all candidate messages are bookmarked \
+                             — skipping eviction (suppressed for 30 s)"
+                        );
+                        self.last_all_bookmarked_warn
+                            .store(now, std::sync::atomic::Ordering::Relaxed);
+                    }
                 } else {
                     inner.current_bytes = inner.current_bytes.saturating_sub(freed_bytes);
                     info!(
@@ -405,6 +420,47 @@ mod tests {
         assert!(store.get_by_id("msg-3").await.is_none());
         // msg-5 (next non-bookmarked candidate) should still be there
         assert!(store.get_by_id("msg-5").await.is_some());
+    }
+
+    #[test]
+    fn test_estimated_bytes_exceeds_raw_len() {
+        let msg = crate::hl7::parser::parse_message(
+            "MSH|^~\\&|APP|FAC|APP|FAC|20240101||ADT^A01|MSG001|P|2.5\rPID|||12345||Smith^John||1980|M\rPV1||I",
+            "127.0.0.1:5000",
+        )
+        .unwrap();
+        assert!(
+            msg.estimated_bytes() > msg.raw.len(),
+            "estimated_bytes ({}) should be larger than raw.len() ({}) because parsed strings duplicate content",
+            msg.estimated_bytes(),
+            msg.raw.len()
+        );
+    }
+
+    #[tokio::test]
+    async fn test_byte_based_eviction_triggers() {
+        // Store with a very small byte limit so a single large message overflows it
+        let store = MessageStore::new(StoreConfig {
+            max_messages: 10_000,
+            max_memory_mb: 1, // 1 MB limit
+        });
+
+        // Insert enough small messages to exceed 1 MB total
+        let payload = "x".repeat(200_000); // 200 KB each
+        for i in 0..10 {
+            let mut msg = Hl7Message::new_empty(payload.clone(), "127.0.0.1:5000".into());
+            msg.id = format!("big-{i}");
+            store.insert(msg).await;
+        }
+
+        // Give eviction task time to run
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+        // Store should have fewer than 10 messages after eviction
+        assert!(
+            store.count().await < 10,
+            "Expected byte-based eviction to reduce message count below 10"
+        );
     }
 
     #[tokio::test]

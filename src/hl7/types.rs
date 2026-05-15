@@ -77,6 +77,54 @@ impl Default for Delimiters {
 }
 
 impl Hl7Message {
+    /// Estimate the heap bytes consumed by this message (raw + all parsed strings).
+    /// Used by the store to track memory more accurately than `raw.len()` alone.
+    pub fn estimated_bytes(&self) -> usize {
+        let mut total = self.raw.len()
+            + self.id.len()
+            + self.source_addr.len()
+            + self.message_type.len()
+            + self.trigger_event.len()
+            + self.message_control_id.len()
+            + self.sending_application.len()
+            + self.sending_facility.len()
+            + self.receiving_application.len()
+            + self.receiving_facility.len()
+            + self.version.len();
+
+        total += self.patient_name.as_deref().map_or(0, str::len);
+        total += self.patient_id.as_deref().map_or(0, str::len);
+        total += self.parse_error.as_deref().map_or(0, str::len);
+        total += self.ack_response.as_deref().map_or(0, str::len);
+        total += self.ack_code.as_deref().map_or(0, str::len);
+        total += self.message_type_description.as_deref().map_or(0, str::len);
+        total += self.charset.as_deref().map_or(0, str::len);
+
+        total += self.tags.iter().map(String::len).sum::<usize>();
+        total += self.typical_segments.iter().map(String::len).sum::<usize>();
+        total += self
+            .typical_segment_descriptions
+            .iter()
+            .map(|(k, v)| k.len() + v.len())
+            .sum::<usize>();
+        total += self
+            .validation_warnings
+            .iter()
+            .map(|w| w.code.len() + w.message.len() + w.segment.len())
+            .sum::<usize>();
+
+        for seg in &self.segments {
+            total += seg.name.len() + seg.raw.len();
+            total += seg.description.as_deref().map_or(0, str::len);
+            for field in &seg.fields {
+                total += field.value.len();
+                total += field.description.as_deref().map_or(0, str::len);
+                total += field.components.iter().map(String::len).sum::<usize>();
+            }
+        }
+        total
+    }
+
     pub fn new_empty(raw: String, source_addr: String) -> Self {
         Self {
             id: Uuid::new_v4().to_string(),
