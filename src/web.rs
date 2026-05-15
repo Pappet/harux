@@ -2,8 +2,9 @@ use crate::mllp::MllpStats;
 use crate::store::{MessageStore, StoreEvent};
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::{Path, Query, State};
-use axum::http::StatusCode;
-use axum::response::{Html, IntoResponse};
+use axum::http::{HeaderName, HeaderValue, StatusCode};
+use axum::middleware;
+use axum::response::{Html, IntoResponse, Response};
 use axum::routing::get;
 use axum::{Json, Router};
 use rust_embed::Embed;
@@ -20,6 +21,23 @@ pub struct AppState {
     pub stats: MllpStats,
     pub mllp_port: u16,
     pub max_connections: usize,
+}
+
+async fn add_security_headers(req: axum::extract::Request, next: middleware::Next) -> Response {
+    let mut res = next.run(req).await;
+    res.headers_mut().insert(
+        HeaderName::from_static("content-security-policy"),
+        HeaderValue::from_static(
+            // No 'unsafe-inline' for scripts — blocks injected event handlers.
+            // 'unsafe-inline' for styles is required for inline style= attributes.
+            // Google Fonts domains remain until issue #142 (self-host fonts) is resolved.
+            "default-src 'self'; \
+             style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; \
+             font-src https://fonts.gstatic.com; \
+             connect-src 'self' ws: wss:",
+        ),
+    );
+    res
 }
 
 pub fn create_router(state: AppState) -> Router {
@@ -45,6 +63,7 @@ pub fn create_router(state: AppState) -> Router {
         // Static files (SPA)
         .fallback(get(static_handler))
         .with_state(state)
+        .layer(middleware::from_fn(add_security_headers))
 }
 
 // --- API Handlers ---
