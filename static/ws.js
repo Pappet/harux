@@ -107,6 +107,7 @@ function updateMessageBookmark(summary) {
     } else {
         patchRow(summary.id, { bookmarked: summary.bookmarked });
     }
+    updateHeaderCounters();
 }
 
 // Buffer incoming messages, flush at most every 250 ms (prevents DOM freeze at high message rates)
@@ -168,6 +169,9 @@ async function loadMessages() {
         renderMessageList();
         renderSourceLegend();
         updateHeaderCounters();
+        if (state.selectedId) {
+            selectMessage(state.selectedId);
+        }
     } catch (e) {
         console.error('Failed to load messages:', e);
     }

@@ -28,6 +28,7 @@ and this project follows [Semantic Versioning](https://semver.org/lang/en/).
 
 | Commit | Description |
 |--------|-------------|
+| `fix(ui):` Bookmark count badge live update + detail restore on refresh |
 | [`b3ffbfa`](https://github.com/Pappet/harux/commit/b3ffbfa5b0c4b4ce25881264bdda87773ba14504) | `refactor(ui):` split app.js into modules (#136) |
 | [`fb41636`](https://github.com/Pappet/harux/commit/fb41636315214e0195ef1030ae4eb20e454ad35d) | `refactor:` split parse_message into composable passes |
 | [`8ed739b`](https://github.com/Pappet/harux/commit/8ed739bbf9ffff46c1a058043eaed547a7e2dd7b) | `perf:` move eviction to background task (#130) |
