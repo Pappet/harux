@@ -137,16 +137,19 @@ async fn handle_connection(
         let n = tokio::select! {
             result = timeout(read_timeout, socket.read(&mut buf)) => {
                 match result {
-                    Ok(Ok(0)) | Err(_) => {
-                        // Connection closed or read timeout
-                        if accumulated.is_empty() {
-                            break;
-                        }
-                        warn!("Read timeout or connection closed from {}", peer);
+                    Ok(Ok(0)) => {
+                        debug!("Client {} disconnected cleanly", peer);
+                        break;
+                    }
+                    Err(_) => {
+                        debug!("Read timeout — closing idle connection from {}", peer);
                         break;
                     }
                     Ok(Ok(n)) => n,
-                    Ok(Err(e)) => return Err(e.into()),
+                    Ok(Err(e)) => {
+                        warn!("Socket error from {}: {}", peer, e);
+                        break;
+                    }
                 }
             }
             _ = shutdown.changed(), if !shutdown_requested => {
