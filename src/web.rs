@@ -39,6 +39,7 @@ pub fn create_router(state: AppState) -> Router {
             axum::routing::post(toggle_bookmark),
         )
         .route("/api/clear", axum::routing::post(clear_messages))
+        .route("/api/export", get(export_raw_hl7))
         // WebSocket
         .route("/ws", get(ws_handler))
         // Static files (SPA)
@@ -106,6 +107,40 @@ async fn clear_messages(State(state): State<AppState>) -> impl IntoResponse {
     state.store.clear().await;
     state.stats.reset_message_counters();
     Json(serde_json::json!({"status": "cleared"}))
+}
+
+/// Stream every stored message as a single MLLP-framed payload.
+///
+/// Each message is wrapped in the original MLLP envelope (VT … FS CR), so the
+/// resulting `.hl7` file can be replayed straight into an MLLP listener (e.g.
+/// `nc host port < harux-export.hl7`) and the framing also serves as an
+/// unambiguous message separator when opening the file in tools that
+/// understand HL7.
+async fn export_raw_hl7(State(state): State<AppState>) -> impl IntoResponse {
+    const MLLP_START: u8 = 0x0B;
+    const MLLP_END_1: u8 = 0x1C;
+    const MLLP_END_2: u8 = 0x0D;
+
+    let raws = state.store.list_all_raw().await;
+    let total: usize = raws.iter().map(|r| r.len() + 3).sum();
+    let mut body = Vec::with_capacity(total);
+    for raw in raws {
+        body.push(MLLP_START);
+        body.extend_from_slice(raw.as_bytes());
+        body.push(MLLP_END_1);
+        body.push(MLLP_END_2);
+    }
+
+    (
+        [
+            (axum::http::header::CONTENT_TYPE, "application/octet-stream"),
+            (
+                axum::http::header::CONTENT_DISPOSITION,
+                "attachment; filename=\"harux-export.hl7\"",
+            ),
+        ],
+        body,
+    )
 }
 
 #[derive(Deserialize)]

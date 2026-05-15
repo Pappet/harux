@@ -89,6 +89,7 @@ Harux is an MLLP server with a real-time web UI for inspecting HL7 v2.x messages
 - `GET /api/search?q=&limit=` — Search messages (client-side in UI, server-side via this endpoint)
 - `GET /api/stats` — Server statistics
 - `POST /api/clear` — Clear all messages
+- `GET /api/export` — Download every stored message as one MLLP-framed `.hl7` file (raw payloads, oldest first, directly replayable)
 - `WS /ws` — Real-time updates ("init", "new_message", "lagged" events)
 
 ### Frontend (`static/`)
