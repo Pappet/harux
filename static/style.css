@@ -1410,8 +1410,7 @@ body.resizing * {
 }
 
 .raw-view .hl-delim {
-    color: var(--warning);
-    font-weight: 600;
+    color: var(--text-muted);
 }
 
 .raw-view.json-view .json-key {
