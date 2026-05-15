@@ -28,6 +28,7 @@ and this project follows [Semantic Versioning](https://semver.org/lang/en/).
 
 | Commit | Description |
 |--------|-------------|
+| `fix(ui):` Persist diff-pinned message across page refresh |
 | [`f36ca35`](https://github.com/Pappet/harux/commit/f36ca35) | `fix:` Reset parse-error + received counters on /api/clear |
 | [`8534b35`](https://github.com/Pappet/harux/commit/8534b35) | `fix(ui):` Bookmark count badge live update + detail restore on refresh |
 | [`b3ffbfa`](https://github.com/Pappet/harux/commit/b3ffbfa5b0c4b4ce25881264bdda87773ba14504) | `refactor(ui):` split app.js into modules (#136) |

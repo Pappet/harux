@@ -78,7 +78,8 @@ function saveSession() {
             highlightedSource: state.highlightedSource,
             showBookmarkedOnly: state.showBookmarkedOnly,
             validationFilter: state.validationFilter,
-            diffIgnoreDynamic: state.diffIgnoreDynamic
+            diffIgnoreDynamic: state.diffIgnoreDynamic,
+            diffPinnedId: state.diffPinnedMessage ? state.diffPinnedMessage.id : null
         }));
     } catch (_) { /* sessionStorage full or unavailable */ }
 }
@@ -98,6 +99,10 @@ function loadSession() {
         if (typeof saved.showBookmarkedOnly === 'boolean') state.showBookmarkedOnly = saved.showBookmarkedOnly;
         if (typeof saved.validationFilter === 'number') state.validationFilter = saved.validationFilter;
         if (typeof saved.diffIgnoreDynamic === 'boolean') state.diffIgnoreDynamic = saved.diffIgnoreDynamic;
+        // The full pinned message can be multi-MB (raw + segments), so we
+        // persist just the ID and re-fetch from /api/messages/:id during
+        // loadMessages(). Stashed on state for the loader to pick up.
+        if (typeof saved.diffPinnedId === 'string') state._pendingDiffPinnedId = saved.diffPinnedId;
         if (Array.isArray(saved.collapsedSegments)) {
             state.collapsedSegments = new Set(saved.collapsedSegments);
         }

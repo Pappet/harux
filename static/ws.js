@@ -169,6 +169,17 @@ async function loadMessages() {
         renderMessageList();
         renderSourceLegend();
         updateHeaderCounters();
+        if (state._pendingDiffPinnedId) {
+            const pinId = state._pendingDiffPinnedId;
+            delete state._pendingDiffPinnedId;
+            try {
+                const r = await fetch(`/api/messages/${pinId}`);
+                if (r.ok) {
+                    state.diffPinnedMessage = await r.json();
+                    renderMessageList();
+                }
+            } catch (_) { /* pinned message gone — silently drop */ }
+        }
         if (state.selectedId) {
             selectMessage(state.selectedId);
         }

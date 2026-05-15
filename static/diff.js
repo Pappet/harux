@@ -155,6 +155,7 @@ async function toggleDiffPin(id, event) {
     if (event) event.stopPropagation();
     if (state.diffPinnedMessage && state.diffPinnedMessage.id === id) {
         state.diffPinnedMessage = null;
+        saveSession();
         renderMessageList();
         renderDetail();
         return;
@@ -167,6 +168,7 @@ async function toggleDiffPin(id, event) {
         console.error('Failed to fetch pinned message:', e);
         return;
     }
+    saveSession();
     renderMessageList();
     renderDetail();
 }
