@@ -31,7 +31,7 @@ function renderSourceLegend() {
                 <summary title="Source options">⋯</summary>
                 <div class="popover">
                     <label>
-                        <input type="checkbox" onchange="toggleColorByPort(event)" ${state.colorByPort ? 'checked' : ''}>
+                        <input type="checkbox" data-action="color-by-port" ${state.colorByPort ? 'checked' : ''}>
                         Color by Port
                     </label>
                 </div>
@@ -50,7 +50,7 @@ function renderSourceLegend() {
         const isDimmed = state.highlightedSource && state.highlightedSource !== label;
         const classes = `source-chip${isActive ? ' active' : ''}${isDimmed ? ' dimmed' : ''}`;
         const num = state.sourceCounts.get(label) || 0;
-        return `<span class="${classes}" tabindex="0" role="button" aria-label="Filter by source ${escAttr(label)}" onclick="toggleHighlightSource('${escAttr(escJS(label))}')" onkeydown="if(event.key === 'Enter' || event.key === ' ') { event.preventDefault(); toggleHighlightSource('${escAttr(escJS(label))}'); }">
+        return `<span class="${classes}" tabindex="0" role="button" aria-label="Filter by source ${escAttr(label)}" data-action="toggle-source" data-source="${escAttr(label)}">
             <span class="dot" style="background:${color};color:${color}"></span>
             ${esc(label)}
             <span class="num">${num}</span>
@@ -64,7 +64,7 @@ function renderSourceLegend() {
             <summary title="Source options">⋯</summary>
             <div class="popover">
                 <label>
-                    <input type="checkbox" onchange="toggleColorByPort(event)" ${state.colorByPort ? 'checked' : ''}>
+                    <input type="checkbox" data-action="color-by-port" ${state.colorByPort ? 'checked' : ''}>
                     Color by Port
                 </label>
             </div>
@@ -264,7 +264,7 @@ function buildMessageRow(msg) {
             </div>
         </div>
         <div class="msg-actions">
-            <button class="${bookmarkClass}" aria-label="${bookmarkLabel}" onclick="toggleBookmark('${msg.id}', event)" title="Bookmark">${bookmarkSvg}</button>
+            <button class="${bookmarkClass}" aria-label="${bookmarkLabel}" data-action="bookmark" data-id="${msg.id}" title="Bookmark">${bookmarkSvg}</button>
         </div>
     `;
     return row;
@@ -563,19 +563,19 @@ function renderDetail() {
     const pinLabel = isPinned ? 'Pinned' : 'Pin diff';
 
     const tagChipsHtml = (msg.tags || []).map(t =>
-        `<span class="msg-tag">${esc(t)}<span class="msg-tag-remove" role="button" tabindex="0" onclick="removeTag('${msg.id}', '${escAttr(escJS(t))}')" onkeydown="if(event.key === 'Enter' || event.key === ' ') { event.preventDefault(); removeTag('${msg.id}', '${escAttr(escJS(t))}'); }" title="Remove tag" aria-label="Remove tag">${ICONS.xMark}</span></span>`
+        `<span class="msg-tag">${esc(t)}<span class="msg-tag-remove" role="button" tabindex="0" data-action="remove-tag" data-id="${msg.id}" data-tag="${escAttr(t)}" title="Remove tag" aria-label="Remove tag">${ICONS.xMark}</span></span>`
     ).join('');
     const tagAddHtml = `
         <div class="msg-tag-add">
-            <input type="text" id="add-tag-input" placeholder="Add tag" aria-label="Add tag" onkeypress="if(event.key === 'Enter') addTag('${msg.id}', this.value)">
-            <button onclick="addTag('${msg.id}', document.getElementById('add-tag-input').value)" aria-label="Submit tag">+</button>
+            <input type="text" id="add-tag-input" placeholder="Add tag" aria-label="Add tag" data-action="add-tag-input" data-id="${msg.id}">
+            <button data-action="add-tag" data-id="${msg.id}" aria-label="Submit tag">+</button>
         </div>
     `;
 
     document.getElementById('detail-actions').innerHTML = `
         <div id="detail-tags" class="detail-tags-inline">${tagChipsHtml}${tagAddHtml}</div>
-        <button class="${bookmarkClass}" aria-label="${bookmarkLabel}" onclick="toggleBookmark('${msg.id}', event)" title="Toggle bookmark">${bookmarkSvg}<span class="btn-label">${bookmarkLabel}</span></button>
-        <button class="${pinClass}" aria-label="${pinLabel}" onclick="toggleDiffPin('${msg.id}', event)" title="Pin this message as the diff reference">${ICONS.pin}<span class="btn-label">${pinLabel}</span></button>
+        <button class="${bookmarkClass}" aria-label="${bookmarkLabel}" data-action="bookmark" data-id="${msg.id}" title="Toggle bookmark">${bookmarkSvg}<span class="btn-label">${bookmarkLabel}</span></button>
+        <button class="${pinClass}" aria-label="${pinLabel}" data-action="diff-pin" data-id="${msg.id}" title="Pin this message as the diff reference">${ICONS.pin}<span class="btn-label">${pinLabel}</span></button>
     `;
 
     // Segments tab badge — segment count.

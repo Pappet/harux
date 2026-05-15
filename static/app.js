@@ -258,6 +258,22 @@ function handleInteraction(e) {
         return;
     }
 
+    // data-action delegation (replaces inline onclick= handlers)
+    const actionEl = e.target.closest('[data-action]');
+    if (actionEl) {
+        const action = actionEl.dataset.action;
+        const id = actionEl.dataset.id;
+        if (action === 'bookmark') { toggleBookmark(id, e); return; }
+        if (action === 'toggle-source') { toggleHighlightSource(actionEl.dataset.source); return; }
+        if (action === 'remove-tag') { removeTag(id, actionEl.dataset.tag); return; }
+        if (action === 'add-tag') {
+            const input = document.getElementById('add-tag-input');
+            if (input) addTag(id, input.value);
+            return;
+        }
+        if (action === 'diff-pin') { toggleDiffPin(id, e); return; }
+    }
+
     const segEl = e.target.closest('.segment-name');
     if (segEl && !copyBtn) toggleSegment(segEl.dataset.segKey);
 
@@ -271,6 +287,28 @@ function handleInteraction(e) {
 
 // Restore session state BEFORE first render so restored values take effect
 loadSession();
+
+// Wire up static buttons that previously used inline onclick= in index.html.
+document.getElementById('btn-export').addEventListener('click', exportMessages);
+document.getElementById('btn-clear').addEventListener('click', clearMessages);
+document.getElementById('btn-pause').addEventListener('click', togglePause);
+document.getElementById('btn-autoscroll').addEventListener('click', toggleAutoscroll);
+document.getElementById('btn-bookmarks').addEventListener('click', toggleBookmarkFilter);
+document.getElementById('btn-validation').addEventListener('click', toggleValidationFilter);
+document.getElementById('btn-copy-cli').addEventListener('click', function () { copyCliSnippet(this); });
+
+// Tab buttons — delegate on the container via data-tab attribute.
+document.querySelector('.detail-tabs').addEventListener('click', (e) => {
+    const btn = e.target.closest('.detail-tab');
+    if (btn && btn.dataset.tab) switchTab(btn.dataset.tab);
+});
+
+// Checkboxes in innerHTML-generated markup (source legend, diff options bar).
+document.addEventListener('change', (e) => {
+    const action = e.target.dataset.action;
+    if (action === 'color-by-port') toggleColorByPort(e);
+    if (action === 'diff-ignore-dynamic') toggleDiffIgnoreDynamic(e);
+});
 
 // Search is purely client-side (filters the local `messages` array via matchesSearch).
 // The debounce is a forward-looking safeguard: if a future /api/search call is added,
@@ -287,9 +325,26 @@ document.getElementById('search-input').addEventListener('input', (e) => {
 
 document.addEventListener('click', handleInteraction);
 document.addEventListener('keydown', (e) => {
+    const activeEl = document.activeElement;
+    if (!activeEl) return;
+
+    // Enter in the add-tag input submits the tag.
+    if (e.key === 'Enter' && activeEl.dataset.action === 'add-tag-input') {
+        e.preventDefault();
+        addTag(activeEl.dataset.id, activeEl.value);
+        return;
+    }
+
     if (e.key === 'Enter' || e.key === ' ') {
-        const activeEl = document.activeElement;
-        if (activeEl && (activeEl.classList.contains('segment-name') || activeEl.classList.contains('field-val') || activeEl.classList.contains('copy-btn'))) {
+        // Activate data-action elements with keyboard (toggle-source, remove-tag, etc.)
+        const action = activeEl.dataset.action;
+        if (action && action !== 'add-tag-input') {
+            e.preventDefault();
+            handleInteraction({ target: activeEl, type: 'click', stopPropagation: () => e.stopPropagation() });
+            return;
+        }
+
+        if (activeEl.classList.contains('segment-name') || activeEl.classList.contains('field-val') || activeEl.classList.contains('copy-btn')) {
             e.preventDefault();
             handleInteraction({
                 target: activeEl,
