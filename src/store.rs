@@ -123,6 +123,18 @@ impl MessageStore {
         self.inner.read().await.messages.get(id).cloned()
     }
 
+    /// Snapshot of every stored message's raw HL7 payload, in insertion order
+    /// (oldest first — so replaying the result preserves the original sequence).
+    pub async fn list_all_raw(&self) -> Vec<String> {
+        let inner = self.inner.read().await;
+        inner
+            .order
+            .iter()
+            .filter_map(|id| inner.messages.get(id))
+            .map(|arc| arc.raw.clone())
+            .collect()
+    }
+
     /// Search messages by filter text (matches message type, patient name, facility, etc.)
     pub async fn search(&self, query: &str, limit: usize) -> Vec<Hl7MessageSummary> {
         let query_lower = query.to_lowercase();

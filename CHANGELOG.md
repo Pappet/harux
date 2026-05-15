@@ -15,6 +15,7 @@ and this project follows [Semantic Versioning](https://semver.org/lang/en/).
 - **Keyboard accessibility for source chips** — added `tabindex="0"`, `role="button"`, and Enter/Space keyboard activation for source chips in the message list header, allowing filter toggling via keyboard navigation.
 
 ### Fixed
+- **Export now delivers the original HL7 payload** — the Export button previously called `/api/messages?limit=100000`, which returns `Hl7MessageSummary` (metadata + ACK only — no `raw`, no `segments`). The downloaded JSON therefore carried just the outbound ACK and patient summary; the original inbound HL7 message was missing, making the export useless for replay or external analysis. Added a new `GET /api/export` endpoint that streams every stored message's raw payload back as one MLLP-framed `.hl7` file (oldest first, wrapped in VT … FS CR), and switched the frontend `exportMessages()` to download it as `harux-export-<timestamp>.hl7`. The resulting file is directly replayable into any MLLP listener (`nc host port < harux-export.hl7`). New `MessageStore::list_all_raw` provides the snapshot in insertion order.
 - **File-logger setup failure no longer panics** — a missing or unwritable log directory previously called `panic!` before tracing was initialized, causing the server to die on startup on Windows Server when the log path was misconfigured. Now falls back to stdout with a `WARN` line printed to stderr via `eprintln!` (tracing is not yet available at that point). (#113)
 - **MLLP read-loop distinguishes EOF, timeout, and socket errors** — the three cases were collapsed into one `Ok(Ok(0)) | Err(_)` arm, so real socket errors were logged as "connection closed" and a timeout with partial data produced no log at all. Each case now has its own arm: clean EOF → `debug!`, read timeout → `debug!`, socket error → `warn!` with the error detail. (#152)
 
@@ -33,6 +34,7 @@ and this project follows [Semantic Versioning](https://semver.org/lang/en/).
 
 | Commit | Description |
 |--------|-------------|
+| [`abe3d66`](https://github.com/Pappet/harux/commit/abe3d66aa47d2277f4f786befe776fc10f6f2786) | `fix(export):` include original HL7 payload in Export download |
 | [`599b45a`](https://github.com/Pappet/harux/commit/599b45a76eebd19a0434d227ee2a1888cf57d6ed) | `fix(ui):` tone down Raw-tab separators to muted grey |
 | [`dbf409c`](https://github.com/Pappet/harux/commit/dbf409cbe160aa6a6d1b5a98d91b601f25cbb0ec) | `fix(ui):` skip delimiter highlighting when MSH is absent |
 | [`2217b44`](https://github.com/Pappet/harux/commit/2217b44b4b35df73391c176bcb1d791a725c84bd) | `feat(ui):` colourise HL7 delimiters and JSON tokens in detail tabs |
