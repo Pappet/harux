@@ -866,22 +866,28 @@ function renderParsedTab(content, msg) {
     content.replaceChildren(...children);
 }
 
-// Pull the 5 HL7 delimiter chars from the first MSH segment. Falls back to
-// the spec defaults when MSH is absent or truncated (e.g. NACK-only payload).
+// Pull the 5 HL7 delimiter chars from the first MSH segment. Returns null
+// when MSH is absent (e.g. a malformed payload starting with PID): we have
+// no way to know the separators, so colourising guessed defaults would be
+// misleading.
 function detectDelimiters(raw) {
     const m = raw && raw.match(/MSH(.)(.{0,4})/);
-    const field = (m && m[1]) || '|';
-    const enc = (m && m[2]) || '^~\\&';
-    return new Set([
-        field,
-        enc.charAt(0) || '^',
-        enc.charAt(1) || '~',
-        enc.charAt(2) || '\\',
-        enc.charAt(3) || '&',
-    ]);
+    if (!m) return null;
+    const field = m[1];
+    const enc = m[2] || '';
+    const chars = [field];
+    if (enc.charAt(0)) chars.push(enc.charAt(0));
+    if (enc.charAt(1)) chars.push(enc.charAt(1));
+    if (enc.charAt(2)) chars.push(enc.charAt(2));
+    if (enc.charAt(3)) chars.push(enc.charAt(3));
+    return new Set(chars);
 }
 
 function appendColorizedSegmentBody(row, text, delimSet) {
+    if (!delimSet || delimSet.size === 0) {
+        row.appendChild(document.createTextNode(text));
+        return;
+    }
     let buf = '';
     for (let i = 0; i < text.length; i++) {
         const ch = text.charAt(i);

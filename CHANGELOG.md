@@ -10,7 +10,7 @@ and this project follows [Semantic Versioning](https://semver.org/lang/en/).
 ## [Unreleased]
 
 ### Added
-- **Syntax highlighting in Raw / ACK / JSON tabs** — segment names keep their accent colour and now sit alongside coloured HL7 delimiters. The 5 delimiters are auto-detected from MSH-1 / MSH-2, so non-standard separator characters are highlighted just as well as the spec defaults. The JSON tab now distinguishes keys, strings, numbers, booleans and `null` with dedicated colours; pretty-print whitespace is preserved and arbitrary string values are still safely HTML-escaped.
+- **Syntax highlighting in Raw / ACK / JSON tabs** — segment names keep their accent colour and now sit alongside coloured HL7 delimiters. The 5 delimiters are auto-detected from MSH-1 / MSH-2, so non-standard separator characters are highlighted just as well as the spec defaults. When MSH is missing entirely (malformed payload) no delimiter colouring is applied — we don't pretend to know separators we never saw. The JSON tab now distinguishes keys, strings, numbers, booleans and `null` with dedicated colours; pretty-print whitespace is preserved and arbitrary string values are still safely HTML-escaped.
 - **Keyboard accessibility for custom elements** — added `tabindex`, `role="button"`, and Enter/Space keyboard activation for segment headers, copy buttons, field value cells, and tagging elements.
 - **Keyboard accessibility for source chips** — added `tabindex="0"`, `role="button"`, and Enter/Space keyboard activation for source chips in the message list header, allowing filter toggling via keyboard navigation.
 
