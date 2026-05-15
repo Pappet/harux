@@ -104,6 +104,7 @@ async fn get_stats(State(state): State<AppState>) -> impl IntoResponse {
 
 async fn clear_messages(State(state): State<AppState>) -> impl IntoResponse {
     state.store.clear().await;
+    state.stats.reset_message_counters();
     Json(serde_json::json!({"status": "cleared"}))
 }
 

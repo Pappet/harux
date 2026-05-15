@@ -154,7 +154,12 @@ src/
 static/
 ├── index.html       # HTML skeleton
 ├── style.css        # Dark theme, CSS variables
-└── app.js           # SPA logic (vanilla JS)
+├── state.js         # `state` object (all mutable globals)
+├── util.js          # Constants + pure helpers
+├── ws.js            # WebSocket + ingestion + stats polling
+├── render.js        # List, legend, health pills, detail-panel tabs
+├── diff.js          # Diff tab (renderDiffTab + builders)
+└── app.js           # Init + UI handlers (onclick) + splitter
 tests/
 ├── test.sh          # Linux/macOS functional + load test (netcat)
 └── test.ps1         # Windows functional + load test (.NET TcpClient, 1000 msg)
