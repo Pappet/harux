@@ -37,6 +37,7 @@ and this project follows [Semantic Versioning](https://semver.org/lang/en/).
 - **MLLP read-loop distinguishes EOF, timeout, and socket errors** — the three cases were collapsed into one `Ok(Ok(0)) | Err(_)` arm, so real socket errors were logged as "connection closed" and a timeout with partial data produced no log at all. Each case now has its own arm: clean EOF → `debug!`, read timeout → `debug!`, socket error → `warn!` with the error detail. (#152)
 
 ### Changed
+- **Dependency upgrade — axum 0.7 → 0.8, tower-http 0.5 → 0.6** — updated to the latest axum major version. Route path syntax updated from `/:param` to `/{param}` per axum 0.8 convention. `Message::Text` now wraps `Utf8Bytes` instead of `String`; three call sites updated with `.into()`. (#147)
 - **Tech debt — `dictionary.rs` allow-attr removal + dead version parameter** — removed the file-level `#![allow(dead_code)]` and `#![allow(unused_variables)]` suppressors. The unused `version` parameter was eliminated from `get_field_description` and `inject_descriptions`; all call sites updated. Residually-unused items (`VersionDef::version` field needed for JSON deserialization, `get_field_description` as future public API) carry targeted `#[allow(dead_code)]` with explanatory comments. (#127)
 - **Refactor — `validation.rs` deduplication** — the three near-identical `warnings.push(...)` blocks for OBX-2, OBX-3, and OBX-11 now use the existing `warn_missing_field` helper. The inline ADT PV1-required event list is extracted to a `PV1_REQUIRED_ADT_EVENTS` module-level constant. (#124, #125)
 - **Refactor — NACK builder in `parser.rs`** — added `build_nack(reason)` alongside `build_ack` so both ACK and NACK responses share the same code path. The hardcoded MSH string literal in `mllp.rs` is replaced with a call to `build_nack`. (#117)
@@ -66,6 +67,7 @@ and this project follows [Semantic Versioning](https://semver.org/lang/en/).
 | [`1b9fb8f`](https://github.com/Pappet/harux/commit/1b9fb8f) | `fix(store):` handle non-ASCII needles in contains_ignore_ascii_case (#133) |
 | [`7c1c18f`](https://github.com/Pappet/harux/commit/7c1c18f) | `fix(ui):` self-host Inter + JetBrains Mono, remove Google Fonts CDN (#142) |
 | [`d42f605`](https://github.com/Pappet/harux/commit/d42f605) | `fix(ui):` self-host fonts, strict CSP, font cache headers (#142) |
+| [`16ece72`](https://github.com/Pappet/harux/commit/16ece72) | `chore(deps):` upgrade axum 0.7→0.8, tower-http 0.5→0.6 (#147) |
 
 #### 2026-05-15
 

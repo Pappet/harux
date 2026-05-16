@@ -18,8 +18,8 @@ all = "warn"
 tokio = { version = "1", features = ["rt-multi-thread", "net", "sync", "time", "macros", "io-util", "signal"] }
 
 # Web framework + WebSocket
-axum = { version = "0.7", features = ["ws"] }
-tower-http = { version = "0.5", features = ["cors", "fs"] }
+axum = { version = "0.8", features = ["ws"] }
+tower-http = { version = "0.6", features = ["cors", "fs"] }
 
 # Serialization
 serde = { version = "1", features = ["derive", "rc"] }
