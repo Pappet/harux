@@ -56,16 +56,16 @@ pub fn create_router(state: AppState) -> Router {
     Router::new()
         // API routes
         .route("/api/messages", get(list_messages))
-        .route("/api/messages/:id", get(get_message))
+        .route("/api/messages/{id}", get(get_message))
         .route("/api/search", get(search_messages))
         .route("/api/stats", get(get_stats))
-        .route("/api/messages/:id/tags", axum::routing::post(add_tag))
+        .route("/api/messages/{id}/tags", axum::routing::post(add_tag))
         .route(
-            "/api/messages/:id/tags/:tag",
+            "/api/messages/{id}/tags/{tag}",
             axum::routing::delete(remove_tag),
         )
         .route(
-            "/api/messages/:id/bookmark",
+            "/api/messages/{id}/bookmark",
             axum::routing::post(toggle_bookmark),
         )
         .route("/api/clear", axum::routing::post(clear_messages))
@@ -235,7 +235,7 @@ async fn send_ws_event(
         None => serde_json::json!({"type": event_type}),
     };
     socket
-        .send(Message::Text(payload.to_string()))
+        .send(Message::Text(payload.to_string().into()))
         .await
         .is_ok()
 }
@@ -247,7 +247,9 @@ async fn handle_ws(mut socket: WebSocket, state: AppState) {
     let count = state.store.count().await;
     let _ = socket
         .send(Message::Text(
-            serde_json::json!({"type": "init", "total": count}).to_string(),
+            serde_json::json!({"type": "init", "total": count})
+                .to_string()
+                .into(),
         ))
         .await;
 
@@ -278,7 +280,7 @@ async fn handle_ws(mut socket: WebSocket, state: AppState) {
                     }
                     Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
                         let _ = socket.send(Message::Text(
-                            serde_json::json!({"type": "lagged", "missed": n}).to_string()
+                            serde_json::json!({"type": "lagged", "missed": n}).to_string().into()
                         )).await;
                     }
                     Err(_) => break,
