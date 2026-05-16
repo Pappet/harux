@@ -217,7 +217,7 @@ async function pollStats() {
         const rejectedValue = document.getElementById('pill-rejected-value');
         if (rejectedPill && rejectedValue) {
             if (stats.rejected_connections > 0) {
-                rejectedPill.style.display = '';
+                rejectedPill.style.display = 'inline-flex';
                 rejectedValue.textContent = stats.rejected_connections;
                 rejectedPill.classList.add('warn-pill');
             } else {
