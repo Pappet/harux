@@ -24,6 +24,9 @@ and this project follows [Semantic Versioning](https://semver.org/lang/en/).
 - **Keyboard accessibility for custom elements** — added `tabindex`, `role="button"`, and Enter/Space keyboard activation for segment headers, copy buttons, field value cells, and tagging elements.
 - **Keyboard accessibility for source chips** — added `tabindex="0"`, `role="button"`, and Enter/Space keyboard activation for source chips in the message list header, allowing filter toggling via keyboard navigation.
 
+### Changed
+- **Refactor — `message_types.rs` data moved to JSON asset** — the 800+ `m.insert(...)` calls that made `message_types.rs` 851 lines are replaced by `src/assets/hl7/message_types.json` (106 entries, embedded via `include_str!`). `MessageTypeInfo` now derives `serde::Deserialize` and uses owned `String`/`Vec<String>` instead of `&'static str`/`&'static [&'static str]`; the static registry is populated by `serde_json::from_str`. Adding or editing message types now only requires touching the JSON file. (#126)
+
 ### Fixed
 - **MLLP frame extraction — O(n²) re-scan eliminated** — `extract_mllp_frame` restarted its end-sequence search from the beginning of the accumulated buffer on every partial read. For a 3 MB MDM payload arriving in 64 KB chunks (~47 reads), this produced ~70 MB of redundant scanning. Added a `scan_from` parameter; `handle_connection` tracks the high-water-mark position across reads and passes it in, so only newly received bytes are searched for `FS+CR`. A `scan_offset = accumulated.len().saturating_sub(1)` update after each incomplete read, reset to 0 after consuming a frame, ensures the 2-byte end sequence is never missed at a chunk boundary. Added a unit test verifying consistent results between incremental and full-scan modes. (#118)
 - **Accurate memory accounting in the store** — `MessageStore::insert` and the eviction loop previously measured message size using `raw.len()` only, ignoring the 2–3× overhead from parsed segment/field/component strings, descriptions, validation warnings, and dictionary metadata. Added `Hl7Message::estimated_bytes()` that sums all heap-allocated string content across every field of the parsed message. Both `insert` (accumulates `current_bytes`) and the eviction loop (`freed_bytes` per evicted message) now call this method, making the 512 MB size limit meaningful for MDM messages with Base64-encoded attachments. (#131)
@@ -63,6 +66,7 @@ and this project follows [Semantic Versioning](https://semver.org/lang/en/).
 | Commit | Description |
 |--------|-------------|
 | [`1b9fb8f`](https://github.com/Pappet/harux/commit/1b9fb8f) | `fix(store):` handle non-ASCII needles in contains_ignore_ascii_case (#133) |
+| [`PLACEHOLDER`](https://github.com/Pappet/harux/commit/PLACEHOLDER) | `refactor(hl7):` move message_types registry to JSON asset (#126) |
 
 #### 2026-05-15
 

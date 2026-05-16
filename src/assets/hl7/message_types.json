@@ -1,0 +1,1156 @@
+{
+  "ACK": {
+    "description": "General Acknowledgement",
+    "typical_segments": [
+      "MSH",
+      "MSA",
+      "ERR"
+    ]
+  },
+  "ADT^A01": {
+    "description": "Admit / Visit Notification",
+    "typical_segments": [
+      "MSH",
+      "EVN",
+      "PID",
+      "PD1",
+      "NK1",
+      "PV1",
+      "PV2",
+      "OBX",
+      "AL1",
+      "DG1"
+    ]
+  },
+  "ADT^A02": {
+    "description": "Transfer a Patient",
+    "typical_segments": [
+      "MSH",
+      "EVN",
+      "PID",
+      "PD1",
+      "PV1",
+      "PV2"
+    ]
+  },
+  "ADT^A03": {
+    "description": "Discharge / End Visit",
+    "typical_segments": [
+      "MSH",
+      "EVN",
+      "PID",
+      "PD1",
+      "PV1",
+      "PV2",
+      "DG1",
+      "DRG"
+    ]
+  },
+  "ADT^A04": {
+    "description": "Register a Patient",
+    "typical_segments": [
+      "MSH",
+      "EVN",
+      "PID",
+      "PD1",
+      "NK1",
+      "PV1",
+      "PV2",
+      "AL1",
+      "DG1",
+      "GT1",
+      "IN1"
+    ]
+  },
+  "ADT^A05": {
+    "description": "Pre-Admit a Patient",
+    "typical_segments": [
+      "MSH",
+      "EVN",
+      "PID",
+      "PD1",
+      "NK1",
+      "PV1",
+      "PV2",
+      "DG1",
+      "GT1",
+      "IN1"
+    ]
+  },
+  "ADT^A06": {
+    "description": "Change Outpatient to Inpatient",
+    "typical_segments": [
+      "MSH",
+      "EVN",
+      "PID",
+      "PD1",
+      "PV1",
+      "PV2"
+    ]
+  },
+  "ADT^A07": {
+    "description": "Change Inpatient to Outpatient",
+    "typical_segments": [
+      "MSH",
+      "EVN",
+      "PID",
+      "PD1",
+      "PV1",
+      "PV2"
+    ]
+  },
+  "ADT^A08": {
+    "description": "Update Patient Information",
+    "typical_segments": [
+      "MSH",
+      "EVN",
+      "PID",
+      "PD1",
+      "NK1",
+      "PV1",
+      "PV2",
+      "OBX",
+      "AL1",
+      "DG1",
+      "GT1",
+      "IN1"
+    ]
+  },
+  "ADT^A09": {
+    "description": "Patient Departing \u2014 Tracking",
+    "typical_segments": [
+      "MSH",
+      "EVN",
+      "PID",
+      "PV1",
+      "PV2"
+    ]
+  },
+  "ADT^A10": {
+    "description": "Patient Arriving \u2014 Tracking",
+    "typical_segments": [
+      "MSH",
+      "EVN",
+      "PID",
+      "PV1",
+      "PV2"
+    ]
+  },
+  "ADT^A11": {
+    "description": "Cancel Admit / Visit Notification",
+    "typical_segments": [
+      "MSH",
+      "EVN",
+      "PID",
+      "PD1",
+      "PV1"
+    ]
+  },
+  "ADT^A12": {
+    "description": "Cancel Transfer",
+    "typical_segments": [
+      "MSH",
+      "EVN",
+      "PID",
+      "PD1",
+      "PV1"
+    ]
+  },
+  "ADT^A13": {
+    "description": "Cancel Discharge / End Visit",
+    "typical_segments": [
+      "MSH",
+      "EVN",
+      "PID",
+      "PD1",
+      "PV1"
+    ]
+  },
+  "ADT^A17": {
+    "description": "Swap Patients",
+    "typical_segments": [
+      "MSH",
+      "EVN",
+      "PID",
+      "PV1",
+      "PID",
+      "PV1"
+    ]
+  },
+  "ADT^A18": {
+    "description": "Merge Patient Information",
+    "typical_segments": [
+      "MSH",
+      "EVN",
+      "PID",
+      "MRG",
+      "PV1"
+    ]
+  },
+  "ADT^A19": {
+    "description": "Patient Query",
+    "typical_segments": [
+      "MSH",
+      "QRD",
+      "QRF"
+    ]
+  },
+  "ADT^A21": {
+    "description": "Patient Goes on Leave of Absence",
+    "typical_segments": [
+      "MSH",
+      "EVN",
+      "PID",
+      "PV1"
+    ]
+  },
+  "ADT^A22": {
+    "description": "Patient Returns from Leave of Absence",
+    "typical_segments": [
+      "MSH",
+      "EVN",
+      "PID",
+      "PV1"
+    ]
+  },
+  "ADT^A23": {
+    "description": "Delete a Patient Record",
+    "typical_segments": [
+      "MSH",
+      "EVN",
+      "PID",
+      "PV1"
+    ]
+  },
+  "ADT^A24": {
+    "description": "Link Patient Information",
+    "typical_segments": [
+      "MSH",
+      "EVN",
+      "PID",
+      "PV1",
+      "PID"
+    ]
+  },
+  "ADT^A25": {
+    "description": "Cancel Pending Discharge",
+    "typical_segments": [
+      "MSH",
+      "EVN",
+      "PID",
+      "PV1"
+    ]
+  },
+  "ADT^A26": {
+    "description": "Cancel Pending Transfer",
+    "typical_segments": [
+      "MSH",
+      "EVN",
+      "PID",
+      "PV1"
+    ]
+  },
+  "ADT^A27": {
+    "description": "Cancel Pending Admit",
+    "typical_segments": [
+      "MSH",
+      "EVN",
+      "PID",
+      "PV1"
+    ]
+  },
+  "ADT^A28": {
+    "description": "Add Person Information",
+    "typical_segments": [
+      "MSH",
+      "EVN",
+      "PID",
+      "PD1",
+      "NK1",
+      "GT1",
+      "IN1"
+    ]
+  },
+  "ADT^A29": {
+    "description": "Delete Person Information",
+    "typical_segments": [
+      "MSH",
+      "EVN",
+      "PID"
+    ]
+  },
+  "ADT^A30": {
+    "description": "Merge Person Information",
+    "typical_segments": [
+      "MSH",
+      "EVN",
+      "PID",
+      "MRG"
+    ]
+  },
+  "ADT^A31": {
+    "description": "Update Person Information",
+    "typical_segments": [
+      "MSH",
+      "EVN",
+      "PID",
+      "PD1",
+      "NK1",
+      "GT1",
+      "IN1"
+    ]
+  },
+  "ADT^A34": {
+    "description": "Merge Patient \u2014 Patient ID Only",
+    "typical_segments": [
+      "MSH",
+      "EVN",
+      "PID",
+      "MRG"
+    ]
+  },
+  "ADT^A35": {
+    "description": "Merge Patient \u2014 Account Number Only",
+    "typical_segments": [
+      "MSH",
+      "EVN",
+      "PID",
+      "MRG"
+    ]
+  },
+  "ADT^A36": {
+    "description": "Merge Patient \u2014 Patient ID & Account Number",
+    "typical_segments": [
+      "MSH",
+      "EVN",
+      "PID",
+      "MRG"
+    ]
+  },
+  "ADT^A37": {
+    "description": "Unlink Patient Information",
+    "typical_segments": [
+      "MSH",
+      "EVN",
+      "PID",
+      "PV1",
+      "PID"
+    ]
+  },
+  "ADT^A38": {
+    "description": "Cancel Pre-Admit",
+    "typical_segments": [
+      "MSH",
+      "EVN",
+      "PID",
+      "PV1"
+    ]
+  },
+  "ADT^A39": {
+    "description": "Merge Patient \u2014 Patient Identifier List",
+    "typical_segments": [
+      "MSH",
+      "EVN",
+      "PID",
+      "MRG",
+      "PV1"
+    ]
+  },
+  "ADT^A40": {
+    "description": "Merge Patient \u2014 Patient Identifier List",
+    "typical_segments": [
+      "MSH",
+      "EVN",
+      "PID",
+      "MRG"
+    ]
+  },
+  "ADT^A41": {
+    "description": "Merge Patient \u2014 Patient Account Number",
+    "typical_segments": [
+      "MSH",
+      "EVN",
+      "PID",
+      "MRG"
+    ]
+  },
+  "ADT^A45": {
+    "description": "Move Visit Information \u2014 Visit Number",
+    "typical_segments": [
+      "MSH",
+      "EVN",
+      "PID",
+      "MRG",
+      "PV1"
+    ]
+  },
+  "ADT^A47": {
+    "description": "Change Patient Identifier List",
+    "typical_segments": [
+      "MSH",
+      "EVN",
+      "PID",
+      "MRG"
+    ]
+  },
+  "ADT^A50": {
+    "description": "Change Alternate Patient ID",
+    "typical_segments": [
+      "MSH",
+      "EVN",
+      "PID",
+      "MRG",
+      "PV1"
+    ]
+  },
+  "ADT^A51": {
+    "description": "Change Visit Number",
+    "typical_segments": [
+      "MSH",
+      "EVN",
+      "PID",
+      "MRG",
+      "PV1"
+    ]
+  },
+  "ADT^A60": {
+    "description": "Update Allergy Information",
+    "typical_segments": [
+      "MSH",
+      "EVN",
+      "PID",
+      "IAM"
+    ]
+  },
+  "BAR^P01": {
+    "description": "Add Patient Account",
+    "typical_segments": [
+      "MSH",
+      "EVN",
+      "PID",
+      "PD1",
+      "PV1",
+      "PV2",
+      "DG1",
+      "DRG",
+      "GT1",
+      "NK1",
+      "IN1",
+      "IN2",
+      "ACC"
+    ]
+  },
+  "BAR^P02": {
+    "description": "Purge Patient Billing Account",
+    "typical_segments": [
+      "MSH",
+      "EVN",
+      "PID",
+      "PV1"
+    ]
+  },
+  "BAR^P05": {
+    "description": "Update Account",
+    "typical_segments": [
+      "MSH",
+      "EVN",
+      "PID",
+      "PV1",
+      "DG1",
+      "GT1",
+      "IN1"
+    ]
+  },
+  "BAR^P06": {
+    "description": "End Account",
+    "typical_segments": [
+      "MSH",
+      "EVN",
+      "PID",
+      "PV1"
+    ]
+  },
+  "BAR^P10": {
+    "description": "Transmit Ambulatory Payment Classification",
+    "typical_segments": [
+      "MSH",
+      "PID",
+      "PV1",
+      "DG1",
+      "GP1",
+      "GP2",
+      "PR1"
+    ]
+  },
+  "BAR^P12": {
+    "description": "Update Diagnosis / Procedure",
+    "typical_segments": [
+      "MSH",
+      "EVN",
+      "PID",
+      "PV1",
+      "DG1",
+      "DRG",
+      "PR1"
+    ]
+  },
+  "DFT^P03": {
+    "description": "Post Detail Financial Transaction",
+    "typical_segments": [
+      "MSH",
+      "EVN",
+      "PID",
+      "PV1",
+      "PV2",
+      "FT1",
+      "DG1",
+      "GT1",
+      "IN1"
+    ]
+  },
+  "DFT^P11": {
+    "description": "Post Detail Financial Transactions",
+    "typical_segments": [
+      "MSH",
+      "EVN",
+      "PID",
+      "PV1",
+      "PV2",
+      "FT1",
+      "DG1"
+    ]
+  },
+  "MDM^T01": {
+    "description": "Original Document Notification",
+    "typical_segments": [
+      "MSH",
+      "EVN",
+      "PID",
+      "PV1",
+      "TXA"
+    ]
+  },
+  "MDM^T02": {
+    "description": "Original Document Notification with Content",
+    "typical_segments": [
+      "MSH",
+      "EVN",
+      "PID",
+      "PV1",
+      "TXA",
+      "OBX"
+    ]
+  },
+  "MDM^T03": {
+    "description": "Document Status Change Notification",
+    "typical_segments": [
+      "MSH",
+      "EVN",
+      "PID",
+      "PV1",
+      "TXA"
+    ]
+  },
+  "MDM^T04": {
+    "description": "Document Status Change Notification with Content",
+    "typical_segments": [
+      "MSH",
+      "EVN",
+      "PID",
+      "PV1",
+      "TXA",
+      "OBX"
+    ]
+  },
+  "MDM^T05": {
+    "description": "Document Addendum Notification",
+    "typical_segments": [
+      "MSH",
+      "EVN",
+      "PID",
+      "PV1",
+      "TXA"
+    ]
+  },
+  "MDM^T06": {
+    "description": "Document Addendum Notification with Content",
+    "typical_segments": [
+      "MSH",
+      "EVN",
+      "PID",
+      "PV1",
+      "TXA",
+      "OBX"
+    ]
+  },
+  "MDM^T07": {
+    "description": "Document Edit Notification",
+    "typical_segments": [
+      "MSH",
+      "EVN",
+      "PID",
+      "PV1",
+      "TXA"
+    ]
+  },
+  "MDM^T08": {
+    "description": "Document Edit Notification with Content",
+    "typical_segments": [
+      "MSH",
+      "EVN",
+      "PID",
+      "PV1",
+      "TXA",
+      "OBX"
+    ]
+  },
+  "MDM^T09": {
+    "description": "Document Replacement Notification",
+    "typical_segments": [
+      "MSH",
+      "EVN",
+      "PID",
+      "PV1",
+      "TXA"
+    ]
+  },
+  "MDM^T10": {
+    "description": "Document Replacement Notification with Content",
+    "typical_segments": [
+      "MSH",
+      "EVN",
+      "PID",
+      "PV1",
+      "TXA",
+      "OBX"
+    ]
+  },
+  "MDM^T11": {
+    "description": "Document Cancel Notification",
+    "typical_segments": [
+      "MSH",
+      "EVN",
+      "PID",
+      "PV1",
+      "TXA"
+    ]
+  },
+  "MFN^M01": {
+    "description": "Master File \u2014 Not Otherwise Specified",
+    "typical_segments": [
+      "MSH",
+      "MFI",
+      "MFE",
+      "ZBX"
+    ]
+  },
+  "MFN^M02": {
+    "description": "Master File \u2014 Staff Practitioner",
+    "typical_segments": [
+      "MSH",
+      "MFI",
+      "MFE",
+      "STF",
+      "PRA",
+      "ORG",
+      "AFF",
+      "LAN",
+      "EDU"
+    ]
+  },
+  "MFN^M04": {
+    "description": "Master File \u2014 Charge Description",
+    "typical_segments": [
+      "MSH",
+      "MFI",
+      "MFE",
+      "CDM",
+      "PRC"
+    ]
+  },
+  "MFN^M05": {
+    "description": "Patient Location Master File",
+    "typical_segments": [
+      "MSH",
+      "MFI",
+      "MFE",
+      "LOC",
+      "LCH",
+      "LRL",
+      "LDP",
+      "LCC"
+    ]
+  },
+  "MFN^M06": {
+    "description": "Clinical Study Master File",
+    "typical_segments": [
+      "MSH",
+      "MFI",
+      "MFE",
+      "CM0",
+      "CM1",
+      "CM2"
+    ]
+  },
+  "MFN^M08": {
+    "description": "Observation (Numeric) Master File",
+    "typical_segments": [
+      "MSH",
+      "MFI",
+      "MFE",
+      "OM1",
+      "OM2"
+    ]
+  },
+  "MFN^M09": {
+    "description": "Observation (Categorical) Master File",
+    "typical_segments": [
+      "MSH",
+      "MFI",
+      "MFE",
+      "OM1",
+      "OM3"
+    ]
+  },
+  "MFN^M10": {
+    "description": "Observation Batteries Master File",
+    "typical_segments": [
+      "MSH",
+      "MFI",
+      "MFE",
+      "OM1",
+      "OM5"
+    ]
+  },
+  "MFN^M11": {
+    "description": "Calculated Observations Master File",
+    "typical_segments": [
+      "MSH",
+      "MFI",
+      "MFE",
+      "OM1",
+      "OM6"
+    ]
+  },
+  "MFN^M12": {
+    "description": "Master File \u2014 Observation / Service Attributes",
+    "typical_segments": [
+      "MSH",
+      "MFI",
+      "MFE",
+      "OM1",
+      "OM7"
+    ]
+  },
+  "MFN^M15": {
+    "description": "Inventory Item Master File",
+    "typical_segments": [
+      "MSH",
+      "MFI",
+      "MFE",
+      "IIM"
+    ]
+  },
+  "OML^O21": {
+    "description": "Laboratory Order",
+    "typical_segments": [
+      "MSH",
+      "PID",
+      "PV1",
+      "ORC",
+      "OBR",
+      "OBX",
+      "SPM"
+    ]
+  },
+  "OML^O33": {
+    "description": "Laboratory Order for Multiple Orders per Specimen",
+    "typical_segments": [
+      "MSH",
+      "PID",
+      "PV1",
+      "SPM",
+      "ORC",
+      "OBR",
+      "OBX"
+    ]
+  },
+  "OML^O35": {
+    "description": "Laboratory Order for Multiple Orders per Container",
+    "typical_segments": [
+      "MSH",
+      "PID",
+      "PV1",
+      "SAC",
+      "ORC",
+      "OBR",
+      "OBX"
+    ]
+  },
+  "ORL^O22": {
+    "description": "General Laboratory Order Response",
+    "typical_segments": [
+      "MSH",
+      "MSA",
+      "ERR",
+      "PID",
+      "ORC",
+      "OBR",
+      "SPM"
+    ]
+  },
+  "ORM^O01": {
+    "description": "General Order Message",
+    "typical_segments": [
+      "MSH",
+      "PID",
+      "PV1",
+      "IN1",
+      "GT1",
+      "ORC",
+      "OBR",
+      "RQD",
+      "RX1",
+      "OBX",
+      "BLG"
+    ]
+  },
+  "ORR^O02": {
+    "description": "Order Acknowledgement",
+    "typical_segments": [
+      "MSH",
+      "MSA",
+      "ERR",
+      "PID",
+      "ORC",
+      "OBR"
+    ]
+  },
+  "ORU^R01": {
+    "description": "Unsolicited Observation Result",
+    "typical_segments": [
+      "MSH",
+      "PID",
+      "PV1",
+      "ORC",
+      "OBR",
+      "OBX",
+      "NTE"
+    ]
+  },
+  "ORU^R30": {
+    "description": "Unsolicited Point-of-Care Observation (no existing order)",
+    "typical_segments": [
+      "MSH",
+      "PID",
+      "PV1",
+      "OBR",
+      "OBX"
+    ]
+  },
+  "ORU^W01": {
+    "description": "Waveform Result (Unsolicited)",
+    "typical_segments": [
+      "MSH",
+      "PID",
+      "PV1",
+      "OBR",
+      "OBX"
+    ]
+  },
+  "PPR^PC1": {
+    "description": "Problem Add",
+    "typical_segments": [
+      "MSH",
+      "PID",
+      "PV1",
+      "PRB",
+      "NTE",
+      "VAR",
+      "OBX"
+    ]
+  },
+  "PPR^PC2": {
+    "description": "Problem Update",
+    "typical_segments": [
+      "MSH",
+      "PID",
+      "PV1",
+      "PRB",
+      "NTE",
+      "VAR",
+      "OBX"
+    ]
+  },
+  "PPR^PC3": {
+    "description": "Problem Delete",
+    "typical_segments": [
+      "MSH",
+      "PID",
+      "PV1",
+      "PRB"
+    ]
+  },
+  "QBP^Q11": {
+    "description": "Get Identifiers Request",
+    "typical_segments": [
+      "MSH",
+      "QPD",
+      "RCP"
+    ]
+  },
+  "QBP^Q22": {
+    "description": "Find Candidates",
+    "typical_segments": [
+      "MSH",
+      "QPD",
+      "RCP"
+    ]
+  },
+  "QBP^Q23": {
+    "description": "Get Corresponding Identifiers",
+    "typical_segments": [
+      "MSH",
+      "QPD",
+      "RCP"
+    ]
+  },
+  "QBP^Q25": {
+    "description": "Allocate Identifiers",
+    "typical_segments": [
+      "MSH",
+      "QPD",
+      "RCP"
+    ]
+  },
+  "QRY^A19": {
+    "description": "Patient Query",
+    "typical_segments": [
+      "MSH",
+      "QRD",
+      "QRF"
+    ]
+  },
+  "QRY^R02": {
+    "description": "Query for Results of Observation",
+    "typical_segments": [
+      "MSH",
+      "QRD",
+      "QRF"
+    ]
+  },
+  "RAS^O17": {
+    "description": "Pharmacy / Treatment Administration",
+    "typical_segments": [
+      "MSH",
+      "PID",
+      "PV1",
+      "ORC",
+      "RXA",
+      "RXR",
+      "OBX"
+    ]
+  },
+  "RDE^O11": {
+    "description": "Pharmacy / Treatment Encoded Order",
+    "typical_segments": [
+      "MSH",
+      "PID",
+      "PV1",
+      "IN1",
+      "ORC",
+      "RXE",
+      "TQ1",
+      "RXR",
+      "RXC",
+      "OBX"
+    ]
+  },
+  "RDS^O13": {
+    "description": "Pharmacy / Treatment Dispense",
+    "typical_segments": [
+      "MSH",
+      "PID",
+      "PV1",
+      "ORC",
+      "RXD",
+      "RXR",
+      "RXC",
+      "OBX"
+    ]
+  },
+  "RSP^K11": {
+    "description": "Get Identifiers Response",
+    "typical_segments": [
+      "MSH",
+      "MSA",
+      "ERR",
+      "QAK",
+      "QPD",
+      "PID"
+    ]
+  },
+  "RSP^K22": {
+    "description": "Find Candidates Response",
+    "typical_segments": [
+      "MSH",
+      "MSA",
+      "ERR",
+      "QAK",
+      "QPD",
+      "PID",
+      "PD1",
+      "NK1"
+    ]
+  },
+  "RSP^K23": {
+    "description": "Get Corresponding Identifiers Response",
+    "typical_segments": [
+      "MSH",
+      "MSA",
+      "ERR",
+      "QAK",
+      "QPD",
+      "PID"
+    ]
+  },
+  "SIU^S12": {
+    "description": "New Appointment Booking",
+    "typical_segments": [
+      "MSH",
+      "SCH",
+      "TQ1",
+      "NTE",
+      "PID",
+      "PV1",
+      "RGS",
+      "AIS",
+      "AIG",
+      "AIL",
+      "AIP"
+    ]
+  },
+  "SIU^S13": {
+    "description": "Appointment Rescheduling",
+    "typical_segments": [
+      "MSH",
+      "SCH",
+      "TQ1",
+      "NTE",
+      "PID",
+      "PV1",
+      "RGS",
+      "AIS",
+      "AIG",
+      "AIL",
+      "AIP"
+    ]
+  },
+  "SIU^S14": {
+    "description": "Appointment Modification",
+    "typical_segments": [
+      "MSH",
+      "SCH",
+      "TQ1",
+      "NTE",
+      "PID",
+      "PV1",
+      "RGS",
+      "AIS",
+      "AIG",
+      "AIL",
+      "AIP"
+    ]
+  },
+  "SIU^S15": {
+    "description": "Appointment Cancellation",
+    "typical_segments": [
+      "MSH",
+      "SCH",
+      "TQ1",
+      "NTE",
+      "PID",
+      "PV1",
+      "RGS",
+      "AIS"
+    ]
+  },
+  "SIU^S17": {
+    "description": "Appointment Deletion",
+    "typical_segments": [
+      "MSH",
+      "SCH",
+      "TQ1",
+      "PID",
+      "PV1",
+      "RGS",
+      "AIS"
+    ]
+  },
+  "SIU^S24": {
+    "description": "Patient Walked Out",
+    "typical_segments": [
+      "MSH",
+      "SCH",
+      "PID",
+      "PV1"
+    ]
+  },
+  "SIU^S26": {
+    "description": "Patient Did Not Show (No-Show)",
+    "typical_segments": [
+      "MSH",
+      "SCH",
+      "PID",
+      "PV1"
+    ]
+  },
+  "VXQ^V01": {
+    "description": "Query for Vaccination Record",
+    "typical_segments": [
+      "MSH",
+      "QRD",
+      "QRF"
+    ]
+  },
+  "VXR^V03": {
+    "description": "Vaccination Record Response",
+    "typical_segments": [
+      "MSH",
+      "MSA",
+      "QRD",
+      "PID",
+      "NK1",
+      "ORC",
+      "RXA",
+      "RXR",
+      "OBX"
+    ]
+  },
+  "VXU^V04": {
+    "description": "Unsolicited Vaccination Record Update",
+    "typical_segments": [
+      "MSH",
+      "PID",
+      "PD1",
+      "NK1",
+      "PV1",
+      "IN1",
+      "ORC",
+      "RXA",
+      "RXR",
+      "OBX",
+      "NTE"
+    ]
+  },
+  "VXX^V02": {
+    "description": "Response for Vaccination Query \u2014 Multiple PID Match",
+    "typical_segments": [
+      "MSH",
+      "MSA",
+      "QRD",
+      "PID",
+      "NK1"
+    ]
+  }
+}
