@@ -40,11 +40,13 @@ async fn add_security_headers(req: axum::extract::Request, next: middleware::Nex
     res.headers_mut().insert(
         HeaderName::from_static("content-security-policy"),
         HeaderValue::from_static(
-            // No 'unsafe-inline' for scripts — blocks injected event handlers.
-            // 'unsafe-inline' for styles is required for inline style= attributes.
+            // No 'unsafe-inline' for scripts or styles: all styles live in style.css;
+            // initial display:none states use ID-scoped CSS rules, not style= attributes;
+            // dynamic colors (source bar, source chips) are set via element.style in JS,
+            // which is script execution — not governed by style-src.
             // Fonts are self-hosted under /fonts/ — no external font-src needed.
             "default-src 'self'; \
-             style-src 'self' 'unsafe-inline'; \
+             style-src 'self'; \
              font-src 'self'; \
              connect-src 'self' ws: wss:",
         ),
@@ -304,11 +306,32 @@ async fn static_handler(uri: axum::http::Uri) -> impl IntoResponse {
     match StaticAssets::get(path) {
         Some(content) => {
             let mime = mime_guess::from_path(path).first_or_octet_stream();
-            (
+            let mut res = (
                 [(axum::http::header::CONTENT_TYPE, mime.as_ref())],
                 content.data.to_vec(),
             )
-                .into_response()
+                .into_response();
+
+            // Fonts are immutable for the lifetime of a binary build — cache aggressively.
+            if path.starts_with("fonts/") {
+                use std::fmt::Write as _;
+                let hash = content.metadata.sha256_hash();
+                let mut etag = String::with_capacity(66);
+                etag.push('"');
+                for b in &hash {
+                    let _ = write!(etag, "{:02x}", b);
+                }
+                etag.push('"');
+                let headers = res.headers_mut();
+                headers.insert(
+                    axum::http::header::CACHE_CONTROL,
+                    HeaderValue::from_static("public, max-age=31536000, immutable"),
+                );
+                if let Ok(v) = HeaderValue::from_str(&etag) {
+                    headers.insert(axum::http::header::ETAG, v);
+                }
+            }
+            res
         }
         None => {
             // SPA fallback: serve index.html for unknown routes

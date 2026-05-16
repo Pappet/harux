@@ -212,6 +212,11 @@ header {
     color: var(--success);
 }
 
+/* Health pills that are hidden on initial render until data arrives */
+#pill-rate,
+#pill-last,
+#pill-rejected { display: none; }
+
 .topbar-divider {
     width: 1px;
     height: 22px;
@@ -1288,6 +1293,14 @@ body.resizing * {
     margin-left: auto;
 }
 
+/* Hidden on initial render — shown by JS when a message is selected */
+#detail-type,
+#detail-desc { display: none; }
+
+/* Badge and diff tab start hidden; JS reveals them when relevant */
+#tab-segments-badge,
+#tab-btn-diff { display: none; }
+
 .detail-content {
     flex: 1;
     overflow-y: auto;
@@ -1534,6 +1547,9 @@ body.resizing * {
     gap: 4px;
     margin-top: 2px;
 }
+
+/* When tags list appears inline in the message row, suppress top margin */
+.msg-row1 .msg-tags-list { margin-top: 0; }
 
 .msg-tag-small {
     background: var(--bg-tertiary);
@@ -1829,6 +1845,17 @@ body.resizing * {
     border-bottom: 1px solid var(--border);
     font-size: 11px;
     color: var(--text-secondary);
+}
+
+.diff-options-bar .theme-toggle {
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.diff-options-bar .theme-toggle input[type="checkbox"] {
+    display: none;
 }
 
 .diff-header {

@@ -45,13 +45,12 @@ function renderSourceLegend() {
     const sortedLabels = Array.from(uniqueLabels).sort();
 
     const chipsHtml = sortedLabels.map(label => {
-        const color = SOURCE_PALETTE[hashString(label) % SOURCE_PALETTE.length];
         const isActive = state.highlightedSource === label;
         const isDimmed = state.highlightedSource && state.highlightedSource !== label;
         const classes = `source-chip${isActive ? ' active' : ''}${isDimmed ? ' dimmed' : ''}`;
         const num = state.sourceCounts.get(label) || 0;
         return `<span class="${classes}" tabindex="0" role="button" aria-label="Filter by source ${escAttr(label)}" data-action="toggle-source" data-source="${escAttr(label)}">
-            <span class="dot" style="background:${color};color:${color}"></span>
+            <span class="dot"></span>
             ${esc(label)}
             <span class="num">${num}</span>
         </span>`;
@@ -70,6 +69,15 @@ function renderSourceLegend() {
             </div>
         </details>
     `;
+
+    // Set dot colors via JS after innerHTML (avoids inline style= attributes)
+    sortedLabels.forEach(label => {
+        const chip = container.querySelector(`[data-source="${CSS.escape(label)}"]`);
+        if (!chip) return;
+        const color = SOURCE_PALETTE[hashString(label) % SOURCE_PALETTE.length];
+        const dot = chip.querySelector('.dot');
+        if (dot) { dot.style.background = color; dot.style.color = color; }
+    });
 }
 
 // --- Health pills ---
@@ -223,7 +231,7 @@ function buildMessageRow(msg) {
         const overflow = tagsArr.length > 2
             ? `<span class="msg-tag-small">+${tagsArr.length - 2}</span>`
             : '';
-        tagsHtml = `<span class="msg-tags-list" style="margin-top:0">${visible}${overflow}</span>`;
+        tagsHtml = `<span class="msg-tags-list">${visible}${overflow}</span>`;
     }
 
     const ackCode = (msg.ack_code || '').toUpperCase();
@@ -245,7 +253,7 @@ function buildMessageRow(msg) {
     row.dataset.received = msg.received_at || '';
 
     row.innerHTML = `
-        <div class="msg-source-bar" style="background:${srcColor}" title="${escAttr(msg.source_addr || '')}"></div>
+        <div class="msg-source-bar" title="${escAttr(msg.source_addr || '')}"></div>
         <div class="msg-body">
             <div class="msg-row1">
                 ${typeHtml}
@@ -267,6 +275,9 @@ function buildMessageRow(msg) {
             <button class="${bookmarkClass}" aria-label="${bookmarkLabel}" data-action="bookmark" data-id="${msg.id}" title="Bookmark">${bookmarkSvg}</button>
         </div>
     `;
+    // Set source bar color via JS after innerHTML (avoids inline style= attribute)
+    const bar = row.querySelector('.msg-source-bar');
+    if (bar) bar.style.background = srcColor;
     return row;
 }
 
