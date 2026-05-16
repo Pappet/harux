@@ -64,7 +64,7 @@ and this project follows [Semantic Versioning](https://semver.org/lang/en/).
 | Commit | Description |
 |--------|-------------|
 | [`1b9fb8f`](https://github.com/Pappet/harux/commit/1b9fb8f) | `fix(store):` handle non-ASCII needles in contains_ignore_ascii_case (#133) |
-| [`PLACEHOLDER`](https://github.com/Pappet/harux/commit/PLACEHOLDER) | `chore(deps):` upgrade axum 0.7→0.8, tower-http 0.5→0.6 (#147) |
+| [`16ece72`](https://github.com/Pappet/harux/commit/16ece72) | `chore(deps):` upgrade axum 0.7→0.8, tower-http 0.5→0.6 (#147) |
 
 #### 2026-05-15
 
