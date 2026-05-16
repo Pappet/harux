@@ -120,7 +120,7 @@ function renderHealthPills() {
     const rateValue = document.getElementById('pill-rate-value');
     const rateSpark = document.getElementById('pill-rate-spark');
     if (state.rateWindow.length > 0) {
-        ratePill.style.display = '';
+        ratePill.style.display = 'inline-flex';
         rateValue.textContent = `${state.rateWindow.length}/min`;
         rateSpark.innerHTML = renderRateSpark();
     } else {
@@ -131,7 +131,7 @@ function renderHealthPills() {
     const lastPill = document.getElementById('pill-last');
     const lastValue = document.getElementById('pill-last-value');
     if (state.lastMessageReceivedAt !== null) {
-        lastPill.style.display = '';
+        lastPill.style.display = 'inline-flex';
         lastValue.textContent = formatRelativeTime(Date.now() - state.lastMessageReceivedAt);
     } else {
         lastPill.style.display = 'none';
@@ -547,7 +547,7 @@ function renderDetail() {
     const typeEl = document.getElementById('detail-type');
     if (msg.message_type) {
         typeEl.textContent = msg.message_type;
-        typeEl.style.display = '';
+        typeEl.style.display = 'inline';
     } else {
         typeEl.style.display = 'none';
     }
@@ -558,7 +558,7 @@ function renderDetail() {
     const descEl = document.getElementById('detail-desc');
     if (msg.message_type_description) {
         descEl.textContent = msg.message_type_description;
-        descEl.style.display = '';
+        descEl.style.display = 'block';
     } else {
         descEl.style.display = 'none';
     }
@@ -595,7 +595,7 @@ function renderDetail() {
         const count = (msg.segments && msg.segments.length) || 0;
         if (count > 0) {
             segBadge.textContent = count;
-            segBadge.style.display = '';
+            segBadge.style.display = 'inline';
         } else {
             segBadge.style.display = 'none';
         }
@@ -605,7 +605,7 @@ function renderDetail() {
     const diffTabBtn = document.getElementById('tab-btn-diff');
     if (diffTabBtn) {
         const showDiff = state.diffPinnedMessage && state.diffPinnedMessage.id !== msg.id;
-        diffTabBtn.style.display = showDiff ? '' : 'none';
+        diffTabBtn.style.display = showDiff ? 'inline-flex' : 'none';
         if (!showDiff && state.activeTab === 'diff') {
             state.activeTab = 'parsed';
         }
