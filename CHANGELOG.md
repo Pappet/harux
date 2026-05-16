@@ -66,7 +66,7 @@ and this project follows [Semantic Versioning](https://semver.org/lang/en/).
 | Commit | Description |
 |--------|-------------|
 | [`1b9fb8f`](https://github.com/Pappet/harux/commit/1b9fb8f) | `fix(store):` handle non-ASCII needles in contains_ignore_ascii_case (#133) |
-| [`PLACEHOLDER`](https://github.com/Pappet/harux/commit/PLACEHOLDER) | `refactor(hl7):` move message_types registry to JSON asset (#126) |
+| [`3155a9f`](https://github.com/Pappet/harux/commit/3155a9f) | `refactor(hl7):` move message_types registry to JSON asset (#126) |
 
 #### 2026-05-15
 
