@@ -66,7 +66,7 @@ and this project follows [Semantic Versioning](https://semver.org/lang/en/).
 | Commit | Description |
 |--------|-------------|
 | [`1b9fb8f`](https://github.com/Pappet/harux/commit/1b9fb8f) | `fix(store):` handle non-ASCII needles in contains_ignore_ascii_case (#133) |
-| [`PLACEHOLDER`](https://github.com/Pappet/harux/commit/PLACEHOLDER) | `test(web):` REST handler integration tests via oneshot (#121) |
+| [`f2632ae`](https://github.com/Pappet/harux/commit/f2632ae) | `test(web):` REST handler integration tests via oneshot (#121) |
 
 #### 2026-05-15
 
