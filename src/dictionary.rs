@@ -15,6 +15,18 @@ pub struct SegmentDef {
     pub fields: Vec<FieldDef>,
 }
 
+impl SegmentDef {
+    /// Look up a field by its 1-based HL7 sequence number.
+    /// Uses an O(1) index fast-path first; falls back to a linear scan when the
+    /// dictionary fields are not perfectly sequential (sparse or non-standard segments).
+    pub fn field_by_seq(&self, seq: usize) -> Option<&FieldDef> {
+        self.fields
+            .get(seq.saturating_sub(1))
+            .filter(|f| f.seq == seq)
+            .or_else(|| self.fields.iter().find(|f| f.seq == seq))
+    }
+}
+
 #[derive(Debug, Deserialize)]
 pub struct VersionDef {
     /// Version string from the JSON file (e.g. `"2.5.1"`); reserved for future version-aware lookup.
@@ -39,23 +51,10 @@ pub fn get_field_description(segment: &str, field_seq: usize) -> Option<String> 
     // Currently fallback to v2.5.1 for all versions, could be extended later
     let dict = get_v251();
 
-    if let Some(seg_def) = dict.segments.get(segment) {
-        // Try O(1) fast-path first assuming perfect sequence, fallback to O(N) search.
-        let field_def = if field_seq > 0 {
-            seg_def.fields.get(field_seq - 1)
-        } else {
-            None
-        };
-
-        let field_def = field_def
-            .filter(|f| f.seq == field_seq)
-            .or_else(|| seg_def.fields.iter().find(|f| f.seq == field_seq));
-
-        if let Some(field_def) = field_def {
-            return Some(field_def.desc.clone());
-        }
-    }
-    None
+    dict.segments
+        .get(segment)
+        .and_then(|seg| seg.field_by_seq(field_seq))
+        .map(|f| f.desc.clone())
 }
 
 /// Return the description for a segment (e.g. "MSH" → "Message Header").
@@ -70,17 +69,7 @@ pub fn inject_descriptions(segments: &mut [crate::hl7::types::Hl7Segment]) {
         if let Some(seg_def) = dict.segments.get(&seg_name) {
             segment.description = Some(seg_def.desc.clone());
             for field in segment.fields.iter_mut() {
-                let field_def = if field.index > 0 {
-                    seg_def.fields.get(field.index - 1)
-                } else {
-                    None
-                };
-
-                let field_def = field_def
-                    .filter(|f| f.seq == field.index)
-                    .or_else(|| seg_def.fields.iter().find(|f| f.seq == field.index));
-
-                if let Some(field_def) = field_def {
+                if let Some(field_def) = seg_def.field_by_seq(field.index) {
                     field.description = Some(field_def.desc.clone());
                 }
             }

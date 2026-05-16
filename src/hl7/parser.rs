@@ -57,6 +57,12 @@ fn enrich_msh(mut msg: Hl7Message, delimiters: Delimiters) -> Hl7Message {
             if let Some(c1) = type_components.next() {
                 msg.message_type = format!("{}^{}", c0, c1);
                 msg.trigger_event = c1.to_string();
+                // MSH-9.3: optional message structure identifier (e.g. "ADT_A01")
+                if let Some(c2) = type_components.next() {
+                    if !c2.is_empty() {
+                        msg.message_structure = Some(c2.to_string());
+                    }
+                }
             } else {
                 msg.message_type = c0.to_string();
             }
