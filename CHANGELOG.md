@@ -24,6 +24,8 @@ and this project follows [Semantic Versioning](https://semver.org/lang/en/).
 - **Keyboard accessibility for custom elements** — added `tabindex`, `role="button"`, and Enter/Space keyboard activation for segment headers, copy buttons, field value cells, and tagging elements.
 - **Keyboard accessibility for source chips** — added `tabindex="0"`, `role="button"`, and Enter/Space keyboard activation for source chips in the message list header, allowing filter toggling via keyboard navigation.
 
+### Changed
+- **Refactor — `message_types.rs` data moved to JSON asset** — the 800+ `m.insert(...)` calls that made `message_types.rs` 851 lines are replaced by `src/assets/hl7/message_types.json` (106 entries, embedded via `include_str!`). `MessageTypeInfo` now derives `serde::Deserialize` and uses owned `String`/`Vec<String>` instead of `&'static str`/`&'static [&'static str]`; the static registry is populated by `serde_json::from_str`. Adding or editing message types now only requires touching the JSON file. (#126)
 ### Added
 - **REST handler integration tests** — added `tests/web_api.rs` with 17 `axum::Router::oneshot` tests covering every HTTP route: `GET /api/messages` (empty + with data), `GET /api/messages/{id}` (found + 404), `GET /api/search` (match + no-match), `GET /api/stats` (field presence), `POST /api/clear` (store empties), `POST /api/messages/{id}/tags` (ok + bad-request), `DELETE /api/messages/{id}/tags/{tag}` (ok + 404), `POST /api/messages/{id}/bookmark` (toggles + 404), `GET /api/export` (MLLP framing verified), `GET /ws` (route registered, not 404/405). No real TCP socket required. (#121)
 
@@ -67,6 +69,7 @@ and this project follows [Semantic Versioning](https://semver.org/lang/en/).
 | Commit | Description |
 |--------|-------------|
 | [`1b9fb8f`](https://github.com/Pappet/harux/commit/1b9fb8f) | `fix(store):` handle non-ASCII needles in contains_ignore_ascii_case (#133) |
+| [`3155a9f`](https://github.com/Pappet/harux/commit/3155a9f) | `refactor(hl7):` move message_types registry to JSON asset (#126) |
 | [`f2632ae`](https://github.com/Pappet/harux/commit/f2632ae) | `test(web):` REST handler integration tests via oneshot (#121) |
 | [`16ece72`](https://github.com/Pappet/harux/commit/16ece72) | `chore(deps):` upgrade axum 0.7→0.8, tower-http 0.5→0.6 (#147) |
 
