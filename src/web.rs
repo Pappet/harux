@@ -11,6 +11,18 @@ use rust_embed::Embed;
 use serde::Deserialize;
 use std::sync::atomic::Ordering;
 
+#[derive(serde::Serialize)]
+struct StatsResponse {
+    total_messages: usize,
+    received: u64,
+    parsed_ok: u64,
+    parse_errors: u64,
+    active_connections: u64,
+    rejected_connections: u64,
+    max_connections: usize,
+    mllp_port: u16,
+}
+
 #[derive(Embed)]
 #[folder = "static/"]
 struct StaticAssets;
@@ -109,17 +121,16 @@ async fn search_messages(
 }
 
 async fn get_stats(State(state): State<AppState>) -> impl IntoResponse {
-    let count = state.store.count().await;
-    Json(serde_json::json!({
-        "total_messages": count,
-        "received": state.stats.received.load(Ordering::Relaxed),
-        "parsed_ok": state.stats.parsed_ok.load(Ordering::Relaxed),
-        "parse_errors": state.stats.parse_errors.load(Ordering::Relaxed),
-        "active_connections": state.stats.active_connections.load(Ordering::Relaxed),
-        "rejected_connections": state.stats.rejected_connections.load(Ordering::Relaxed),
-        "max_connections": state.max_connections,
-        "mllp_port": state.mllp_port,
-    }))
+    Json(StatsResponse {
+        total_messages: state.store.count().await,
+        received: state.stats.received.load(Ordering::Relaxed),
+        parsed_ok: state.stats.parsed_ok.load(Ordering::Relaxed),
+        parse_errors: state.stats.parse_errors.load(Ordering::Relaxed),
+        active_connections: state.stats.active_connections.load(Ordering::Relaxed),
+        rejected_connections: state.stats.rejected_connections.load(Ordering::Relaxed),
+        max_connections: state.max_connections,
+        mllp_port: state.mllp_port,
+    })
 }
 
 async fn clear_messages(State(state): State<AppState>) -> impl IntoResponse {
@@ -214,6 +225,21 @@ async fn ws_handler(ws: WebSocketUpgrade, State(state): State<AppState>) -> impl
     ws.on_upgrade(move |socket| handle_ws(socket, state))
 }
 
+async fn send_ws_event(
+    socket: &mut WebSocket,
+    event_type: &str,
+    data: Option<&impl serde::Serialize>,
+) -> bool {
+    let payload = match data {
+        Some(d) => serde_json::json!({"type": event_type, "data": d}),
+        None => serde_json::json!({"type": event_type}),
+    };
+    socket
+        .send(Message::Text(payload.to_string()))
+        .await
+        .is_ok()
+}
+
 async fn handle_ws(mut socket: WebSocket, state: AppState) {
     let mut rx = state.store.subscribe();
 
@@ -231,38 +257,23 @@ async fn handle_ws(mut socket: WebSocket, state: AppState) {
             result = rx.recv() => {
                 match result {
                     Ok(StoreEvent::NewMessage(summary)) => {
-                        let payload = serde_json::json!({
-                            "type": "new_message",
-                            "data": summary,
-                        });
-                        if socket.send(Message::Text(payload.to_string())).await.is_err() {
-                            break; // client disconnected
+                        if !send_ws_event(&mut socket, "new_message", Some(&*summary)).await {
+                            break;
                         }
                     }
                     Ok(StoreEvent::TagsUpdated(summary)) => {
-                        let payload = serde_json::json!({
-                            "type": "tags_updated",
-                            "data": summary,
-                        });
-                        if socket.send(Message::Text(payload.to_string())).await.is_err() {
-                            break; // client disconnected
+                        if !send_ws_event(&mut socket, "tags_updated", Some(&*summary)).await {
+                            break;
                         }
                     }
                     Ok(StoreEvent::BookmarkToggled(summary)) => {
-                        let payload = serde_json::json!({
-                            "type": "bookmark_toggled",
-                            "data": summary,
-                        });
-                        if socket.send(Message::Text(payload.to_string())).await.is_err() {
-                            break; // client disconnected
+                        if !send_ws_event(&mut socket, "bookmark_toggled", Some(&*summary)).await {
+                            break;
                         }
                     }
                     Ok(StoreEvent::Cleared) => {
-                        let payload = serde_json::json!({
-                            "type": "cleared"
-                        });
-                        if socket.send(Message::Text(payload.to_string())).await.is_err() {
-                            break; // client disconnected
+                        if !send_ws_event(&mut socket, "cleared", None::<&()>).await {
+                            break;
                         }
                     }
                     Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {

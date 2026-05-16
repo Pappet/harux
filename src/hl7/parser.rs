@@ -102,12 +102,7 @@ fn enrich_pid(mut msg: Hl7Message, delimiters: Delimiters) -> Hl7Message {
 
 fn inject_descriptions(mut msg: Hl7Message) -> Hl7Message {
     // Second pass: inject field descriptions from the embedded dictionary
-    let version = if msg.version.is_empty() {
-        "2.5.1"
-    } else {
-        &msg.version
-    };
-    crate::dictionary::inject_descriptions(&mut msg.segments, version);
+    crate::dictionary::inject_descriptions(&mut msg.segments);
     msg
 }
 
@@ -267,6 +262,16 @@ pub fn build_ack(original: &Hl7Message, ack_code: &str) -> String {
     );
     let msa = format!("MSA|{}|{}", ack_code, original.message_control_id,);
     format!("{}\r{}", msh, msa)
+}
+
+/// Build a NACK response (Application Error) for an unparseable message.
+/// Used when the raw frame cannot be parsed into a valid Hl7Message.
+pub fn build_nack(reason: &str) -> String {
+    format!(
+        "MSH|^~\\&|Harux|Harux|||{}||ACK||P|2.5\rMSA|AE|UNKNOWN|{}",
+        chrono::Utc::now().format("%Y%m%d%H%M%S"),
+        reason
+    )
 }
 
 #[cfg(test)]

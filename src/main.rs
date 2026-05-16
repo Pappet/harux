@@ -57,15 +57,19 @@ async fn main() -> anyhow::Result<()> {
     let store = MessageStore::new(config.store.clone());
     let stats = MllpStats::new();
 
-    info!("╔══════════════════════════════════════════╗");
-    info!(
-        "║          Harux v{}                ║",
-        env!("CARGO_PKG_VERSION")
-    );
-    info!("╠══════════════════════════════════════════╣");
-    info!("║  MLLP Server:  0.0.0.0:{}              ║", mllp_port);
-    info!("║  Web UI:       http://localhost:{}     ║", web_port);
-    info!("╚══════════════════════════════════════════╝");
+    {
+        let title = format!("  Harux v{}  ", env!("CARGO_PKG_VERSION"));
+        let mllp_line = format!("  MLLP Server:  0.0.0.0:{}  ", mllp_port);
+        let web_line = format!("  Web UI:       http://localhost:{}  ", web_port);
+        let w = title.len().max(mllp_line.len()).max(web_line.len());
+        let bar: String = "═".repeat(w);
+        info!("╔{}╗", bar);
+        info!("║{:w$}║", title, w = w);
+        info!("╠{}╣", bar);
+        info!("║{:w$}║", mllp_line, w = w);
+        info!("║{:w$}║", web_line, w = w);
+        info!("╚{}╝", bar);
+    }
     info!("Effective configuration:\n{}", config);
 
     let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);

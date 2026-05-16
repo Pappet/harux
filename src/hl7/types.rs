@@ -3,28 +3,48 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use uuid::Uuid;
 
-/// A parsed HL7 v2.x message
+/// A parsed HL7 v2.x message as stored in the in-memory store and serialised to the frontend.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Hl7Message {
+    /// Stable UUID assigned at receive time; used as the primary key for API and WebSocket events.
     pub id: String,
+    /// The raw HL7 text as received over MLLP, including all segment separators (`\r`).
     pub raw: String,
+    /// Wall-clock time the message arrived at the MLLP listener.
     pub received_at: DateTime<Utc>,
+    /// IP address (and optional port) of the sending TCP peer, e.g. `"192.168.1.10:52341"`.
     pub source_addr: String,
-    pub message_type: String,  // e.g. "ADT^A01"
-    pub trigger_event: String, // e.g. "A01"
+    /// Composite message type from MSH-9, e.g. `"ADT^A01"` or `"ORU^R01"`.
+    pub message_type: String,
+    /// Trigger event component of MSH-9.2, e.g. `"A01"`.
+    pub trigger_event: String,
+    /// MSH-10: uniquely identifies this message exchange within the sending application.
     pub message_control_id: String,
+    /// MSH-3: name of the system sending the message.
     pub sending_application: String,
+    /// MSH-4: organisational entity sending the message (e.g. hospital name).
     pub sending_facility: String,
+    /// MSH-5: name of the system that should receive the message.
     pub receiving_application: String,
+    /// MSH-6: organisational entity receiving the message.
     pub receiving_facility: String,
+    /// MSH-12: HL7 version string, e.g. `"2.5.1"`.
     pub version: String,
+    /// All segments parsed from the raw message, in order.
     pub segments: Vec<Hl7Segment>,
+    /// Extracted from PID-5 as `"Family, Given"` for display; `None` if PID is absent.
     pub patient_name: Option<String>,
+    /// First component of PID-3 (patient identifier); `None` if PID is absent.
     pub patient_id: Option<String>,
+    /// Non-`None` when the parser failed to fully parse the message; contains the error text.
     pub parse_error: Option<String>,
+    /// The ACK/NACK HL7 text sent back to the sender (omitted for ACK-type messages).
     pub ack_response: Option<String>,
+    /// The MSA-1 acknowledgement code sent back: `"AA"` (accepted) or `"AE"` (error).
     pub ack_code: Option<String>,
+    /// User-defined tag labels attached via the API (mutable after storage).
     pub tags: Vec<String>,
+    /// Whether the message is pinned; bookmarked messages survive eviction.
     pub bookmarked: bool,
     /// Validation warnings produced by the rule engine (empty = valid)
     pub validation_warnings: Vec<crate::validation::ValidationWarning>,
@@ -34,32 +54,45 @@ pub struct Hl7Message {
     pub typical_segments: Vec<String>,
     /// Description for each typical segment name, from the embedded dictionary
     pub typical_segment_descriptions: HashMap<String, String>,
+    /// Character set declared in MSH-18, e.g. `"UTF-8"` or `"8859/1"`; `None` if absent.
     pub charset: Option<String>,
 }
 
+/// One segment within an HL7 message (e.g. `MSH`, `PID`, `OBR`).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Hl7Field {
+    /// 1-based field position within the segment (matches the HL7 standard numbering, e.g. PID-3).
+    /// MSH is special: field 1 is synthetically `"|"`, so MSH-3 is Sending Application.
+    pub index: usize,
+    /// The raw field value string, possibly containing component separators (`^`).
+    pub value: String,
+    /// Pre-split components from `value`, split on the `^` delimiter.
+    pub components: Vec<String>,
+    /// Human-readable field name from the embedded HL7 dictionary, if available.
+    pub description: Option<String>,
+}
+
+/// One field within an HL7 segment.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Hl7Segment {
+    /// Segment identifier, e.g. `"MSH"`, `"PID"`, `"OBX"`.
     pub name: String,
+    /// All fields in this segment, in order.
     pub fields: Vec<Hl7Field>,
+    /// The original segment text (one line of the raw message).
     pub raw: String,
     /// Human-readable description from the HL7 dictionary (e.g. "Patient Identification")
     pub description: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Hl7Field {
-    pub index: usize,
-    pub value: String,
-    pub components: Vec<String>,
-    pub description: Option<String>,
-}
-
-/// Separators / encoding characters from MSH-1 and MSH-2
+/// Separators / encoding characters extracted from MSH-1 (field separator) and MSH-2.
 #[derive(Debug, Clone, Copy)]
 pub struct Delimiters {
+    /// MSH-1: separates fields within a segment (standard: `|`).
     pub field: char,
+    /// MSH-2 first char: separates components within a field (standard: `^`).
     pub component: char,
-    // Parsed from MSH-2 but not yet applied in field splitting (future: repetition/escape/sub-component parsing)
+    // Parsed from MSH-2 but not yet applied in field splitting (future use)
     #[allow(dead_code)]
     pub repetition: char,
     #[allow(dead_code)]
@@ -160,29 +193,47 @@ impl Hl7Message {
     }
 }
 
-/// Summary for the message list (lightweight, no raw/segments)
+/// Lightweight projection of `Hl7Message` sent to the frontend message list.
+/// Omits `raw` and `segments` to keep the WebSocket payload small.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Hl7MessageSummary {
+    /// Matches `Hl7Message::id` — used to fetch the full message via `GET /api/messages/{id}`.
     pub id: String,
+    /// Wall-clock receive time; used for display and sorting (newest first).
     pub received_at: DateTime<Utc>,
+    /// TCP peer address of the sender.
     pub source_addr: String,
+    /// Composite message type, e.g. `"ADT^A01"`.
     pub message_type: String,
+    /// Trigger event component, e.g. `"A01"`.
     pub trigger_event: String,
+    /// MSH-10 message control ID.
     pub message_control_id: String,
+    /// MSH-4 sending facility name.
     pub sending_facility: String,
+    /// Formatted patient name (`"Family, Given"`), or `None` if PID is absent.
     pub patient_name: Option<String>,
+    /// First PID-3 component, or `None` if PID is absent.
     pub patient_id: Option<String>,
+    /// Total number of segments parsed from the message.
     pub segment_count: usize,
+    /// Parse error text, or `None` if the message parsed cleanly.
     pub parse_error: Option<String>,
+    /// ACK/NACK text sent back to the sender (omitted for ACK-type messages).
     pub ack_response: Option<String>,
+    /// MSA-1 code: `"AA"` or `"AE"`.
     pub ack_code: Option<String>,
+    /// User-defined tag labels.
     pub tags: Vec<String>,
+    /// Whether this message is bookmarked (survives eviction).
     pub bookmarked: bool,
     /// Number of validation warnings (for the list-view warning badge)
     pub validation_warning_count: usize,
     /// True when at least one warning is a MISSING_SEGMENT error (badge turns red)
     pub has_segment_errors: bool,
+    /// Human-readable message type description, e.g. `"Admit / Visit Notification"`.
     pub message_type_description: Option<String>,
+    /// Character set from MSH-18, e.g. `"UTF-8"`.
     pub charset: Option<String>,
 }
 
