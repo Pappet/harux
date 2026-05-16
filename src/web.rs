@@ -42,10 +42,10 @@ async fn add_security_headers(req: axum::extract::Request, next: middleware::Nex
         HeaderValue::from_static(
             // No 'unsafe-inline' for scripts — blocks injected event handlers.
             // 'unsafe-inline' for styles is required for inline style= attributes.
-            // Google Fonts domains remain until issue #142 (self-host fonts) is resolved.
+            // Fonts are self-hosted under /fonts/ — no external font-src needed.
             "default-src 'self'; \
-             style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; \
-             font-src https://fonts.gstatic.com; \
+             style-src 'self' 'unsafe-inline'; \
+             font-src 'self'; \
              connect-src 'self' ws: wss:",
         ),
     );
