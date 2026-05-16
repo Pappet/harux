@@ -26,6 +26,8 @@ and this project follows [Semantic Versioning](https://semver.org/lang/en/).
 
 ### Changed
 - **Refactor — `message_types.rs` data moved to JSON asset** — the 800+ `m.insert(...)` calls that made `message_types.rs` 851 lines are replaced by `src/assets/hl7/message_types.json` (106 entries, embedded via `include_str!`). `MessageTypeInfo` now derives `serde::Deserialize` and uses owned `String`/`Vec<String>` instead of `&'static str`/`&'static [&'static str]`; the static registry is populated by `serde_json::from_str`. Adding or editing message types now only requires touching the JSON file. (#126)
+### Added
+- **REST handler integration tests** — added `tests/web_api.rs` with 17 `axum::Router::oneshot` tests covering every HTTP route: `GET /api/messages` (empty + with data), `GET /api/messages/{id}` (found + 404), `GET /api/search` (match + no-match), `GET /api/stats` (field presence), `POST /api/clear` (store empties), `POST /api/messages/{id}/tags` (ok + bad-request), `DELETE /api/messages/{id}/tags/{tag}` (ok + 404), `POST /api/messages/{id}/bookmark` (toggles + 404), `GET /api/export` (MLLP framing verified), `GET /ws` (route registered, not 404/405). No real TCP socket required. (#121)
 
 ### Fixed
 - **MLLP frame extraction — O(n²) re-scan eliminated** — `extract_mllp_frame` restarted its end-sequence search from the beginning of the accumulated buffer on every partial read. For a 3 MB MDM payload arriving in 64 KB chunks (~47 reads), this produced ~70 MB of redundant scanning. Added a `scan_from` parameter; `handle_connection` tracks the high-water-mark position across reads and passes it in, so only newly received bytes are searched for `FS+CR`. A `scan_offset = accumulated.len().saturating_sub(1)` update after each incomplete read, reset to 0 after consuming a frame, ensures the 2-byte end sequence is never missed at a chunk boundary. Added a unit test verifying consistent results between incremental and full-scan modes. (#118)
@@ -68,6 +70,7 @@ and this project follows [Semantic Versioning](https://semver.org/lang/en/).
 |--------|-------------|
 | [`1b9fb8f`](https://github.com/Pappet/harux/commit/1b9fb8f) | `fix(store):` handle non-ASCII needles in contains_ignore_ascii_case (#133) |
 | [`3155a9f`](https://github.com/Pappet/harux/commit/3155a9f) | `refactor(hl7):` move message_types registry to JSON asset (#126) |
+| [`f2632ae`](https://github.com/Pappet/harux/commit/f2632ae) | `test(web):` REST handler integration tests via oneshot (#121) |
 | [`16ece72`](https://github.com/Pappet/harux/commit/16ece72) | `chore(deps):` upgrade axum 0.7→0.8, tower-http 0.5→0.6 (#147) |
 
 #### 2026-05-15
