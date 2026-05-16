@@ -1,3 +1,40 @@
+/* Self-hosted Inter — latin-ext subset (accented Latin characters) */
+@font-face {
+    font-family: 'Inter';
+    font-style: normal;
+    font-weight: 100 900;
+    font-display: swap;
+    src: url('/fonts/Inter-latin-ext.woff2') format('woff2');
+    unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+/* Self-hosted Inter — latin subset */
+@font-face {
+    font-family: 'Inter';
+    font-style: normal;
+    font-weight: 100 900;
+    font-display: swap;
+    src: url('/fonts/Inter-latin.woff2') format('woff2');
+    unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+/* Self-hosted JetBrains Mono — latin-ext subset */
+@font-face {
+    font-family: 'JetBrains Mono';
+    font-style: normal;
+    font-weight: 100 900;
+    font-display: swap;
+    src: url('/fonts/JetBrains-Mono-latin-ext.woff2') format('woff2');
+    unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+/* Self-hosted JetBrains Mono — latin subset */
+@font-face {
+    font-family: 'JetBrains Mono';
+    font-style: normal;
+    font-weight: 100 900;
+    font-display: swap;
+    src: url('/fonts/JetBrains-Mono-latin.woff2') format('woff2');
+    unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+
 :root {
     --bg-primary: #0b0d12;
     --bg-secondary: #131620;
@@ -174,6 +211,11 @@ header {
     height: 18px;
     color: var(--success);
 }
+
+/* Health pills that are hidden on initial render until data arrives */
+#pill-rate,
+#pill-last,
+#pill-rejected { display: none; }
 
 .topbar-divider {
     width: 1px;
@@ -1251,6 +1293,14 @@ body.resizing * {
     margin-left: auto;
 }
 
+/* Hidden on initial render — shown by JS when a message is selected */
+#detail-type,
+#detail-desc { display: none; }
+
+/* Badge and diff tab start hidden; JS reveals them when relevant */
+#tab-segments-badge,
+#tab-btn-diff { display: none; }
+
 .detail-content {
     flex: 1;
     overflow-y: auto;
@@ -1497,6 +1547,9 @@ body.resizing * {
     gap: 4px;
     margin-top: 2px;
 }
+
+/* When tags list appears inline in the message row, suppress top margin */
+.msg-row1 .msg-tags-list { margin-top: 0; }
 
 .msg-tag-small {
     background: var(--bg-tertiary);
@@ -1792,6 +1845,17 @@ body.resizing * {
     border-bottom: 1px solid var(--border);
     font-size: 11px;
     color: var(--text-secondary);
+}
+
+.diff-options-bar .theme-toggle {
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.diff-options-bar .theme-toggle input[type="checkbox"] {
+    display: none;
 }
 
 .diff-header {

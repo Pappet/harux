@@ -103,8 +103,8 @@ function buildDiffSummary(totalDiffs, hiddenDynamic) {
 function buildDiffOptionsBar() {
     return `
         <div class="diff-options-bar">
-            <label class="theme-toggle" style="cursor:pointer; display:flex; align-items:center; gap:8px;">
-                <input type="checkbox" data-action="diff-ignore-dynamic" style="display:none" ${state.diffIgnoreDynamic ? 'checked' : ''}>
+            <label class="theme-toggle">
+                <input type="checkbox" data-action="diff-ignore-dynamic" ${state.diffIgnoreDynamic ? 'checked' : ''}>
                 <span class="toggle-slider"></span>
                 Hide dynamic fields (MSH-7, MSH-10)
             </label>
