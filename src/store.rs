@@ -7,17 +7,26 @@ use tracing::{info, warn};
 
 const BROADCAST_CAPACITY: usize = 4096;
 
-/// Case-insensitive ASCII substring search with no heap allocation.
-/// HL7 fields are ASCII or Latin-1; Unicode multi-byte case folding is not needed here.
+/// Case-insensitive substring search.
+///
+/// Fast path: ASCII-only needle — byte-level windowed scan, zero allocation.
+/// ASCII code points are all single bytes, so windows of byte-length(needle)
+/// always align on character boundaries and `eq_ignore_ascii_case` is correct.
+///
+/// Slow path: non-ASCII needle (unusual for HL7 searches) — allocate and use
+/// Unicode-aware `to_lowercase` so multi-byte code points fold correctly.
 fn contains_ignore_ascii_case(haystack: &str, needle: &str) -> bool {
     if needle.is_empty() {
         return true;
     }
-    let needle = needle.as_bytes();
-    haystack
-        .as_bytes()
-        .windows(needle.len())
-        .any(|w| w.eq_ignore_ascii_case(needle))
+    if needle.is_ascii() {
+        let needle = needle.as_bytes();
+        return haystack
+            .as_bytes()
+            .windows(needle.len())
+            .any(|w| w.eq_ignore_ascii_case(needle));
+    }
+    haystack.to_lowercase().contains(&needle.to_lowercase())
 }
 
 #[derive(Clone)]

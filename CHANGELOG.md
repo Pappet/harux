@@ -15,7 +15,7 @@ and this project follows [Semantic Versioning](https://semver.org/lang/en/).
 ### Fixed
 - **Web server transient error no longer panics** — `axum::serve(...).expect("Web server failed")` inside a spawned task would panic the task on any transient I/O error. The `.expect()` is replaced with `if let Err(e) = ... { warn!(...) }` so the task exits cleanly and `tokio::select!` in `main` triggers the graceful shutdown path. (#114)
 - **Busy-poll drain loop replaced with event-driven `Notify`** — the graceful shutdown path spun in a 100 ms sleep loop checking `active_connections`. Added `drain_notify: Arc<Notify>` to `MllpStats`; each connection handler calls `notify_one()` when it decrements the counter to zero. `main` now uses `tokio::time::timeout(shutdown_timeout, drain_notify.notified())` — zero CPU during the drain wait, exact wake-up on last connection close. (#115)
-- **`MessageStore::search` — zero heap allocation per message per query** — the previous implementation called `.to_lowercase()` on six fields of every stored message on each search request (up to 60 000 short-lived `String`s for a full 10 000-message store). Replaced with `contains_ignore_ascii_case`, a window-scan that calls `eq_ignore_ascii_case` byte-by-byte with no allocation. HL7 data is ASCII/Latin-1, so this is both correct and faster. (#133)
+- **`MessageStore::search` — zero heap allocation per message per query** — the previous implementation called `.to_lowercase()` on six fields of every stored message on each search request (up to 60 000 short-lived `String`s for a full 10 000-message store). Replaced with `contains_ignore_ascii_case`, a window-scan that calls `eq_ignore_ascii_case` byte-by-byte with no allocation for ASCII needles. For non-ASCII needles the function falls back to `to_lowercase().contains()` so multi-byte code-point boundaries are never sliced. HL7 data is almost always ASCII, so the fast path is taken in practice. (#133)
 
 ### Changed
 - **`SegmentDef::field_by_seq` — single shared lookup helper** — the O(1)-fast-path + O(N)-fallback field lookup pattern was duplicated verbatim in `dictionary.rs` (`get_field_description` and `inject_descriptions`) and `validation.rs` (`validate_data_types`). Extracted to `SegmentDef::field_by_seq(seq: usize) -> Option<&FieldDef>`. All three call sites replaced with a single method call. (#128)
@@ -56,6 +56,12 @@ and this project follows [Semantic Versioning](https://semver.org/lang/en/).
 - **Performance — incremental message-list rendering + source-counts cache** — `flushAndRender` now prepends only new rows to the DOM via `prependMessagesToList` when no client-side filter is active, instead of removing every `.message-row` / `.group-header` and rebuilding from scratch each 250 ms flush. Selection changes call `updateRowSelection` (class toggle only), and tag/bookmark updates call `patchRow` to mutate just the affected row (the previous code re-rendered the entire list per WebSocket tag/bookmark event). Source counts are maintained in a `sourceCounts: Map` updated incrementally in `addMessage` and recomputed only when labelling changes (`toggleColorByPort`) or the buffer is replaced (`loadMessages`, `clearMessages`, server `cleared`), so `renderSourceLegend` no longer iterates `messages[]` on every flush. Group headers carry `data-bucket` so the prepend path knows when to emit a new time-bucket header.
 
 ### Commit History (chronological)
+
+#### 2026-05-16
+
+| Commit | Description |
+|--------|-------------|
+| [`placeholder`](https://github.com/Pappet/harux/commit/placeholder) | `fix(store):` handle non-ASCII needles in contains_ignore_ascii_case (#133) |
 
 #### 2026-05-15
 
