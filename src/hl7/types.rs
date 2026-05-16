@@ -59,8 +59,12 @@ pub struct Hl7Field {
 pub struct Delimiters {
     pub field: char,
     pub component: char,
+    // Parsed from MSH-2 but not yet applied in field splitting (future: repetition/escape/sub-component parsing)
+    #[allow(dead_code)]
     pub repetition: char,
+    #[allow(dead_code)]
     pub escape: char,
+    #[allow(dead_code)]
     pub subcomponent: char,
 }
 

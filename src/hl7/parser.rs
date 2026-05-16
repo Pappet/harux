@@ -145,26 +145,53 @@ fn parse_delimiters(raw: &str) -> Result<Delimiters, String> {
     let bytes = raw.as_bytes();
     let field_sep = bytes[3] as char;
 
-    // MSH-2 is positions 4..8 (the 4 encoding characters)
-    let mut delims = Delimiters {
+    if !field_sep.is_ascii_graphic() {
+        return Err(format!(
+            "MSH-1 field separator 0x{:02X} is not printable ASCII",
+            bytes[3]
+        ));
+    }
+
+    // MSH-2 must contain exactly 4 printable ASCII chars, each distinct from
+    // the field separator and from each other. Violating any rule produces
+    // garbage field splits downstream (e.g. MSH||||| makes component == '|').
+    let enc = &bytes[4..8];
+    for (i, &b) in enc.iter().enumerate() {
+        if !b.is_ascii_graphic() {
+            return Err(format!(
+                "MSH-2 encoding character {} (0x{:02X}) is not printable ASCII",
+                i + 1,
+                b
+            ));
+        }
+        if b == bytes[3] {
+            return Err(format!(
+                "MSH-2 encoding character {} (0x{:02X}) duplicates the field separator",
+                i + 1,
+                b
+            ));
+        }
+    }
+    for i in 0..4 {
+        for j in (i + 1)..4 {
+            if enc[i] == enc[j] {
+                return Err(format!(
+                    "MSH-2 encoding characters are not distinct: positions {} and {} are both 0x{:02X}",
+                    i + 1,
+                    j + 1,
+                    enc[i]
+                ));
+            }
+        }
+    }
+
+    Ok(Delimiters {
         field: field_sep,
-        ..Default::default()
-    };
-
-    if bytes.len() > 4 {
-        delims.component = bytes[4] as char;
-    }
-    if bytes.len() > 5 {
-        delims.repetition = bytes[5] as char;
-    }
-    if bytes.len() > 6 {
-        delims.escape = bytes[6] as char;
-    }
-    if bytes.len() > 7 {
-        delims.subcomponent = bytes[7] as char;
-    }
-
-    Ok(delims)
+        component: enc[0] as char,
+        repetition: enc[1] as char,
+        escape: enc[2] as char,
+        subcomponent: enc[3] as char,
+    })
 }
 
 fn parse_segment(raw: &str, delimiters: Delimiters) -> Hl7Segment {
@@ -367,5 +394,45 @@ mod tests {
             "Expected no warnings for valid ADT, got: {:?}",
             warnings
         );
+    }
+
+    #[test]
+    fn test_msh2_field_sep_collision() {
+        // MSH||||| — component separator == field separator '|' → parse error
+        let res = parse_message("MSH|||||FOO\r", "127.0.0.1:9999");
+        let err = res.unwrap_err();
+        assert!(
+            err.contains("duplicates the field separator"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn test_msh2_non_printable() {
+        // Encoding char is a non-printable byte (0x01)
+        let raw = "MSH|\x01~\\&|APP|FAC|||20240101||ADT^A01|1|P|2.5\r";
+        let res = parse_message(raw, "127.0.0.1:9999");
+        let err = res.unwrap_err();
+        assert!(
+            err.contains("not printable ASCII"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn test_msh2_duplicate_encoding_chars() {
+        // Repetition char same as component char (^^~\&)
+        let raw = "MSH|^^~\\&|APP|FAC|||20240101||ADT^A01|1|P|2.5\r";
+        let res = parse_message(raw, "127.0.0.1:9999");
+        let err = res.unwrap_err();
+        assert!(err.contains("not distinct"), "unexpected error: {err}");
+    }
+
+    #[test]
+    fn test_msh2_non_default_valid() {
+        // Non-standard but valid delimiters should parse correctly
+        let raw = "MSH|$@!#|APP|FAC|||20240101||ADT^A01|1|P|2.5\rPID|||12345\r";
+        let msg = parse_message(raw, "127.0.0.1:9999").unwrap();
+        assert_eq!(msg.message_type, "ADT^A01");
     }
 }
