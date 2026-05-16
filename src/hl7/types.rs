@@ -56,6 +56,10 @@ pub struct Hl7Message {
     pub typical_segment_descriptions: HashMap<String, String>,
     /// Character set declared in MSH-18, e.g. `"UTF-8"` or `"8859/1"`; `None` if absent.
     pub charset: Option<String>,
+    /// MSH-9.3 message structure identifier, e.g. `"ADT_A01"` or `"ORU_R01"`.
+    /// Used by Milestone 3 validation to select the correct structure definition.
+    /// `None` when MSH-9 has fewer than three components (common in HL7 v2.3 senders).
+    pub message_structure: Option<String>,
 }
 
 /// One segment within an HL7 message (e.g. `MSH`, `PID`, `OBR`).
@@ -189,6 +193,7 @@ impl Hl7Message {
             typical_segments: Vec::new(),
             typical_segment_descriptions: HashMap::new(),
             charset: None,
+            message_structure: None,
         }
     }
 }

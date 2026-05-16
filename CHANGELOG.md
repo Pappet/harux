@@ -10,6 +10,16 @@ and this project follows [Semantic Versioning](https://semver.org/lang/en/).
 ## [Unreleased]
 
 ### Added
+- **`Hl7Message::message_structure`** — captures the MSH-9.3 message structure identifier (e.g. `"ADT_A01"`, `"ORU_R01"`) into a new `Option<String>` field on `Hl7Message`. Falls back to `None` for older HL7 v2.3 senders that omit the third component. This field is the foundation for per-structure validation rules in Milestone 3. (#123)
+
+### Fixed
+- **Web server transient error no longer panics** — `axum::serve(...).expect("Web server failed")` inside a spawned task would panic the task on any transient I/O error. The `.expect()` is replaced with `if let Err(e) = ... { warn!(...) }` so the task exits cleanly and `tokio::select!` in `main` triggers the graceful shutdown path. (#114)
+- **Busy-poll drain loop replaced with event-driven `Notify`** — the graceful shutdown path spun in a 100 ms sleep loop checking `active_connections`. Added `drain_notify: Arc<Notify>` to `MllpStats`; each connection handler calls `notify_one()` when it decrements the counter to zero. `main` now uses `tokio::time::timeout(shutdown_timeout, drain_notify.notified())` — zero CPU during the drain wait, exact wake-up on last connection close. (#115)
+- **`MessageStore::search` — zero heap allocation per message per query** — the previous implementation called `.to_lowercase()` on six fields of every stored message on each search request (up to 60 000 short-lived `String`s for a full 10 000-message store). Replaced with `contains_ignore_ascii_case`, a window-scan that calls `eq_ignore_ascii_case` byte-by-byte with no allocation. HL7 data is ASCII/Latin-1, so this is both correct and faster. (#133)
+
+### Changed
+- **`SegmentDef::field_by_seq` — single shared lookup helper** — the O(1)-fast-path + O(N)-fallback field lookup pattern was duplicated verbatim in `dictionary.rs` (`get_field_description` and `inject_descriptions`) and `validation.rs` (`validate_data_types`). Extracted to `SegmentDef::field_by_seq(seq: usize) -> Option<&FieldDef>`. All three call sites replaced with a single method call. (#128)
+
 - **Syntax highlighting in Raw / ACK / JSON tabs** — segment names keep their accent colour and now sit alongside coloured HL7 delimiters. The 5 delimiters are auto-detected from MSH-1 / MSH-2, so non-standard separator characters are highlighted just as well as the spec defaults. When MSH is missing entirely (malformed payload) no delimiter colouring is applied — we don't pretend to know separators we never saw. The JSON tab now distinguishes keys, strings, numbers, booleans and `null` with dedicated colours; pretty-print whitespace is preserved and arbitrary string values are still safely HTML-escaped.
 - **Keyboard accessibility for custom elements** — added `tabindex`, `role="button"`, and Enter/Space keyboard activation for segment headers, copy buttons, field value cells, and tagging elements.
 - **Keyboard accessibility for source chips** — added `tabindex="0"`, `role="button"`, and Enter/Space keyboard activation for source chips in the message list header, allowing filter toggling via keyboard navigation.

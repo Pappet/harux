@@ -353,16 +353,7 @@ fn validate_data_types(msg: &Hl7Message, warnings: &mut Vec<ValidationWarning>) 
             if field.value.is_empty() {
                 continue; // empty values are caught by MISSING_FIELD rules
             }
-            let field_def = if field.index > 0 {
-                seg_def.fields.get(field.index - 1)
-            } else {
-                None
-            };
-
-            let Some(field_def) = field_def
-                .filter(|f| f.seq == field.index)
-                .or_else(|| seg_def.fields.iter().find(|f| f.seq == field.index))
-            else {
+            let Some(field_def) = seg_def.field_by_seq(field.index) else {
                 continue;
             };
             // Use only the first component — composite values include sub-component

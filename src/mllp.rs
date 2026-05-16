@@ -24,6 +24,9 @@ pub struct MllpStats {
     pub parse_errors: Arc<AtomicU64>,
     pub active_connections: Arc<AtomicU64>,
     pub rejected_connections: Arc<AtomicU64>,
+    /// Notified whenever `active_connections` drops to zero, enabling a
+    /// non-polling graceful-shutdown wait in `main`.
+    pub drain_notify: Arc<tokio::sync::Notify>,
 }
 
 impl MllpStats {
@@ -49,6 +52,7 @@ impl Default for MllpStats {
             parse_errors: Arc::new(AtomicU64::new(0)),
             active_connections: Arc::new(AtomicU64::new(0)),
             rejected_connections: Arc::new(AtomicU64::new(0)),
+            drain_notify: Arc::new(tokio::sync::Notify::new()),
         }
     }
 }
@@ -95,9 +99,13 @@ pub async fn start_mllp_server(
                             if let Err(e) = handle_connection(socket, &peer, &store, &stats, &config, shutdown_clone).await {
                                 warn!("Connection error from {}: {}", peer, e);
                             }
-                            stats.active_connections.fetch_sub(1, Ordering::Relaxed);
+                            let remaining = stats.active_connections.fetch_sub(1, Ordering::Relaxed);
                             info!("MLLP connection closed: {}", peer);
                             drop(permit); // Release the semaphore permit
+                            if remaining == 1 {
+                                // We were the last connection; wake the drain waiter in main.
+                                stats.drain_notify.notify_one();
+                            }
                         });
                     }
                     Err(_) => {

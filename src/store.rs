@@ -7,6 +7,19 @@ use tracing::{info, warn};
 
 const BROADCAST_CAPACITY: usize = 4096;
 
+/// Case-insensitive ASCII substring search with no heap allocation.
+/// HL7 fields are ASCII or Latin-1; Unicode multi-byte case folding is not needed here.
+fn contains_ignore_ascii_case(haystack: &str, needle: &str) -> bool {
+    if needle.is_empty() {
+        return true;
+    }
+    let needle = needle.as_bytes();
+    haystack
+        .as_bytes()
+        .windows(needle.len())
+        .any(|w| w.eq_ignore_ascii_case(needle))
+}
+
 #[derive(Clone)]
 #[allow(clippy::large_enum_variant)]
 pub enum StoreEvent {
@@ -140,7 +153,6 @@ impl MessageStore {
 
     /// Search messages by filter text (matches message type, patient name, facility, etc.)
     pub async fn search(&self, query: &str, limit: usize) -> Vec<Hl7MessageSummary> {
-        let query_lower = query.to_lowercase();
         let inner = self.inner.read().await;
         inner
             .order
@@ -148,20 +160,16 @@ impl MessageStore {
             .rev()
             .filter_map(|id| inner.messages.get(id))
             .filter(|m| {
-                m.message_type.to_lowercase().contains(&query_lower)
-                    || m.sending_facility.to_lowercase().contains(&query_lower)
+                contains_ignore_ascii_case(&m.message_type, query)
+                    || contains_ignore_ascii_case(&m.sending_facility, query)
                     || m.patient_name
                         .as_deref()
-                        .unwrap_or("")
-                        .to_lowercase()
-                        .contains(&query_lower)
+                        .is_some_and(|n| contains_ignore_ascii_case(n, query))
                     || m.patient_id
                         .as_deref()
-                        .unwrap_or("")
-                        .to_lowercase()
-                        .contains(&query_lower)
-                    || m.message_control_id.to_lowercase().contains(&query_lower)
-                    || m.source_addr.contains(&query_lower)
+                        .is_some_and(|n| contains_ignore_ascii_case(n, query))
+                    || contains_ignore_ascii_case(&m.message_control_id, query)
+                    || contains_ignore_ascii_case(&m.source_addr, query)
             })
             .take(limit)
             .map(|arc| Hl7MessageSummary::from(arc.as_ref()))
