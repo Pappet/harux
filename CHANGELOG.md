@@ -63,12 +63,9 @@ and this project follows [Semantic Versioning](https://semver.org/lang/en/).
 
 | Commit | Description |
 |--------|-------------|
-<<<<<<< HEAD
 | [`1b9fb8f`](https://github.com/Pappet/harux/commit/1b9fb8f) | `fix(store):` handle non-ASCII needles in contains_ignore_ascii_case (#133) |
 | [`7c1c18f`](https://github.com/Pappet/harux/commit/7c1c18f) | `fix(ui):` self-host Inter + JetBrains Mono, remove Google Fonts CDN (#142) |
-=======
-| [`PLACEHOLDER`](https://github.com/Pappet/harux/commit/PLACEHOLDER) | `fix(ui):` self-host fonts, strict CSP, font cache headers (#142) |
->>>>>>> 8704885 (fix(ui): self-host fonts, strict CSP, font cache headers (#142))
+| [`d42f605`](https://github.com/Pappet/harux/commit/d42f605) | `fix(ui):` self-host fonts, strict CSP, font cache headers (#142) |
 
 #### 2026-05-15
 
