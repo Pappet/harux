@@ -25,6 +25,13 @@ pub struct ValidationWarning {
     pub field: Option<usize>,
 }
 
+// ─── Constants ────────────────────────────────────────────────────────────────
+
+const PV1_REQUIRED_ADT_EVENTS: &[&str] = &[
+    "ADT^A01", "ADT^A02", "ADT^A03", "ADT^A04", "ADT^A05", "ADT^A06", "ADT^A07", "ADT^A08",
+    "ADT^A09", "ADT^A10", "ADT^A11", "ADT^A12", "ADT^A13",
+];
+
 // ─── Entry point ──────────────────────────────────────────────────────────────
 
 /// Validate a parsed HL7 message and return all warnings found.
@@ -172,22 +179,7 @@ fn validate_adt(msg: &Hl7Message, warnings: &mut Vec<ValidationWarning>) {
     }
 
     // PV1 is required for most ADT events (transfer/admit/discharge)
-    let pv1_required = matches!(
-        msg.message_type.as_str(),
-        "ADT^A01"
-            | "ADT^A02"
-            | "ADT^A03"
-            | "ADT^A04"
-            | "ADT^A05"
-            | "ADT^A06"
-            | "ADT^A07"
-            | "ADT^A08"
-            | "ADT^A09"
-            | "ADT^A10"
-            | "ADT^A11"
-            | "ADT^A12"
-            | "ADT^A13"
-    );
+    let pv1_required = PV1_REQUIRED_ADT_EVENTS.contains(&msg.message_type.as_str());
     if pv1_required {
         if let Some(pv1) = find_segment(msg, "PV1") {
             // PV1-2: Patient Class (I/O/E/P/R/B/C/N/U)
@@ -228,30 +220,15 @@ fn validate_oru_r01(msg: &Hl7Message, warnings: &mut Vec<ValidationWarning>) {
     for seg in msg.segments.iter().filter(|s| s.name == "OBX") {
         // OBX-2: Value Type (NM, ST, CWE, etc.)
         if field_value(seg, 2).is_none() {
-            warnings.push(ValidationWarning {
-                code: "MISSING_FIELD".into(),
-                message: "OBX-2 (Value Type) is required for ORU^R01".into(),
-                segment: "OBX".into(),
-                field: Some(2),
-            });
+            warn_missing_field(warnings, "OBX", 2, "Value Type", ctx);
         }
         // OBX-3: Observation Identifier
         if field_value(seg, 3).is_none() {
-            warnings.push(ValidationWarning {
-                code: "MISSING_FIELD".into(),
-                message: "OBX-3 (Observation Identifier) is required for ORU^R01".into(),
-                segment: "OBX".into(),
-                field: Some(3),
-            });
+            warn_missing_field(warnings, "OBX", 3, "Observation Identifier", ctx);
         }
         // OBX-11: Observation Result Status
         if field_value(seg, 11).is_none() {
-            warnings.push(ValidationWarning {
-                code: "MISSING_FIELD".into(),
-                message: "OBX-11 (Observation Result Status) is required for ORU^R01".into(),
-                segment: "OBX".into(),
-                field: Some(11),
-            });
+            warn_missing_field(warnings, "OBX", 11, "Observation Result Status", ctx);
         }
     }
 }

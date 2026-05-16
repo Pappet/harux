@@ -1,6 +1,3 @@
-#![allow(dead_code)]
-#![allow(unused_variables)]
-
 use serde::Deserialize;
 use std::collections::HashMap;
 use std::sync::OnceLock;
@@ -20,6 +17,8 @@ pub struct SegmentDef {
 
 #[derive(Debug, Deserialize)]
 pub struct VersionDef {
+    /// Version string from the JSON file (e.g. `"2.5.1"`); reserved for future version-aware lookup.
+    #[allow(dead_code)]
     pub version: String,
     pub segments: HashMap<String, SegmentDef>,
 }
@@ -33,7 +32,10 @@ pub fn get_v251() -> &'static VersionDef {
     })
 }
 
-pub fn get_field_description(version: &str, segment: &str, field_seq: usize) -> Option<String> {
+/// Look up a field description by segment name and 1-based field index.
+/// Currently always uses the v2.5.1 dictionary; version-aware lookup is tracked in issue #49.
+#[allow(dead_code)]
+pub fn get_field_description(segment: &str, field_seq: usize) -> Option<String> {
     // Currently fallback to v2.5.1 for all versions, could be extended later
     let dict = get_v251();
 
@@ -61,7 +63,7 @@ pub fn get_segment_description(name: &str) -> Option<String> {
     get_v251().segments.get(name).map(|s| s.desc.clone())
 }
 
-pub fn inject_descriptions(segments: &mut [crate::hl7::types::Hl7Segment], version: &str) {
+pub fn inject_descriptions(segments: &mut [crate::hl7::types::Hl7Segment]) {
     let dict = get_v251();
     for segment in segments.iter_mut() {
         let seg_name = segment.name.clone();
@@ -92,19 +94,19 @@ mod tests {
 
     #[test]
     fn test_valid_lookup_pid5() {
-        let desc = get_field_description("2.5.1", "PID", 5);
+        let desc = get_field_description("PID", 5);
         assert_eq!(desc, Some("Patient Name".to_string()));
     }
 
     #[test]
     fn test_fallback_version() {
-        let desc = get_field_description("2.2", "PID", 5);
+        let desc = get_field_description("PID", 5);
         assert_eq!(desc, Some("Patient Name".to_string()));
     }
 
     #[test]
     fn test_invalid_segment() {
-        let desc = get_field_description("2.5.1", "ZZZ", 1);
+        let desc = get_field_description("ZZZ", 1);
         assert_eq!(desc, None);
     }
 }

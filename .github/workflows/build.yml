@@ -10,10 +10,30 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  build-windows:
-    runs-on: windows-latest
+  build:
+    name: Build (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
     permissions:
       contents: write
+    strategy:
+      matrix:
+        include:
+          - os: windows-latest
+            artifact_name: harux.exe
+            artifact_label: harux-windows
+            binary_path: target/release/harux.exe
+            release_asset: harux.exe
+          - os: macos-latest
+            artifact_name: harux
+            artifact_label: harux-macos-apple-silicon
+            binary_path: target/release/harux
+            release_asset: harux-macos-apple-silicon
+          - os: ubuntu-latest
+            artifact_name: harux
+            artifact_label: harux-linux
+            binary_path: target/release/harux
+            release_asset: harux-linux
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -28,8 +48,8 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: windows-cargo-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: windows-cargo-
+          key: ${{ matrix.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ matrix.os }}-cargo-
 
       - name: Build
         run: cargo build --release
@@ -40,96 +60,22 @@ jobs:
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: harux-windows
-          path: target/release/harux.exe
+          name: ${{ matrix.artifact_label }}
+          path: ${{ matrix.binary_path }}
           retention-days: 30
 
-      - name: Attach to Release
-        if: github.event_name == 'release'
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh release upload ${{ github.ref_name }} target/release/harux.exe --clobber
-
-  build-macos:
-    runs-on: macos-latest
-    permissions:
-      contents: write
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Cache cargo
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: macos-cargo-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: macos-cargo-
-
-      - name: Build
-        run: cargo build --release
-
-      - name: Run tests
-        run: cargo test --release
-
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: harux-macos-apple-silicon
-          path: target/release/harux
-          retention-days: 30
+      - name: Rename for release (non-Windows)
+        if: github.event_name == 'release' && matrix.os != 'windows-latest'
+        run: cp ${{ matrix.binary_path }} ${{ matrix.release_asset }}
 
       - name: Attach to Release
         if: github.event_name == 'release'
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          cp target/release/harux harux-macos-apple-silicon
-          gh release upload ${{ github.ref_name }} harux-macos-apple-silicon --clobber
-
-  build-linux:
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Cache cargo
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: linux-cargo-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: linux-cargo-
-
-      - name: Build
-        run: cargo build --release
-
-      - name: Run tests
-        run: cargo test --release
-
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: harux-linux
-          path: target/release/harux
-          retention-days: 30
-
-      - name: Attach to Release
-        if: github.event_name == 'release'
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          cp target/release/harux harux-linux
-          gh release upload ${{ github.ref_name }} harux-linux --clobber
+          if [ "${{ matrix.os }}" = "windows-latest" ]; then
+            gh release upload ${{ github.ref_name }} ${{ matrix.binary_path }} --clobber
+          else
+            gh release upload ${{ github.ref_name }} ${{ matrix.release_asset }} --clobber
+          fi
+        shell: bash

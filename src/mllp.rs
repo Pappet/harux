@@ -1,5 +1,5 @@
 use crate::config::MllpConfig;
-use crate::hl7::parser::{build_ack, parse_message};
+use crate::hl7::parser::{build_ack, build_nack, parse_message};
 use crate::hl7::types::Hl7Message;
 use crate::store::MessageStore;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -208,9 +208,7 @@ async fn handle_connection(
                     warn!("Parse error from {}: {}", peer, e);
 
                     // Send NACK (AE = Application Error)
-                    let nack =
-                        "MSH|^~\\&|Harux|Harux|||||ACK||P|2.5\rMSA|AE|UNKNOWN|Message parse error"
-                            .to_string();
+                    let nack = build_nack("Message parse error");
 
                     // Store the failed message so it is visible in the UI
                     let mut failed = Hl7Message::new_empty(message.clone(), peer.to_string());

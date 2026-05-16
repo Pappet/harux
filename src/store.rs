@@ -173,49 +173,76 @@ impl MessageStore {
         self.inner.read().await.order.len()
     }
 
+    /// Apply a mutation to a message by ID and broadcast the appropriate event.
+    /// Returns the new summary if the message was found and the mutation ran, or None otherwise.
+    async fn mutate_message(
+        &self,
+        id: &str,
+        f: impl FnOnce(&mut Hl7Message) -> bool,
+    ) -> Option<Hl7MessageSummary> {
+        let mut inner = self.inner.write().await;
+        let arc = inner.messages.get_mut(id)?;
+        if f(Arc::make_mut(arc)) {
+            let summary = Hl7MessageSummary::from(arc.as_ref());
+            Some(summary)
+        } else {
+            None
+        }
+    }
+
     /// Add a tag to a message and broadcast the update
     pub async fn add_tag(&self, id: &str, tag: String) -> bool {
-        let mut inner = self.inner.write().await;
-        if let Some(arc) = inner.messages.get_mut(id) {
-            if !arc.tags.contains(&tag) {
-                Arc::make_mut(arc).tags.push(tag);
-                let summary = Hl7MessageSummary::from(arc.as_ref());
-                drop(inner);
-                let _ = self.tx.send(StoreEvent::TagsUpdated(Box::new(summary)));
-                return true;
-            }
+        let tag_clone = tag.clone();
+        if let Some(summary) = self
+            .mutate_message(id, |msg| {
+                if msg.tags.contains(&tag_clone) {
+                    return false;
+                }
+                msg.tags.push(tag_clone);
+                true
+            })
+            .await
+        {
+            let _ = self.tx.send(StoreEvent::TagsUpdated(Box::new(summary)));
+            true
+        } else {
+            false
         }
-        false
     }
 
     /// Remove a tag from a message and broadcast the update
     pub async fn remove_tag(&self, id: &str, tag: &str) -> bool {
-        let mut inner = self.inner.write().await;
-        if let Some(arc) = inner.messages.get_mut(id) {
-            if let Some(pos) = arc.tags.iter().position(|t| t == tag) {
-                Arc::make_mut(arc).tags.remove(pos);
-                let summary = Hl7MessageSummary::from(arc.as_ref());
-                drop(inner);
-                let _ = self.tx.send(StoreEvent::TagsUpdated(Box::new(summary)));
-                return true;
-            }
+        let tag = tag.to_string();
+        if let Some(summary) = self
+            .mutate_message(id, |msg| {
+                if let Some(pos) = msg.tags.iter().position(|t| *t == tag) {
+                    msg.tags.remove(pos);
+                    true
+                } else {
+                    false
+                }
+            })
+            .await
+        {
+            let _ = self.tx.send(StoreEvent::TagsUpdated(Box::new(summary)));
+            true
+        } else {
+            false
         }
-        false
     }
 
     /// Toggle bookmark on a message, returns the new bookmark state or None if not found
     pub async fn toggle_bookmark(&self, id: &str) -> Option<bool> {
-        let mut inner = self.inner.write().await;
-        if let Some(arc) = inner.messages.get_mut(id) {
-            let mut_msg = Arc::make_mut(arc);
-            mut_msg.bookmarked = !mut_msg.bookmarked;
-            let new_state = mut_msg.bookmarked;
-            let summary = Hl7MessageSummary::from(arc.as_ref());
-            drop(inner);
-            let _ = self.tx.send(StoreEvent::BookmarkToggled(Box::new(summary)));
-            return Some(new_state);
-        }
-        None
+        let mut new_state = false;
+        let summary = self
+            .mutate_message(id, |msg| {
+                msg.bookmarked = !msg.bookmarked;
+                new_state = msg.bookmarked;
+                true
+            })
+            .await?;
+        let _ = self.tx.send(StoreEvent::BookmarkToggled(Box::new(summary)));
+        Some(new_state)
     }
 
     /// Clear all messages
