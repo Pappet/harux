@@ -139,6 +139,10 @@ async fn handle_connection(
     let read_timeout = config.read_timeout();
     let write_timeout = config.write_timeout();
 
+    // Tracks the farthest byte already scanned for the MLLP end sequence.
+    // Avoids O(n²) re-scanning of large messages arriving in many small chunks.
+    let mut scan_offset: usize = 0;
+
     let mut shutdown_requested = false;
 
     loop {
@@ -181,7 +185,8 @@ async fn handle_connection(
         }
 
         // Process all complete MLLP frames in the buffer
-        while let Some((message, consumed, charset)) = extract_mllp_frame(&accumulated) {
+        while let Some((message, consumed, charset)) = extract_mllp_frame(&accumulated, scan_offset)
+        {
             stats.received.fetch_add(1, Ordering::Relaxed);
 
             match parse_message(&message, peer) {
@@ -232,9 +237,13 @@ async fn handle_connection(
                 }
             }
 
-            // Remove processed bytes
+            // Remove processed bytes; reset scan position for the next frame.
             accumulated.drain(..consumed);
+            scan_offset = 0;
         }
+        // No complete frame yet — advance past already-scanned bytes on the next read.
+        // Subtract 1 so we re-check the last byte in case FS+CR straddles a chunk boundary.
+        scan_offset = accumulated.len().saturating_sub(1);
 
         if shutdown_requested && accumulated.is_empty() {
             info!("Gracefully closing connection from {} after draining", peer);
@@ -246,13 +255,21 @@ async fn handle_connection(
 }
 
 /// Extract one complete MLLP frame from the buffer.
+///
+/// `scan_from` is a hint: the caller tracks how far it has already scanned for
+/// the end sequence across partial reads, so only newly arrived bytes are searched.
+/// Pass `0` for the first call on a fresh buffer; reset to `0` after consuming a frame.
+///
 /// Returns (message_content, bytes_consumed, detected_charset) or None if incomplete.
-fn extract_mllp_frame(buf: &[u8]) -> Option<(String, usize, Option<String>)> {
+fn extract_mllp_frame(buf: &[u8], scan_from: usize) -> Option<(String, usize, Option<String>)> {
     // Find start byte
     let start_pos = buf.iter().position(|&b| b == MLLP_START)?;
 
+    // Resume end-sequence search from where the previous call stopped, never before start+1.
+    let search_from = (start_pos + 1).max(scan_from);
+
     // Find end sequence (FS + CR)
-    for i in (start_pos + 1)..buf.len().saturating_sub(1) {
+    for i in search_from..buf.len().saturating_sub(1) {
         if buf[i] == MLLP_END_1 && buf[i + 1] == MLLP_END_2 {
             let message_bytes = &buf[start_pos + 1..i];
 
@@ -328,7 +345,7 @@ mod tests {
         frame.push(MLLP_END_1);
         frame.push(MLLP_END_2);
 
-        let (extracted, consumed, charset) = extract_mllp_frame(&frame).unwrap();
+        let (extracted, consumed, charset) = extract_mllp_frame(&frame, 0).unwrap();
         assert_eq!(extracted, msg);
         assert_eq!(consumed, frame.len());
         assert_eq!(charset, None);
@@ -344,7 +361,7 @@ mod tests {
         frame.push(MLLP_END_1);
         frame.push(MLLP_END_2);
 
-        let (extracted, consumed, charset) = extract_mllp_frame(&frame).unwrap();
+        let (extracted, consumed, charset) = extract_mllp_frame(&frame, 0).unwrap();
         assert_eq!(charset.as_deref(), Some("8859/1"));
         assert_eq!(consumed, frame.len());
         // \xE4 should be decoded as 'ä'
@@ -354,7 +371,7 @@ mod tests {
     #[test]
     fn test_incomplete_frame() {
         let frame = vec![MLLP_START, b'M', b'S', b'H'];
-        assert!(extract_mllp_frame(&frame).is_none());
+        assert!(extract_mllp_frame(&frame, 0).is_none());
     }
 
     #[test]
@@ -373,5 +390,34 @@ mod tests {
         assert_eq!(stats.parse_errors.load(Ordering::Relaxed), 0);
         assert_eq!(stats.active_connections.load(Ordering::Relaxed), 0);
         assert_eq!(stats.rejected_connections.load(Ordering::Relaxed), 0);
+    }
+
+    #[test]
+    fn test_scan_offset_skips_already_scanned_bytes() {
+        // Simulate a large frame arriving in two chunks: the end sequence is
+        // only present in the second chunk. Verify that passing the correct
+        // scan_from skips re-scanning the first chunk entirely.
+        let payload = b"MSH|^~\\&|A|B|||20200101||ADT^A01|1|P|2.5";
+        let mut frame: Vec<u8> = vec![MLLP_START];
+        frame.extend_from_slice(payload);
+
+        // First chunk: no end sequence yet — scan_from=0 returns None.
+        assert!(extract_mllp_frame(&frame, 0).is_none());
+        // Advance scan_from past already-checked bytes.
+        let scan_from = frame.len().saturating_sub(1);
+
+        // Second chunk: append end sequence.
+        frame.push(MLLP_END_1);
+        frame.push(MLLP_END_2);
+
+        // With correct scan_from the frame is found; with scan_from=0 it would also
+        // be found but would re-scan unnecessarily. Both must return the same result.
+        let result_incremental = extract_mllp_frame(&frame, scan_from);
+        let result_full = extract_mllp_frame(&frame, 0);
+        assert!(result_incremental.is_some());
+        assert_eq!(
+            result_incremental.map(|(m, c, _)| (m, c)),
+            result_full.map(|(m, c, _)| (m, c))
+        );
     }
 }
