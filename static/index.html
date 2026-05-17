@@ -26,16 +26,16 @@
                 <span class="label">conns</span>
                 <span class="value" id="pill-conns-value">0 / 0</span>
             </div>
-            <div class="health-pill" id="pill-rate" title="Messages/min over last 60s">
+            <div class="health-pill hidden" id="pill-rate" title="Messages/min over last 60s">
                 <span class="label">rate</span>
                 <span class="value" id="pill-rate-value">0/min</span>
                 <svg class="spark" id="pill-rate-spark" viewBox="0 0 60 18" preserveAspectRatio="none"></svg>
             </div>
-            <div class="health-pill" id="pill-last" title="Time since last message">
+            <div class="health-pill hidden" id="pill-last" title="Time since last message">
                 <span class="label">last</span>
                 <span class="value" id="pill-last-value">—</span>
             </div>
-            <div class="health-pill" id="pill-rejected" title="Connections rejected over capacity">
+            <div class="health-pill hidden" id="pill-rejected" title="Connections rejected over capacity">
                 <span class="label">rejected</span>
                 <span class="value" id="pill-rejected-value">0</span>
             </div>
@@ -124,23 +124,23 @@
         <div class="detail-panel">
             <div class="detail-header" id="detail-header">
                 <div class="detail-title-line">
-                    <span id="detail-type" class="detail-type"></span>
+                    <span id="detail-type" class="detail-type hidden"></span>
                     <span id="detail-title" class="detail-title">Select a message</span>
                 </div>
                 <div id="detail-actions" class="detail-actions">
                     <div id="detail-tags" class="detail-tags-inline"></div>
                 </div>
-                <div id="detail-desc" class="detail-desc"></div>
+                <div id="detail-desc" class="detail-desc hidden"></div>
                 <div id="detail-meta" class="detail-meta"></div>
             </div>
             <div class="detail-tabs">
                 <button class="detail-tab active" data-tab="parsed">
-                    Segments <span class="badge" id="tab-segments-badge">0</span>
+                    Segments <span class="badge hidden" id="tab-segments-badge">0</span>
                 </button>
                 <button class="detail-tab" data-tab="raw">Raw</button>
                 <button class="detail-tab" data-tab="ack">ACK</button>
                 <button class="detail-tab" data-tab="json">JSON</button>
-                <button class="detail-tab diff-tab" id="tab-btn-diff" data-tab="diff">
+                <button class="detail-tab diff-tab hidden" id="tab-btn-diff" data-tab="diff">
                     <svg class="i-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>
                     Diff vs pinned
                 </button>

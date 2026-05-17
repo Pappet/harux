@@ -120,21 +120,21 @@ function renderHealthPills() {
     const rateValue = document.getElementById('pill-rate-value');
     const rateSpark = document.getElementById('pill-rate-spark');
     if (state.rateWindow.length > 0) {
-        ratePill.style.display = 'inline-flex';
+        ratePill.classList.remove('hidden');
         rateValue.textContent = `${state.rateWindow.length}/min`;
         rateSpark.innerHTML = renderRateSpark();
     } else {
-        ratePill.style.display = 'none';
+        ratePill.classList.add('hidden');
     }
 
     // last pill — show only after first message
     const lastPill = document.getElementById('pill-last');
     const lastValue = document.getElementById('pill-last-value');
     if (state.lastMessageReceivedAt !== null) {
-        lastPill.style.display = 'inline-flex';
+        lastPill.classList.remove('hidden');
         lastValue.textContent = formatRelativeTime(Date.now() - state.lastMessageReceivedAt);
     } else {
-        lastPill.style.display = 'none';
+        lastPill.classList.add('hidden');
     }
 }
 
@@ -492,14 +492,14 @@ async function selectMessage(id) {
 function resetDetailHeader() {
     const typeEl = document.getElementById('detail-type');
     if (typeEl) {
-        typeEl.style.display = 'none';
+        typeEl.classList.add('hidden');
         typeEl.textContent = '';
     }
     const titleEl = document.getElementById('detail-title');
     if (titleEl) titleEl.textContent = 'Select a message';
     const descEl = document.getElementById('detail-desc');
     if (descEl) {
-        descEl.style.display = 'none';
+        descEl.classList.add('hidden');
         descEl.textContent = '';
     }
     const metaEl = document.getElementById('detail-meta');
@@ -507,7 +507,7 @@ function resetDetailHeader() {
     const actionsEl = document.getElementById('detail-actions');
     if (actionsEl) actionsEl.innerHTML = '';
     const segBadge = document.getElementById('tab-segments-badge');
-    if (segBadge) segBadge.style.display = 'none';
+    if (segBadge) segBadge.classList.add('hidden');
 }
 
 function buildDetailMeta(msg) {
@@ -547,9 +547,9 @@ function renderDetail() {
     const typeEl = document.getElementById('detail-type');
     if (msg.message_type) {
         typeEl.textContent = msg.message_type;
-        typeEl.style.display = 'inline';
+        typeEl.classList.remove('hidden');
     } else {
-        typeEl.style.display = 'none';
+        typeEl.classList.add('hidden');
     }
     document.getElementById('detail-title').textContent =
         msg.patient_name || msg.patient_id || msg.message_type || 'Message';
@@ -558,9 +558,9 @@ function renderDetail() {
     const descEl = document.getElementById('detail-desc');
     if (msg.message_type_description) {
         descEl.textContent = msg.message_type_description;
-        descEl.style.display = 'block';
+        descEl.classList.remove('hidden');
     } else {
-        descEl.style.display = 'none';
+        descEl.classList.add('hidden');
     }
 
     document.getElementById('detail-meta').innerHTML = buildDetailMeta(msg);
@@ -595,9 +595,9 @@ function renderDetail() {
         const count = (msg.segments && msg.segments.length) || 0;
         if (count > 0) {
             segBadge.textContent = count;
-            segBadge.style.display = 'inline';
+            segBadge.classList.remove('hidden');
         } else {
-            segBadge.style.display = 'none';
+            segBadge.classList.add('hidden');
         }
     }
 
@@ -605,7 +605,7 @@ function renderDetail() {
     const diffTabBtn = document.getElementById('tab-btn-diff');
     if (diffTabBtn) {
         const showDiff = state.diffPinnedMessage && state.diffPinnedMessage.id !== msg.id;
-        diffTabBtn.style.display = showDiff ? 'inline-flex' : 'none';
+        diffTabBtn.classList.toggle('hidden', !showDiff);
         if (!showDiff && state.activeTab === 'diff') {
             state.activeTab = 'parsed';
         }
