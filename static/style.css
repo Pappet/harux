@@ -212,10 +212,8 @@ header {
     color: var(--success);
 }
 
-/* Health pills that are hidden on initial render until data arrives */
-#pill-rate,
-#pill-last,
-#pill-rejected { display: none; }
+/* Utility class for JS-toggled visibility — keeps layout logic out of render.js */
+.hidden { display: none !important; }
 
 .topbar-divider {
     width: 1px;
@@ -1293,13 +1291,6 @@ body.resizing * {
     margin-left: auto;
 }
 
-/* Hidden on initial render — shown by JS when a message is selected */
-#detail-type,
-#detail-desc { display: none; }
-
-/* Badge and diff tab start hidden; JS reveals them when relevant */
-#tab-segments-badge,
-#tab-btn-diff { display: none; }
 
 .detail-content {
     flex: 1;

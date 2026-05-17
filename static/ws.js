@@ -217,11 +217,11 @@ async function pollStats() {
         const rejectedValue = document.getElementById('pill-rejected-value');
         if (rejectedPill && rejectedValue) {
             if (stats.rejected_connections > 0) {
-                rejectedPill.style.display = '';
+                rejectedPill.classList.remove('hidden');
                 rejectedValue.textContent = stats.rejected_connections;
                 rejectedPill.classList.add('warn-pill');
             } else {
-                rejectedPill.style.display = 'none';
+                rejectedPill.classList.add('hidden');
                 rejectedPill.classList.remove('warn-pill');
             }
         }
