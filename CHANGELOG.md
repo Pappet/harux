@@ -70,6 +70,7 @@ and this project follows [Semantic Versioning](https://semver.org/lang/en/).
 
 | Commit | Description |
 |--------|-------------|
+| [`1fd7df2`](https://github.com/Pappet/harux/commit/1fd7df2) | `refactor(ui):` replace style.display assignments with .hidden CSS class (#172) |
 | [`437dd76`](https://github.com/Pappet/harux/commit/437dd76) | `fix(ui):` restore visibility of CSS-hidden elements after CSP inline-style removal (#172) |
 | [`1b9fb8f`](https://github.com/Pappet/harux/commit/1b9fb8f) | `fix(store):` handle non-ASCII needles in contains_ignore_ascii_case (#133) |
 | [`7c1c18f`](https://github.com/Pappet/harux/commit/7c1c18f) | `fix(ui):` self-host Inter + JetBrains Mono, remove Google Fonts CDN (#142) |
