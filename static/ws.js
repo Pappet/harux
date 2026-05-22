@@ -58,6 +58,8 @@ function connectWs() {
             state.seenSources.clear();
             state.diffPinnedMessage = null;
             state.totalMessagesCount = 0;
+            state.totalValidationCount = 0;
+            state.totalBookmarkCount = 0;
             state.rateWindow.length = 0;
             state.lastMessageReceivedAt = null;
             state.selectedId = null;
@@ -90,10 +92,21 @@ function updateMessageTags(summary) {
 
 function updateMessageBookmark(summary) {
     const listMsg = state.messages.find(m => m.id === summary.id);
-    if (listMsg) listMsg.bookmarked = summary.bookmarked;
+    if (listMsg) {
+        if (listMsg.bookmarked !== summary.bookmarked) {
+            state.totalBookmarkCount += summary.bookmarked ? 1 : -1;
+        }
+        listMsg.bookmarked = summary.bookmarked;
+    }
 
     const pendingMsg = state.pendingMessages.find(m => m.id === summary.id);
-    if (pendingMsg) pendingMsg.bookmarked = summary.bookmarked;
+    if (pendingMsg) {
+        // Edge case: message arrived but not yet flushed from pendingMessages.
+        if (pendingMsg.bookmarked !== summary.bookmarked) {
+            state.totalBookmarkCount += summary.bookmarked ? 1 : -1;
+        }
+        pendingMsg.bookmarked = summary.bookmarked;
+    }
 
     if (state.selectedMessage && state.selectedMessage.id === summary.id) {
         state.selectedMessage.bookmarked = summary.bookmarked;
@@ -121,6 +134,8 @@ function addMessage(summary) {
     const label = srcLabelFor(summary.source_addr);
     if (label) state.sourceCounts.set(label, (state.sourceCounts.get(label) || 0) + 1);
     state.totalMessagesCount++;
+    state.totalValidationCount += (summary.validation_warning_count || 0) + (summary.has_segment_errors ? 1 : 0);
+    // totalBookmarkCount not incremented here — new messages are never bookmarked.
     const now = Date.now();
     state.rateWindow.push(now);
     state.lastMessageReceivedAt = now;
@@ -164,12 +179,15 @@ async function loadMessages() {
         if (!resp.ok) return;
         state.messages = await resp.json();
         state.pendingMessages = [];
-        // Rebuild seenSources from the freshly-loaded buffer. Without this,
-        // a `lagged`-triggered reload would leave stale chips behind for
-        // sources whose messages were evicted on the server.
+        // Recompute all incremental counters from the freshly-loaded batch.
+        // This is O(n) but only runs on init/lagged reload, never per-message.
+        state.totalValidationCount = 0;
+        state.totalBookmarkCount = 0;
         state.seenSources.clear();
         for (const m of state.messages) {
             registerSource(m.source_addr);
+            state.totalValidationCount += (m.validation_warning_count || 0) + (m.has_segment_errors ? 1 : 0);
+            if (m.bookmarked) state.totalBookmarkCount++;
         }
         recomputeSourceCounts();
         renderMessageList();

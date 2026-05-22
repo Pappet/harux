@@ -29,6 +29,10 @@ const state = {
 
     // Server-derived counters
     totalMessagesCount: 0,
+    // Incrementally-maintained totals so updateHeaderCounters never iterates messages[].
+    // Reset to 0 on clear/reload; recomputed from fresh batch in loadMessages().
+    totalValidationCount: 0,
+    totalBookmarkCount: 0,
 
     // Health-pill state: rolling 60-second window of message timestamps.
     rateWindow: [], // Date.now() timestamps within last 60 s
