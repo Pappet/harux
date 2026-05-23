@@ -44,6 +44,26 @@ function renderSourceLegend() {
     state.seenSources.forEach(addr => uniqueLabels.add(srcLabelFor(addr)));
     const sortedLabels = Array.from(uniqueLabels).sort();
 
+    // Fast path: if the set of source labels is unchanged, only patch count
+    // spans and active/dimmed classes — no innerHTML rebuild, no DOM teardown.
+    const existingChips = Array.from(container.querySelectorAll('[data-source]'));
+    const labelsUnchanged = existingChips.length === sortedLabels.length &&
+        sortedLabels.every((l, i) => existingChips[i].dataset.source === l);
+
+    if (labelsUnchanged) {
+        for (const chip of existingChips) {
+            const label = chip.dataset.source;
+            chip.classList.toggle('active', state.highlightedSource === label);
+            chip.classList.toggle('dimmed', !!(state.highlightedSource && state.highlightedSource !== label));
+            const numEl = chip.querySelector('.num');
+            if (numEl) numEl.textContent = state.sourceCounts.get(label) || 0;
+        }
+        const checkbox = container.querySelector('[data-action="color-by-port"]');
+        if (checkbox) checkbox.checked = state.colorByPort;
+        return;
+    }
+
+    // Full rebuild — new source label(s) added or labelling changed (e.g. toggleColorByPort).
     const chipsHtml = sortedLabels.map(label => {
         const isActive = state.highlightedSource === label;
         const isDimmed = state.highlightedSource && state.highlightedSource !== label;
@@ -139,29 +159,30 @@ function renderHealthPills() {
 }
 
 function tickRowRelativeTimes() {
+    if (document.hidden) return;
     const now = Date.now();
+    // rowTimeLabel shows a static clock time for messages older than 5 min — skip those.
+    const cutoff = now - 300_000;
     document.querySelectorAll('.message-row').forEach(row => {
         const ts = row.dataset.received;
         if (!ts) return;
+        if (new Date(ts).getTime() < cutoff) return;
         const timeEl = row.querySelector('.msg-row2 .time');
         if (timeEl) timeEl.textContent = rowTimeLabel({ received_at: ts }, now);
     });
 }
 
 // --- Header counters (total / validation / parse errors) ---
-// `parse errors` is updated by pollStats from the server stat. The other two
-// counters are derived from the in-memory message buffer.
+// `parse errors` is updated by pollStats from the server stat. Validation and
+// bookmark counters are maintained incrementally in state (see ws.js) so this
+// function is O(1) regardless of store size.
 function updateHeaderCounters() {
     const totalEl = document.getElementById('pill-total-value');
     if (totalEl) {
         totalEl.textContent = state.messages.length + state.pendingMessages.length;
     }
 
-    let validationCount = 0;
-    for (const m of state.messages) {
-        validationCount += (m.validation_warning_count || 0);
-        if (m.has_segment_errors) validationCount++;
-    }
+    const validationCount = state.totalValidationCount;
     const validationPill = document.getElementById('pill-validation');
     const validationValue = document.getElementById('pill-validation-value');
     if (validationValue) validationValue.textContent = validationCount;
@@ -169,7 +190,7 @@ function updateHeaderCounters() {
         validationPill.classList.toggle('warn-pill', validationCount > 0);
     }
 
-    const bookmarkCount = state.messages.reduce((n, m) => n + (m.bookmarked ? 1 : 0), 0);
+    const bookmarkCount = state.totalBookmarkCount;
     const bookmarkBtn = document.getElementById('btn-bookmarks');
     if (bookmarkBtn) {
         const existing = bookmarkBtn.querySelector('.count');
