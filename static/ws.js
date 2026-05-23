@@ -135,7 +135,7 @@ function addMessage(summary) {
     if (label) state.sourceCounts.set(label, (state.sourceCounts.get(label) || 0) + 1);
     state.totalMessagesCount++;
     state.totalValidationCount += (summary.validation_warning_count || 0) + (summary.has_segment_errors ? 1 : 0);
-    // totalBookmarkCount not incremented here — new messages are never bookmarked.
+    if (summary.bookmarked) state.totalBookmarkCount++; // defensive: normally false, but safe on reconnect
     const now = Date.now();
     state.rateWindow.push(now);
     state.lastMessageReceivedAt = now;
