@@ -10,6 +10,7 @@ and this project follows [Semantic Versioning](https://semver.org/lang/en/).
 ## [Unreleased]
 
 ### Added
+- **Code audit report (`docs/code-audit-2026-05-29.md`)** — holistic architecture & logic audit of the whole repository. Documents 5 critical threats (KB-1..5) and 11 detailed findings (S-1..11), each filed as a tracked GitHub issue (#177–#192), plus a prioritised refactoring roadmap. Focus areas: unbounded client-side `state.messages` growth, circumventable store memory cap, byte-accounting drift, synchronous parse/validate in the MLLP read path, and the `CLAUDE.md` "no prepend logic" invariant that a later perf iteration overrode. Docs-only — no behavioural change.
 - **`Hl7Message::message_structure`** — captures the MSH-9.3 message structure identifier (e.g. `"ADT_A01"`, `"ORU_R01"`) into a new `Option<String>` field on `Hl7Message`. Falls back to `None` for older HL7 v2.3 senders that omit the third component. This field is the foundation for per-structure validation rules in Milestone 3. (#123)
 
 ### Fixed
@@ -75,6 +76,12 @@ and this project follows [Semantic Versioning](https://semver.org/lang/en/).
 | Commit | Description |
 |--------|-------------|
 | [`36caa17`](https://github.com/Pappet/harux/commit/36caa17fd408650e7e8eb717f4593e0670d96245) | `docs:` sync CLAUDE.md with code; drop unused tower-http + dead escJS |
+
+#### 2026-05-29
+
+| Commit | Description |
+|--------|-------------|
+| [`3dc6bdb`](https://github.com/Pappet/harux/commit/3dc6bdb7cb0142f8a25b185c3b77515d50b2ba84) | `docs:` add holistic code-audit report + file 16 findings as issues (#177–#192) |
 
 #### 2026-05-22
 
