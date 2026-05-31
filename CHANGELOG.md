@@ -19,6 +19,9 @@ and this project follows [Semantic Versioning](https://semver.org/lang/en/).
 - **`MessageStore::search` — zero heap allocation per message per query** — the previous implementation called `.to_lowercase()` on six fields of every stored message on each search request (up to 60 000 short-lived `String`s for a full 10 000-message store). Replaced with `contains_ignore_ascii_case`, a window-scan that calls `eq_ignore_ascii_case` byte-by-byte with no allocation for ASCII needles. For non-ASCII needles the function falls back to `to_lowercase().contains()` so multi-byte code-point boundaries are never sliced. HL7 data is almost always ASCII, so the fast path is taken in practice. (#133)
 
 ### Changed
+- **Docs — `CLAUDE.md` brought back in sync with the code** — the guidance file had drifted from the implementation in several places that actively mislead contributors: the store section referenced removed `DEFAULT_CAPACITY`/`MAX_STORE_BYTES` constants (capacity is now config-driven via `StoreConfig`); the frontend was described as a single `app.js` ("Three files") despite the `state`/`util`/`ws`/`render`/`diff`/`app` split; the constraints table forbade "prepend logic" even though `prependMessagesToList` is the no-filter hot path; the Web API list omitted the tag/bookmark routes and several WS event types; and the Source Layout tree omitted `config.rs`, `dictionary.rs`, `validation.rs`, `lib.rs`, `hl7/message_types.rs`, the embedded `assets/`, and the Rust integration tests. All sections updated to match `src/` and `static/` as they exist today.
+- **Dependency cleanup — remove unused `tower-http`** — `tower-http` (with `cors` + `fs` features) was declared in `Cargo.toml` but had zero usages in `src/`; CORS is not configured and static files are served via `rust-embed`, not `tower-http::fs`. Removed the dependency to cut build time and avoid signalling capabilities the server does not actually use.
+- **Dead code removal — `escJS` helper** — `static/util.js` defined `escJS()` but nothing called it (inline `onclick=`/`on*=` handlers were replaced by `data-action` delegation in #137, which removed the only callers). Deleted the dead function.
 - **`SegmentDef::field_by_seq` — single shared lookup helper** — the O(1)-fast-path + O(N)-fallback field lookup pattern was duplicated verbatim in `dictionary.rs` (`get_field_description` and `inject_descriptions`) and `validation.rs` (`validate_data_types`). Extracted to `SegmentDef::field_by_seq(seq: usize) -> Option<&FieldDef>`. All three call sites replaced with a single method call. (#128)
 
 - **Syntax highlighting in Raw / ACK / JSON tabs** — segment names keep their accent colour and now sit alongside coloured HL7 delimiters. The 5 delimiters are auto-detected from MSH-1 / MSH-2, so non-standard separator characters are highlighted just as well as the spec defaults. When MSH is missing entirely (malformed payload) no delimiter colouring is applied — we don't pretend to know separators we never saw. The JSON tab now distinguishes keys, strings, numbers, booleans and `null` with dedicated colours; pretty-print whitespace is preserved and arbitrary string values are still safely HTML-escaped.
@@ -66,6 +69,12 @@ and this project follows [Semantic Versioning](https://semver.org/lang/en/).
 - **Performance — O(1) header counters, source-legend fast path, tick-row cutoff** — three more per-batch performance hotspots addressed: (1) `updateHeaderCounters` no longer iterates `state.messages[]` to compute validation/bookmark totals; two new incremental counters (`totalValidationCount`, `totalBookmarkCount`) are maintained in `state`, incremented in `addMessage`, adjusted ±1 in `updateMessageBookmark`, and recomputed in bulk only when `loadMessages` replaces the buffer. (2) `renderSourceLegend` takes a fast path when the sorted list of source labels is unchanged: it patches count spans and active/dimmed classes in-place without touching `innerHTML` or destroying any DOM nodes. (3) `tickRowRelativeTimes` skips immediately when `document.hidden` (tab not visible) and bails out per-row when the message timestamp is older than 5 minutes, since `rowTimeLabel` returns a static clock time beyond that threshold. (#173, #174, #175)
 
 ### Commit History (chronological)
+
+#### 2026-05-31
+
+| Commit | Description |
+|--------|-------------|
+| [`36caa17`](https://github.com/Pappet/harux/commit/36caa17fd408650e7e8eb717f4593e0670d96245) | `docs:` sync CLAUDE.md with code; drop unused tower-http + dead escJS |
 
 #### 2026-05-22
 

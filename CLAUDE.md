@@ -62,9 +62,12 @@ Harux is an MLLP server with a real-time web UI for inspecting HL7 v2.x messages
 
 ### Store Capacity & Eviction
 
-- **Count limit:** `DEFAULT_CAPACITY = 10_000` messages (secondary safeguard)
-- **Size limit:** `MAX_STORE_BYTES = 512 MB` (primary safeguard)
-- **Trigger:** either limit hit → evict oldest 10% of messages
+Limits are **config-driven** via `StoreConfig` (`src/config.rs`), not hardcoded constants.
+
+- **Count limit:** `store.max_messages` (default `10_000`) — secondary safeguard
+- **Size limit:** `store.max_memory_mb` (default `512` MB) — primary safeguard
+- **Trigger:** either limit hit → background eviction task evicts oldest 10% of messages
+- **Bookmark protection:** bookmarked messages are skipped during eviction (popped and pushed back to the front in original order); see `run_eviction_loop` in `src/store.rs`
 - **Reason:** MDM messages with Base64-encoded attachments can be several MB each; count-only eviction is insufficient for real-world Orchestra traffic
 
 ### HL7 Parsing (`src/hl7/`)
@@ -84,34 +87,30 @@ Harux is an MLLP server with a real-time web UI for inspecting HL7 v2.x messages
 
 ### Web API Routes
 
-- `GET /api/messages?offset=&limit=` — Paginated message list (newest first)
+- `GET /api/messages?offset=&limit=` — Paginated message list (newest first; `limit` capped at 1000)
 - `GET /api/messages/{id}` — Full message with segments
-- `GET /api/search?q=&limit=` — Search messages (client-side in UI, server-side via this endpoint)
+- `GET /api/search?q=&limit=` — Search messages server-side. **Note:** the UI currently filters client-side (`matchesSearch()`); this endpoint exists but is not yet wired into the frontend.
 - `GET /api/stats` — Server statistics
+- `POST /api/messages/{id}/tags` — Add a tag (JSON body `{"tag": "..."}`)
+- `DELETE /api/messages/{id}/tags/{tag}` — Remove a tag
+- `POST /api/messages/{id}/bookmark` — Toggle bookmark
 - `POST /api/clear` — Clear all messages
 - `GET /api/export` — Download every stored message as one MLLP-framed `.hl7` file (raw payloads, oldest first, directly replayable)
-- `WS /ws` — Real-time updates ("init", "new_message", "lagged" events)
+- `WS /ws` — Real-time updates (`init`, `new_message`, `tags_updated`, `bookmark_toggled`, `cleared`, `lagged` events)
 
 ### Frontend (`static/`)
 
-Three files, all embedded into the binary at compile time via `rust-embed`:
-
-```
-static/
-├── index.html   # HTML structure only
-├── style.css    # All styles (dark theme, CSS variables)
-└── app.js       # All logic (WebSocket, rendering, search, batching)
-```
+The SPA is split across HTML, CSS, and several JS files (see the full tree in **Source Layout** below), all embedded into the binary at compile time via `rust-embed`. The JS files are plain `<script>` includes with **no module system** — they share a single global `state` object (`state.js`) and must be loaded in dependency order (`state` → `util` → `ws` → `render` → `diff` → `app`).
 
 **Important:** After any change to `static/`, a recompile is required — `rust-embed` bakes the files in at build time. There is no hot-reload.
 
 The frontend is **intentional vanilla JS — no framework**. Do not introduce React, Vue, Svelte, or any build toolchain. The embedded SPA approach is a deliberate architectural decision for zero-dependency deployment.
 
 Key frontend behaviors:
-- Messages are batched and rendered at most every 250ms (prevents DOM freeze at high message rates)
+- Messages are batched and flushed at most every 250ms (prevents DOM freeze at high message rates)
+- When no client-side filters are active, new messages are **prepended** to the list (`prependMessagesToList`); when a filter/search/bookmark filter is active, the list is fully rebuilt (`renderMessageList`)
 - ⏸ Pause/▶ Live button buffers incoming messages without displaying them
-- Search is purely client-side (filters `messages[]` array via `matchesSearch()`)
-- Search input is debounced 300ms as a safeguard for a future `/api/search` call
+- Search is client-side (filters `messages[]` array via `matchesSearch()`), debounced 300ms
 - Parse errors are shown with `⚠ PARSE ERROR` in red (`var(--error)`) in the message list
 
 ## Deployment Context
@@ -127,7 +126,7 @@ Key frontend behaviors:
 | Frontend | No framework, no build toolchain, no npm |
 | Parser | No zero-copy / lifetime refactoring (premature optimization) |
 | Store locking | No dashmap, no mpsc-channel refactor (planned for Milestone 1) |
-| DOM rendering | No prepend logic (batching at 250ms is sufficient) |
+| DOM rendering | Keep the 250ms flush batching. New messages prepend on the no-filter hot path; full rebuild only when a filter is active. Do not add per-message full rebuilds. |
 | Dependencies | Minimize new crates; check `Cargo.toml` before adding |
 
 ## Current Milestone: Milestone 3 — Message Analysis
@@ -145,13 +144,19 @@ Do not implement features from later milestones speculatively.
 ```
 src/
 ├── main.rs          # Entry point, tokio::select! over MLLP + Web tasks
-├── mllp.rs          # TCP listener, MLLP framing, ACK/NACK dispatch
+├── lib.rs           # Library crate root (re-exports modules for integration tests)
+├── config.rs        # TOML → env → defaults config loading (Config + typed sections)
+├── mllp.rs          # TCP listener, MLLP framing, charset decode, ACK/NACK dispatch
 ├── store.rs         # In-memory store with broadcast channel, dual eviction
 ├── web.rs           # Axum router, REST handlers, WebSocket handler
-└── hl7/
-    ├── mod.rs
-    ├── parser.rs    # Raw HL7 → Hl7Message, delimiter extraction, ACK builder
-    └── types.rs     # Hl7Message, Hl7MessageSummary, Hl7Segment, Hl7Field, Delimiters
+├── dictionary.rs    # Embedded HL7 field/segment dictionary (v2.5.1.json)
+├── validation.rs    # Required segment/field + primitive datatype validation
+├── hl7/
+│   ├── mod.rs
+│   ├── parser.rs        # Raw HL7 → Hl7Message, delimiter extraction, ACK builder
+│   ├── types.rs         # Hl7Message, Hl7MessageSummary, Hl7Segment, Hl7Field, Delimiters
+│   └── message_types.rs # Message-type registry (message_types.json)
+└── assets/hl7/      # Embedded JSON: v2.5.1.json (dictionary), message_types.json
 static/
 ├── index.html       # HTML skeleton
 ├── style.css        # Dark theme, CSS variables
@@ -160,10 +165,15 @@ static/
 ├── ws.js            # WebSocket + ingestion + stats polling
 ├── render.js        # List, legend, health pills, detail-panel tabs
 ├── diff.js          # Diff tab (renderDiffTab + builders)
-└── app.js           # Init + UI handlers (onclick) + splitter
+├── app.js           # Init + UI handlers (data-action delegation) + splitter
+└── fonts/           # Self-hosted woff2 (Inter, JetBrains Mono)
 tests/
-├── test.sh          # Linux/macOS functional + load test (netcat)
-└── test.ps1         # Windows functional + load test (.NET TcpClient, 1000 msg)
+├── parser_fixtures.rs            # Parser tests against tests/messages/*.hl7 fixtures
+├── web_api.rs                    # Axum REST/handler integration tests
+├── benchmark_concurrent_insert.rs # Concurrent store insert benchmark
+├── messages/                     # .hl7 fixtures (valid / errors / unknown_types)
+├── test.sh                       # Linux/macOS functional + load test (netcat)
+└── test.ps1                      # Windows functional + load test (.NET TcpClient, 1000 msg)
 ```
 ---
 
