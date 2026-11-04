@@ -1,5 +1,5 @@
 use crate::config::StoreConfig;
-use crate::hl7::types::{Hl7Message, Hl7MessageSummary};
+use crate::hl7::types::{Hl7Message, Hl7MessageSummary, MessageMeta, MessageSnapshot};
 use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 use tokio::sync::{broadcast, RwLock};
@@ -50,15 +50,27 @@ pub struct MessageStore {
     eviction_flag: Arc<std::sync::atomic::AtomicBool>,
 }
 
+/// One stored message: the immutable payload, its mutable metadata and the
+/// bytes it is accounted for.
+///
+/// The payload is `Arc`-shared so `get_by_id` hands out a cheap snapshot
+/// instead of cloning a (potentially multi-MB) message. It is **never mutated
+/// after insert** — tags and bookmark live in `meta` (#192), so a mutation
+/// can't trigger a copy-on-write deep clone while a reader holds a snapshot.
+struct StoredEntry {
+    message: Arc<Hl7Message>,
+    meta: MessageMeta,
+    /// `message.estimated_bytes() + meta.estimated_bytes()`, computed once at
+    /// insert and adjusted by the delta on every meta mutation. Eviction and
+    /// accounting use this instead of re-walking the parsed message.
+    bytes: usize,
+}
+
 // Messages are addressed by ID through `messages` (O(1) lookup) and ordered
-// for iteration / eviction through `order`. Arc-wrapping lets `get_by_id`
-// hand out a cheap reference-counted snapshot instead of cloning the whole
-// message (raw + parsed segments + validation warnings can be multi-MB for
-// MDM payloads). Mutations (tags, bookmark) use `Arc::make_mut` — copy-on-
-// write that only allocates when a reader holds a concurrent snapshot.
+// for iteration / eviction through `order`.
 struct StoreInner {
     order: VecDeque<String>,
-    messages: HashMap<String, Arc<Hl7Message>>,
+    messages: HashMap<String, StoredEntry>,
     capacity: usize,
     max_bytes: usize,
     current_bytes: usize,
@@ -69,7 +81,7 @@ struct StoreInner {
     /// Number of bookmarked messages currently stored — maintained
     /// incrementally so an eviction pass never has to scan the whole store.
     bookmark_count: usize,
-    /// Sum of `estimated_bytes()` over bookmarked messages (incremental).
+    /// Sum of entry bytes over bookmarked messages (incremental).
     bookmark_bytes: usize,
 }
 
@@ -126,9 +138,9 @@ impl StoreInner {
     /// Does not touch `order` — callers manage the queue themselves.
     fn remove_message(&mut self, id: &str) -> Option<usize> {
         let removed = self.messages.remove(id)?;
-        let bytes = removed.estimated_bytes();
+        let bytes = removed.bytes;
         self.current_bytes = self.current_bytes.saturating_sub(bytes);
-        if removed.bookmarked {
+        if removed.meta.bookmarked {
             self.account_bookmark(bytes, false);
         }
         Some(bytes)
@@ -169,7 +181,7 @@ impl StoreInner {
             let order = std::mem::take(&mut self.order);
             let mut remaining = VecDeque::with_capacity(order.len());
             for id in order {
-                let bookmarked = self.messages.get(&id).is_some_and(|m| m.bookmarked);
+                let bookmarked = self.messages.get(&id).is_some_and(|e| e.meta.bookmarked);
                 if bookmarked && self.bookmarks_over_budget() {
                     if let Some(bytes) = self.remove_message(&id) {
                         outcome.evicted_bookmarks += 1;
@@ -189,7 +201,7 @@ impl StoreInner {
             let Some(id) = self.order.pop_front() else {
                 break;
             };
-            match self.messages.get(&id).map(|m| m.bookmarked) {
+            match self.messages.get(&id).map(|e| e.meta.bookmarked) {
                 Some(true) => kept_bookmarks.push(id),
                 Some(false) => {
                     if let Some(bytes) = self.remove_message(&id) {
@@ -270,18 +282,21 @@ impl MessageStore {
 
     /// Insert a message and broadcast summary to all WebSocket subscribers
     pub async fn insert(&self, msg: Hl7Message) {
-        let summary = Hl7MessageSummary::from(&msg);
+        let meta = MessageMeta::default();
+        let summary = Hl7MessageSummary::new(&msg, &meta);
+        // Walk the parsed message once, outside the lock.
+        let bytes = msg.estimated_bytes() + meta.estimated_bytes();
+        let id = msg.id.clone();
+        let entry = StoredEntry {
+            message: Arc::new(msg),
+            meta,
+            bytes,
+        };
 
         let mut inner = self.inner.write().await;
-
-        let raw_len = msg.estimated_bytes();
-        let id = msg.id.clone();
-        inner.current_bytes += raw_len;
-        if msg.bookmarked {
-            inner.account_bookmark(raw_len, true);
-        }
+        inner.current_bytes += bytes;
         inner.order.push_back(id.clone());
-        inner.messages.insert(id, Arc::new(msg));
+        inner.messages.insert(id, entry);
         let count = inner.order.len();
         let needs_eviction = inner.over_limit();
         drop(inner);
@@ -318,13 +333,22 @@ impl MessageStore {
             .skip(offset)
             .take(limit)
             .filter_map(|id| inner.messages.get(id))
-            .map(|arc| Hl7MessageSummary::from(arc.as_ref()))
+            .map(|e| Hl7MessageSummary::new(&e.message, &e.meta))
             .collect()
     }
 
-    /// Get a full message by ID. Returns an `Arc` snapshot — no deep clone.
-    pub async fn get_by_id(&self, id: &str) -> Option<Arc<Hl7Message>> {
-        self.inner.read().await.messages.get(id).cloned()
+    /// Get a full message by ID: an `Arc` snapshot of the payload (no deep
+    /// clone) plus a copy of its small metadata.
+    pub async fn get_by_id(&self, id: &str) -> Option<MessageSnapshot> {
+        self.inner
+            .read()
+            .await
+            .messages
+            .get(id)
+            .map(|e| MessageSnapshot {
+                message: Arc::clone(&e.message),
+                meta: e.meta.clone(),
+            })
     }
 
     /// Snapshot of every stored message's raw HL7 payload, in insertion order
@@ -335,7 +359,7 @@ impl MessageStore {
             .order
             .iter()
             .filter_map(|id| inner.messages.get(id))
-            .map(|arc| arc.raw.clone())
+            .map(|e| e.message.raw.clone())
             .collect()
     }
 
@@ -347,7 +371,8 @@ impl MessageStore {
             .iter()
             .rev()
             .filter_map(|id| inner.messages.get(id))
-            .filter(|m| {
+            .filter(|e| {
+                let m = &e.message;
                 contains_ignore_ascii_case(&m.message_type, query)
                     || contains_ignore_ascii_case(&m.sending_facility, query)
                     || m.patient_name
@@ -360,7 +385,7 @@ impl MessageStore {
                     || contains_ignore_ascii_case(&m.source_addr, query)
             })
             .take(limit)
-            .map(|arc| Hl7MessageSummary::from(arc.as_ref()))
+            .map(|e| Hl7MessageSummary::new(&e.message, &e.meta))
             .collect()
     }
 
@@ -369,30 +394,33 @@ impl MessageStore {
         self.inner.read().await.order.len()
     }
 
-    /// Apply a mutation to a message by ID and broadcast the appropriate event.
+    /// Apply a mutation to a message's metadata (tags, bookmark).
     /// Returns the new summary if the message was found and the mutation ran, or None otherwise.
-    async fn mutate_message(
+    ///
+    /// Only the small `MessageMeta` is touched — the `Arc`-shared payload is
+    /// never mutated, so there is no copy-on-write deep clone under the write
+    /// lock even while readers hold snapshots (#192). The entry's byte count
+    /// is adjusted by the metadata delta so accounting stays exact (#179).
+    async fn mutate_meta(
         &self,
         id: &str,
-        f: impl FnOnce(&mut Hl7Message) -> bool,
+        f: impl FnOnce(&mut MessageMeta) -> bool,
     ) -> Option<Hl7MessageSummary> {
         let mut guard = self.inner.write().await;
-        // Reborrow once so `messages` and `current_bytes` can be borrowed disjointly.
+        // Reborrow once so `messages` and the counters can be borrowed disjointly.
         let inner = &mut *guard;
-        let arc = inner.messages.get_mut(id)?;
+        let entry = inner.messages.get_mut(id)?;
 
-        // Keep the byte accounting in sync with the mutation (#179): tags grow
-        // or shrink the message, and eviction later subtracts the message's
-        // *current* `estimated_bytes()`. Without this delta `current_bytes`
-        // drifts downward and the byte limit fires too late.
-        let before = arc.estimated_bytes();
-        let was_bookmarked = arc.bookmarked;
-        if !f(Arc::make_mut(arc)) {
+        let before = entry.bytes;
+        let was_bookmarked = entry.meta.bookmarked;
+        let meta_before = entry.meta.estimated_bytes();
+        if !f(&mut entry.meta) {
             return None;
         }
-        let after = arc.estimated_bytes();
-        let is_bookmarked = arc.bookmarked;
-        let summary = Hl7MessageSummary::from(arc.as_ref());
+        entry.bytes = (before + entry.meta.estimated_bytes()).saturating_sub(meta_before);
+        let after = entry.bytes;
+        let is_bookmarked = entry.meta.bookmarked;
+        let summary = Hl7MessageSummary::new(&entry.message, &entry.meta);
 
         inner.current_bytes = (inner.current_bytes + after).saturating_sub(before);
         if was_bookmarked {
@@ -409,11 +437,11 @@ impl MessageStore {
     pub async fn add_tag(&self, id: &str, tag: String) -> bool {
         let tag_clone = tag.clone();
         if let Some(summary) = self
-            .mutate_message(id, |msg| {
-                if msg.tags.contains(&tag_clone) {
+            .mutate_meta(id, |meta| {
+                if meta.tags.contains(&tag_clone) {
                     return false;
                 }
-                msg.tags.push(tag_clone);
+                meta.tags.push(tag_clone);
                 true
             })
             .await
@@ -429,9 +457,9 @@ impl MessageStore {
     pub async fn remove_tag(&self, id: &str, tag: &str) -> bool {
         let tag = tag.to_string();
         if let Some(summary) = self
-            .mutate_message(id, |msg| {
-                if let Some(pos) = msg.tags.iter().position(|t| *t == tag) {
-                    msg.tags.remove(pos);
+            .mutate_meta(id, |meta| {
+                if let Some(pos) = meta.tags.iter().position(|t| *t == tag) {
+                    meta.tags.remove(pos);
                     true
                 } else {
                     false
@@ -450,9 +478,9 @@ impl MessageStore {
     pub async fn toggle_bookmark(&self, id: &str) -> Option<bool> {
         let mut new_state = false;
         let summary = self
-            .mutate_message(id, |msg| {
-                msg.bookmarked = !msg.bookmarked;
-                new_state = msg.bookmarked;
+            .mutate_meta(id, |meta| {
+                meta.bookmarked = !meta.bookmarked;
+                new_state = meta.bookmarked;
                 true
             })
             .await?;
@@ -556,10 +584,15 @@ mod tests {
             self.inner.read().await.current_bytes
         }
 
-        /// Ground truth: `estimated_bytes()` summed over every stored message.
+        /// Ground truth: payload + metadata bytes recomputed from scratch for
+        /// every stored message (ignores the cached `StoredEntry::bytes`).
         async fn recomputed_bytes(&self) -> usize {
             let inner = self.inner.read().await;
-            inner.messages.values().map(|m| m.estimated_bytes()).sum()
+            inner
+                .messages
+                .values()
+                .map(|e| e.message.estimated_bytes() + e.meta.estimated_bytes())
+                .sum()
         }
 
         async fn assert_bytes_in_sync(&self) {
@@ -569,11 +602,18 @@ mod tests {
                 "current_bytes drifted from the sum of estimated_bytes()"
             );
             let inner = self.inner.read().await;
+            for (id, e) in &inner.messages {
+                assert_eq!(
+                    e.bytes,
+                    e.message.estimated_bytes() + e.meta.estimated_bytes(),
+                    "cached entry bytes drifted for {id}"
+                );
+            }
             let (count, bytes) = inner
                 .messages
                 .values()
-                .filter(|m| m.bookmarked)
-                .fold((0, 0), |(c, b), m| (c + 1, b + m.estimated_bytes()));
+                .filter(|e| e.meta.bookmarked)
+                .fold((0, 0), |(c, b), e| (c + 1, b + e.bytes));
             assert_eq!(inner.bookmark_count, count, "bookmark_count drifted");
             assert_eq!(inner.bookmark_bytes, bytes, "bookmark_bytes drifted");
         }
@@ -591,13 +631,13 @@ mod tests {
         let result = store.toggle_bookmark("a").await;
         assert_eq!(result, Some(true));
         let fetched = store.get_by_id("a").await.unwrap();
-        assert!(fetched.bookmarked);
+        assert!(fetched.meta.bookmarked);
 
         // Toggle off
         let result = store.toggle_bookmark("a").await;
         assert_eq!(result, Some(false));
         let fetched = store.get_by_id("a").await.unwrap();
-        assert!(!fetched.bookmarked);
+        assert!(!fetched.meta.bookmarked);
     }
 
     #[tokio::test]
@@ -947,7 +987,47 @@ mod tests {
         let b = store.get_by_id("shared").await.unwrap();
 
         // Both snapshots point at the same Arc (no deep clone).
-        assert!(Arc::ptr_eq(&a, &b));
-        assert_eq!(a.id, "shared");
+        assert!(Arc::ptr_eq(&a.message, &b.message));
+        assert_eq!(a.message.id, "shared");
+    }
+
+    /// #192: tagging / bookmarking while a reader holds a snapshot must not
+    /// clone the payload. Before the payload/metadata split, `Arc::make_mut`
+    /// deep-cloned the whole (potentially multi-MB) message under the write
+    /// lock whenever a snapshot was alive.
+    #[tokio::test]
+    async fn test_meta_mutation_does_not_clone_payload() {
+        let store = manual_store(10, 512);
+        store.insert(make_big_msg("mdm", 512)).await;
+
+        let held = store.get_by_id("mdm").await.unwrap(); // reader snapshot alive
+        assert!(store.add_tag("mdm", "Bug #1234".into()).await);
+        assert_eq!(store.toggle_bookmark("mdm").await, Some(true));
+
+        let now = store.get_by_id("mdm").await.unwrap();
+        // Same payload allocation — no copy-on-write happened.
+        assert!(Arc::ptr_eq(&held.message, &now.message));
+        // The held snapshot keeps the metadata it was taken with.
+        assert!(held.meta.tags.is_empty() && !held.meta.bookmarked);
+        assert_eq!(now.meta.tags, ["Bug #1234"]);
+        assert!(now.meta.bookmarked);
+        store.assert_bytes_in_sync().await;
+    }
+
+    /// The detail JSON keeps its shape: payload fields and `tags` /
+    /// `bookmarked` in one flat object, as the frontend expects.
+    #[tokio::test]
+    async fn test_snapshot_serializes_flat() {
+        let store = manual_store(10, 512);
+        store.insert(make_msg("j")).await;
+        store.add_tag("j", "t1".into()).await;
+        store.toggle_bookmark("j").await;
+
+        let v = serde_json::to_value(store.get_by_id("j").await.unwrap()).unwrap();
+        assert_eq!(v["id"], "j");
+        assert_eq!(v["raw"], "raw-j");
+        assert_eq!(v["tags"], serde_json::json!(["t1"]));
+        assert_eq!(v["bookmarked"], true);
+        assert!(v.get("message").is_none() && v.get("meta").is_none());
     }
 }

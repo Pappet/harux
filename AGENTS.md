@@ -77,13 +77,13 @@ HL7 Sender (Orchestra) ──MLLP──▶ mllp.rs ──▶ store.rs ──▶ 
 |---|---|
 | `src/main.rs` | Entry point, `tokio::select!` over both tasks |
 | `src/mllp.rs` | TCP listener, MLLP framing, ACK/NACK, ACK-storm prevention |
-| `src/store.rs` | In-memory store, dual eviction (size + count), broadcast channel |
+| `src/store.rs` | In-memory store (`StoredEntry` = immutable payload + mutable metadata), byte-targeted eviction with bookmark budget, broadcast channel |
 | `src/web.rs` | Axum REST API, WebSocket push, static file serving |
 | `src/hl7/parser.rs` | Raw HL7 → `Hl7Message`, delimiter extraction, ACK builder |
 | `src/hl7/types.rs` | All data structures |
 | `static/index.html` | HTML skeleton only |
 | `static/style.css` | Dark theme, CSS variables |
-| `static/app.js` | All SPA logic (vanilla JS, no framework) |
+| `static/state.js` · `util.js` · `ws.js` · `render.js` · `diff.js` · `app.js` | SPA logic (vanilla JS, no framework, no modules — loaded in this order, sharing one global `state`) |
 
 ---
 
@@ -128,20 +128,19 @@ MLLP is not a text protocol. Messages are wrapped in binary control characters:
 
 Do not treat accumulated bytes as UTF-8 text until after the frame boundaries are extracted. `String::from_utf8_lossy` is intentional in `extract_mllp_frame`.
 
-### 4. Store Eviction — Dual Trigger
+### 4. Store Capacity & Eviction
 
-The store evicts the oldest 10% of messages when **either** limit is reached:
+`CLAUDE.md` → *Store Capacity & Eviction* is the authoritative description; in short:
 
-- `DEFAULT_CAPACITY = 10_000` messages (count, secondary)
-- `MAX_STORE_BYTES = 512 MB` (byte size of `raw` fields, primary)
-
-The size-based limit exists because MDM messages with Base64 attachments can be several MB each. Evicting on count alone would allow OOM before the count limit is reached. Do not remove `current_bytes` tracking or revert to count-only eviction.
-
-When evicting, subtract the freed bytes from `current_bytes` using `saturating_sub`. Reset `current_bytes` to 0 in `clear()`.
+- Limits are config-driven (`StoreConfig`, `harux.toml`): `store.max_messages` (default 10 000, secondary) and `store.max_memory_mb` (default 512 MB, primary — MDM messages with Base64 attachments can be several MB each, so count-only eviction would OOM first).
+- When **either** limit is hit, one eviction pass (`StoreInner::evict`) brings **both** bytes and count down to 90 % of their limits — byte-targeted, not a fixed share of the count.
+- Bookmarks are protected only within `store.bookmark_budget_percent` (default 50 %, max 80 %); older bookmarks beyond it are evicted, so bookmarking can never lift the cap.
+- Each message is a `StoredEntry`: an immutable `Arc<Hl7Message>` payload, its mutable `MessageMeta` (tags, bookmark) and its cached accounted `bytes`. Never mutate the payload after insert; tag/bookmark changes go through `mutate_meta`.
+- Byte accounting must stay exact: `current_bytes` and the bookmark totals are adjusted on insert, metadata mutation, eviction and `clear()`. Tests assert `current_bytes == Σ recomputed entry bytes` — keep them passing rather than relaxing them.
 
 ### 5. Static Files Are Compile-Time Embedded
 
-`rust-embed` bakes the contents of `static/` into the binary at compile time. There is no hot-reload. Any change to `static/index.html`, `static/style.css`, or `static/app.js` requires a recompile to take effect.
+`rust-embed` bakes the contents of `static/` into the binary at compile time. There is no hot-reload. Any change to a file under `static/` requires a recompile to take effect.
 
 ### 6. Parse Errors Are Stored, Not Discarded
 
@@ -157,9 +156,9 @@ When a message fails to parse, it is still inserted into the store with `parse_e
 | Frontend | **No CSS frameworks.** All styles live in `style.css` with CSS variables. |
 | Parser | No zero-copy / lifetime refactoring. Correctness over performance here. |
 | Store | No `dashmap`. No `mpsc`-channel refactor. The `Arc<RwLock<>>` is intentional for now. |
-| DOM rendering | No prepend/virtual DOM logic. Full re-render on 250ms batch is acceptable. |
+| DOM rendering | Keep the 250ms flush batching. New messages prepend on the no-filter hot path; full rebuild only when a filter is active. No virtual DOM, no per-message full rebuilds. |
 | Dependencies | Do not add crates without explicit instruction. Check `Cargo.toml` first. |
-| Eviction | Do not revert to count-only eviction or raise `DEFAULT_CAPACITY` back to 100k. |
+| Eviction | Do not revert to count-only eviction, do not exempt bookmarks from the budget, and do not reintroduce payload mutation (`Arc::make_mut`) for tags/bookmarks. |
 | ACK behavior | Do not ACK incoming ACK messages under any circumstance. |
 
 ---
