@@ -79,6 +79,7 @@ and this project follows [Semantic Versioning](https://semver.org/lang/en/).
 | Commit | Description |
 |--------|-------------|
 | [`c7ce9da`](https://github.com/Pappet/harux/commit/c7ce9da7bfd80e3020c8ac5657cd670f6934178f) | `fix:` make store memory cap unbypassable — byte-targeted eviction + bookmark budget (#178) |
+| [`5190d08`](https://github.com/Pappet/harux/commit/5190d08f3b80d8919d7b59714412626735b32fee) | `fix:` keep store `current_bytes` in sync with tag mutations (#179) |
 
 #### 2026-05-31
 
