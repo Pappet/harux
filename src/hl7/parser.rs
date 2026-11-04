@@ -286,6 +286,57 @@ mod tests {
 
     const SAMPLE_ADT: &str = "MSH|^~\\&|SENDING_APP|SENDING_FAC|REC_APP|REC_FAC|20240101120000||ADT^A01^ADT_A01|MSG00001|P|2.5\rPID|||12345^^^HOSP||Smith^John^Peter||19800515|M\rPV1||I|WARD1^ROOM1^BED1";
 
+    /// Regression guard for the MSH field-index shift (#189).
+    ///
+    /// `parse_segment` inserts a synthetic MSH-1 (`"|"`) so MSH fields use
+    /// HL7 numbering. That only lines up with the embedded dictionary because
+    /// `v2.5.1.json` numbers MSH from seq 1 = Field Separator. If either side
+    /// changes (parser shift or dictionary schema, e.g. for #49), every MSH
+    /// field description, `enrich_msh` extraction and datatype check shifts
+    /// by one *silently* — this test makes it fail loudly instead.
+    #[test]
+    fn test_msh_shift_dictionary_alignment() {
+        let msg = parse_message(SAMPLE_ADT, "127.0.0.1:9999").unwrap();
+        let msh = &msg.segments[0];
+        assert_eq!(msh.name, "MSH");
+
+        let field = |i: usize| {
+            msh.fields
+                .iter()
+                .find(|f| f.index == i)
+                .unwrap_or_else(|| panic!("MSH-{i} missing"))
+        };
+        // (index, expected value, expected dictionary description)
+        let expected = [
+            (1, "|", "Field Separator"),
+            (2, "^~\\&", "Encoding Characters"),
+            (3, "SENDING_APP", "Sending Application"),
+            (4, "SENDING_FAC", "Sending Facility"),
+            (5, "REC_APP", "Receiving Application"),
+            (6, "REC_FAC", "Receiving Facility"),
+            (7, "20240101120000", "Date/Time Of Message"),
+            (9, "ADT^A01^ADT_A01", "Message Type"),
+            (10, "MSG00001", "Message Control ID"),
+            (11, "P", "Processing ID"),
+            (12, "2.5", "Version ID"),
+        ];
+        for (i, value, desc) in expected {
+            let f = field(i);
+            assert_eq!(f.value, value, "MSH-{i} value");
+            assert_eq!(f.description.as_deref(), Some(desc), "MSH-{i} description");
+        }
+
+        // The header fields extracted by enrich_msh must come from the same
+        // HL7-numbered positions.
+        assert_eq!(msg.sending_application, field(3).value);
+        assert_eq!(msg.sending_facility, field(4).value);
+        assert_eq!(msg.receiving_application, field(5).value);
+        assert_eq!(msg.receiving_facility, field(6).value);
+        assert_eq!(msg.message_control_id, field(10).value);
+        assert_eq!(msg.version, field(12).value);
+        assert_eq!(msg.message_structure.as_deref(), Some("ADT_A01"));
+    }
+
     #[test]
     fn test_parse_adt_a01() {
         let msg = parse_message(SAMPLE_ADT, "127.0.0.1:9999").unwrap();
