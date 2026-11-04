@@ -53,6 +53,12 @@ const state = {
     // labelling changes (toggleColorByPort) or the buffer is replaced.
     sourceCounts: new Map(),
 
+    // Async request sequencing (#183): each selectMessage / toggleDiffPin
+    // call takes a new number; a response is applied only if no newer call
+    // started meanwhile, so a slow response can't overwrite a newer choice.
+    selectRequestSeq: 0,
+    diffPinRequestSeq: 0,
+
     // Segment diff
     diffPinnedMessage: null,
     diffIgnoreDynamic: false,

@@ -382,10 +382,24 @@ function removeRowsFromList(ids) {
     }
 
     if (!list.querySelector('.message-row')) {
-        const empty = document.getElementById('empty-state');
-        if (empty) empty.style.display = 'flex';
+        showEmptyState();
         updateTruncationNote();
     }
+}
+
+// Show the list's empty state with the right card (#203): the onboarding
+// card ("Listening on …", CLI snippet) only when there really are no
+// messages; when messages are loaded but a search/filter hides all of them,
+// a "No matching messages" card instead.
+function showEmptyState() {
+    const empty = document.getElementById('empty-state');
+    if (!empty) return;
+    const noMatch = !canPrependOnly() && state.messages.length > 0;
+    const onboarding = document.getElementById('empty-onboarding');
+    const noMatchCard = document.getElementById('empty-no-match');
+    if (onboarding) onboarding.classList.toggle('hidden', noMatch);
+    if (noMatchCard) noMatchCard.classList.toggle('hidden', !noMatch);
+    empty.style.display = 'flex';
 }
 
 // Bottom-of-list note shown when the server holds more messages than this
@@ -510,7 +524,7 @@ function renderMessageList() {
     }
 
     if (filtered.length === 0) {
-        empty.style.display = 'flex';
+        showEmptyState();
         list.querySelectorAll('.message-row, .group-header').forEach(r => r.remove());
         updateTruncationNote();
         return;
@@ -575,10 +589,32 @@ async function selectMessage(id) {
     updateRowSelection(prevId, id);
     saveSession();
 
+    // Last click wins (#183): clicking A then B quickly must not let A's
+    // slower response overwrite B's detail panel. Checked after every await,
+    // since both the fetch and the body read can resolve out of order. Also
+    // covers the selection being cleared meanwhile (e.g. server eviction).
+    const seq = ++state.selectRequestSeq;
+    const isCurrent = () => seq === state.selectRequestSeq && state.selectedId === id;
+
     try {
         const resp = await fetch(`/api/messages/${id}`);
-        if (!resp.ok) return;
-        state.selectedMessage = await resp.json();
+        if (!isCurrent()) return;
+        if (!resp.ok) {
+            // The message is gone (typically evicted between list render and
+            // click). Don't leave the previous message in the panel next to
+            // the newly highlighted row — clear both and say why.
+            updateRowSelection(id, null);
+            state.selectedId = null;
+            state.selectedMessage = null;
+            resetDetailHeader();
+            document.getElementById('detail-content').innerHTML = DETAIL_EMPTY_HTML;
+            saveSession();
+            showToast('This message is no longer available on the server');
+            return;
+        }
+        const msg = await resp.json();
+        if (!isCurrent()) return;
+        state.selectedMessage = msg;
         renderDetail();
     } catch (e) {
         console.error('Failed to load message:', e);

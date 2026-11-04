@@ -83,6 +83,20 @@ function toggleValidationFilter() {
     saveSession();
 }
 
+// Reset search, bookmark filter and validation filter in one go — the
+// action behind the "No matching messages" empty state (#203).
+function clearFilters() {
+    clearTimeout(state.searchDebounceTimer);
+    state.searchQuery = '';
+    const input = document.getElementById('search-input');
+    if (input) input.value = '';
+    if (state.showBookmarkedOnly) toggleBookmarkFilter(); // updates its button
+    state.validationFilter = 0;
+    syncValidationFilterUI();
+    renderMessageList();
+    saveSession();
+}
+
 // --- Bulk actions ---
 async function exportMessages() {
     try {
@@ -298,6 +312,7 @@ document.getElementById('btn-autoscroll').addEventListener('click', toggleAutosc
 document.getElementById('btn-bookmarks').addEventListener('click', toggleBookmarkFilter);
 document.getElementById('btn-validation').addEventListener('click', toggleValidationFilter);
 document.getElementById('btn-copy-cli').addEventListener('click', function () { copyCliSnippet(this); });
+document.getElementById('btn-clear-filters').addEventListener('click', clearFilters);
 
 // Tab buttons — delegate on the container via data-tab attribute.
 document.querySelector('.detail-tabs').addEventListener('click', (e) => {
