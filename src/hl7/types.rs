@@ -42,10 +42,6 @@ pub struct Hl7Message {
     pub ack_response: Option<String>,
     /// The MSA-1 acknowledgement code sent back: `"AA"` (accepted) or `"AE"` (error).
     pub ack_code: Option<String>,
-    /// User-defined tag labels attached via the API (mutable after storage).
-    pub tags: Vec<String>,
-    /// Whether the message is pinned; bookmarked messages survive eviction.
-    pub bookmarked: bool,
     /// Validation warnings produced by the rule engine (empty = valid)
     pub validation_warnings: Vec<crate::validation::ValidationWarning>,
     /// Human-readable description of the message type (e.g. "Admit / Visit Notification")
@@ -144,7 +140,6 @@ impl Hl7Message {
         total += self.message_type_description.as_deref().map_or(0, str::len);
         total += self.charset.as_deref().map_or(0, str::len);
 
-        total += self.tags.iter().map(String::len).sum::<usize>();
         total += self.typical_segments.iter().map(String::len).sum::<usize>();
         total += self
             .typical_segment_descriptions
@@ -189,8 +184,6 @@ impl Hl7Message {
             parse_error: None,
             ack_response: None,
             ack_code: None,
-            tags: Vec::new(),
-            bookmarked: false,
             validation_warnings: Vec::new(),
             message_type_description: None,
             typical_segments: Vec::new(),
@@ -245,8 +238,44 @@ pub struct Hl7MessageSummary {
     pub charset: Option<String>,
 }
 
-impl From<&Hl7Message> for Hl7MessageSummary {
-    fn from(msg: &Hl7Message) -> Self {
+/// User-mutable state of a stored message (tags, bookmark).
+///
+/// Kept **outside** the immutable, `Arc`-shared [`Hl7Message`] payload (#192):
+/// tagging or bookmarking only touches this small struct, so it never forces
+/// a copy-on-write deep clone of a multi-MB message while the store's write
+/// lock is held. The JSON contract is unchanged — [`MessageSnapshot`]
+/// flattens both parts into one object.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MessageMeta {
+    /// User-defined tag labels attached via the API.
+    pub tags: Vec<String>,
+    /// Whether the message is pinned; bookmarked messages are protected from
+    /// eviction within the store's bookmark budget.
+    pub bookmarked: bool,
+}
+
+impl MessageMeta {
+    /// Heap bytes held by the metadata (tag strings), for store accounting.
+    pub fn estimated_bytes(&self) -> usize {
+        self.tags.iter().map(String::len).sum()
+    }
+}
+
+/// A stored message as returned by `GET /api/messages/{id}`: the shared,
+/// immutable payload plus its current metadata. Serializes as a single flat
+/// JSON object (all `Hl7Message` fields plus `tags` and `bookmarked`), exactly
+/// as before the payload/metadata split.
+#[derive(Debug, Clone, Serialize)]
+pub struct MessageSnapshot {
+    #[serde(flatten)]
+    pub message: std::sync::Arc<Hl7Message>,
+    #[serde(flatten)]
+    pub meta: MessageMeta,
+}
+
+impl Hl7MessageSummary {
+    /// Build the list-view summary from a message payload and its metadata.
+    pub fn new(msg: &Hl7Message, meta: &MessageMeta) -> Self {
         Self {
             id: msg.id.clone(),
             received_at: msg.received_at,
@@ -261,8 +290,8 @@ impl From<&Hl7Message> for Hl7MessageSummary {
             parse_error: msg.parse_error.clone(),
             ack_response: msg.ack_response.clone(),
             ack_code: msg.ack_code.clone(),
-            tags: msg.tags.clone(),
-            bookmarked: msg.bookmarked,
+            tags: meta.tags.clone(),
+            bookmarked: meta.bookmarked,
             validation_warning_count: msg.validation_warnings.len(),
             has_segment_errors: msg
                 .validation_warnings
