@@ -40,15 +40,13 @@ You must ensure your code satisfies these requirements locally before pushing.
 
 ## Commit & Changelog Workflow
 
-**Before every commit and push**, update `CHANGELOG.md`:
+**Before every commit and push**, update `CHANGELOG.md` in the same commit:
 
-1. Add a new row to the commit-history table under today's date (add a new `#### YYYY-MM-DD` heading if it doesn't exist yet).
-2. Row format: `| [\`<short-hash>\`](<https://github.com/Pappet/harux/commit/<full-hash>>) | \`<type>:\` Short description |`
-   — The short hash is the first 7 characters of the commit hash.
-3. For substantive changes (new feature, fix, refactor): also update the relevant `### Added`, `### Fixed`, or `### Changed` entries in the `[Unreleased]` or the active release section.
-4. The changelog format follows [Keep a Changelog](https://keepachangelog.com/de/1.0.0/).
+1. For substantive changes (new feature, fix, refactor): add or update the relevant `### Added`, `### Fixed`, or `### Changed` entry in the `[Unreleased]` section. Reference the issue number (e.g. `(#178)`).
+2. The changelog format follows [Keep a Changelog](https://keepachangelog.com/de/1.0.0/).
+3. There is **no per-commit hash table** — PRs are squash-merged, so branch commit hashes never survive on `main`. Git history is the commit log.
 
-The commit hash is only available **after** `git commit`. Update the changelog as part of the same commit — amend or add a follow-up commit if needed. Do not create a separate "update changelog" commit when it can be included in the main commit.
+Do not create a separate "update changelog" commit — the entry belongs to the commit it documents.
 
 ## Architecture
 
@@ -66,8 +64,9 @@ Limits are **config-driven** via `StoreConfig` (`src/config.rs`), not hardcoded 
 
 - **Count limit:** `store.max_messages` (default `10_000`) — secondary safeguard
 - **Size limit:** `store.max_memory_mb` (default `512` MB) — primary safeguard
-- **Trigger:** either limit hit → background eviction task evicts oldest 10% of messages
-- **Bookmark protection:** bookmarked messages are skipped during eviction (popped and pushed back to the front in original order); see `run_eviction_loop` in `src/store.rs`
+- **Trigger:** either limit hit → background eviction task evicts the oldest messages until **both** bytes and count are at or below 90% of their limits (low watermark, byte-targeted — not a fixed share of the count)
+- **Bookmark protection:** bookmarked messages are skipped during eviction (popped and pushed back to the front in original order) — but only within `store.bookmark_budget_percent` (default 50%, clamped to max 80%) of either limit. Under eviction pressure, bookmarks beyond that budget are evicted oldest-first, so bookmarking can never lift the memory cap. Bookmark count/bytes are tracked incrementally, so checking the budget is O(1). See `StoreInner::evict` in `src/store.rs`
+- **UI sync:** every eviction pass broadcasts `StoreEvent::Evicted(ids)` → WS `evicted`; `removeEvictedMessages` in `static/ws.js` removes the rows and undoes their counter contributions
 - **Reason:** MDM messages with Base64-encoded attachments can be several MB each; count-only eviction is insufficient for real-world Orchestra traffic
 
 ### HL7 Parsing (`src/hl7/`)
@@ -96,7 +95,7 @@ Limits are **config-driven** via `StoreConfig` (`src/config.rs`), not hardcoded 
 - `POST /api/messages/{id}/bookmark` — Toggle bookmark
 - `POST /api/clear` — Clear all messages
 - `GET /api/export` — Download every stored message as one MLLP-framed `.hl7` file (raw payloads, oldest first, directly replayable)
-- `WS /ws` — Real-time updates (`init`, `new_message`, `tags_updated`, `bookmark_toggled`, `cleared`, `lagged` events)
+- `WS /ws` — Real-time updates (`init`, `new_message`, `tags_updated`, `bookmark_toggled`, `evicted`, `cleared`, `lagged` events). `evicted` carries the array of IDs removed by an eviction pass; the UI drops those rows and warns when bookmarks were among them
 
 ### Frontend (`static/`)
 

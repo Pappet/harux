@@ -275,6 +275,11 @@ async fn handle_ws(mut socket: WebSocket, state: AppState) {
                             break;
                         }
                     }
+                    Ok(StoreEvent::Evicted(ids)) => {
+                        if !send_ws_event(&mut socket, "evicted", Some(&*ids)).await {
+                            break;
+                        }
+                    }
                     Ok(StoreEvent::Cleared) => {
                         if !send_ws_event(&mut socket, "cleared", None::<&()>).await {
                             break;

@@ -12,6 +12,7 @@ fn make_state() -> AppState {
         store: MessageStore::new(StoreConfig {
             max_messages: 1000,
             max_memory_mb: 10,
+            ..StoreConfig::default()
         }),
         stats: MllpStats::new(),
         mllp_port: 2575,

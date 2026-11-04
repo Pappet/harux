@@ -35,7 +35,18 @@ pub struct LoggingConfig {
 pub struct StoreConfig {
     pub max_messages: usize,
     pub max_memory_mb: usize,
+    /// Maximum share (in percent) of `max_messages` / `max_memory_mb` that
+    /// bookmarked messages may occupy while the store is under eviction
+    /// pressure. Bookmarks beyond this budget are evicted oldest-first so that
+    /// bookmarking can never lift the memory cap. Clamped to
+    /// [`MAX_BOOKMARK_BUDGET_PERCENT`].
+    pub bookmark_budget_percent: usize,
 }
+
+/// Upper bound for `store.bookmark_budget_percent`. Must stay below the
+/// eviction low-watermark (90 %) so an eviction pass can always reach its
+/// target by evicting non-bookmarked messages alone.
+pub const MAX_BOOKMARK_BUDGET_PERCENT: usize = 80;
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(default)]
@@ -72,6 +83,7 @@ impl Default for StoreConfig {
         Self {
             max_messages: 10_000,
             max_memory_mb: 512,
+            bookmark_budget_percent: 50,
         }
     }
 }
@@ -92,6 +104,13 @@ impl Default for MllpConfig {
 impl StoreConfig {
     pub fn max_memory_bytes(&self) -> usize {
         self.max_memory_mb * 1024 * 1024
+    }
+
+    /// Effective bookmark budget in percent, clamped to
+    /// [`MAX_BOOKMARK_BUDGET_PERCENT`].
+    pub fn bookmark_budget_percent(&self) -> usize {
+        self.bookmark_budget_percent
+            .min(MAX_BOOKMARK_BUDGET_PERCENT)
     }
 }
 
@@ -205,6 +224,11 @@ impl std::fmt::Display for Config {
         writeln!(f, "  Max memory:         {} MB", self.store.max_memory_mb)?;
         writeln!(
             f,
+            "  Bookmark budget:    {}%",
+            self.store.bookmark_budget_percent()
+        )?;
+        writeln!(
+            f,
             "  Max message size:   {} MB",
             self.mllp.max_message_size_mb
         )?;
@@ -228,6 +252,7 @@ mod tests {
         assert_eq!(config.logging.file, None);
         assert_eq!(config.store.max_messages, 10_000);
         assert_eq!(config.store.max_memory_mb, 512);
+        assert_eq!(config.store.bookmark_budget_percent, 50);
         assert_eq!(config.mllp.max_message_size_mb, 10);
         assert_eq!(config.mllp.read_timeout_secs, 60);
         assert_eq!(config.mllp.write_timeout_secs, 30);
@@ -238,6 +263,13 @@ mod tests {
     fn test_convenience_methods() {
         let store = StoreConfig::default();
         assert_eq!(store.max_memory_bytes(), 512 * 1024 * 1024);
+        assert_eq!(store.bookmark_budget_percent(), 50);
+
+        let over = StoreConfig {
+            bookmark_budget_percent: 100,
+            ..StoreConfig::default()
+        };
+        assert_eq!(over.bookmark_budget_percent(), MAX_BOOKMARK_BUDGET_PERCENT);
 
         let mllp = MllpConfig::default();
         assert_eq!(mllp.max_message_size(), 10 * 1024 * 1024);
@@ -260,6 +292,7 @@ file = "logs/test.log"
 [store]
 max_messages = 5000
 max_memory_mb = 256
+bookmark_budget_percent = 30
 
 [mllp]
 max_message_size_mb = 20
@@ -275,6 +308,7 @@ max_connections = 50
         assert_eq!(config.logging.file.as_deref(), Some("logs/test.log"));
         assert_eq!(config.store.max_messages, 5000);
         assert_eq!(config.store.max_memory_mb, 256);
+        assert_eq!(config.store.bookmark_budget_percent, 30);
         assert_eq!(config.mllp.max_message_size_mb, 20);
         assert_eq!(config.mllp.read_timeout_secs, 120);
         assert_eq!(config.mllp.write_timeout_secs, 60);
