@@ -197,6 +197,15 @@ function removeEvictedMessages(ids) {
         resetDetailHeader();
         document.getElementById('detail-content').innerHTML = DETAIL_EMPTY_HTML;
     }
+    // A pinned diff reference that the server evicted can't be shown or
+    // unpinned from the list anymore — drop it instead of diffing against a
+    // message that no longer exists.
+    if (state.diffPinnedMessage && gone.has(state.diffPinnedMessage.id)) {
+        state.diffPinnedMessage = null;
+        state.diffPinRequestSeq++; // also void an in-flight pin restore
+        saveSession();
+        if (state.selectedMessage) renderDetail();
+    }
 
     if (removedFromList > 0) removeRowsFromList(gone);
     renderSourceLegend();
@@ -291,11 +300,12 @@ async function loadMessages() {
             const pinId = state._pendingDiffPinnedId;
             delete state._pendingDiffPinnedId;
             // Same sequencing as toggleDiffPin (#183): a pin/unpin the user
-            // makes while this restore is in flight wins.
+            // makes while this restore is in flight wins. Checked after the
+            // fetch and after the body read, like the other two paths.
             const seq = ++state.diffPinRequestSeq;
             try {
                 const r = await fetch(`/api/messages/${pinId}`);
-                if (r.ok) {
+                if (r.ok && seq === state.diffPinRequestSeq) {
                     const msg = await r.json();
                     if (seq === state.diffPinRequestSeq) {
                         state.diffPinnedMessage = msg;

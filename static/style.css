@@ -640,6 +640,10 @@ body.resizing * {
     text-align: center;
 }
 
+.empty-card .empty-action {
+    margin: 14px auto 0;
+}
+
 .empty-card .glyph {
     width: 56px;
     height: 56px;

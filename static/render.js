@@ -598,7 +598,20 @@ async function selectMessage(id) {
 
     try {
         const resp = await fetch(`/api/messages/${id}`);
-        if (!isCurrent() || !resp.ok) return;
+        if (!isCurrent()) return;
+        if (!resp.ok) {
+            // The message is gone (typically evicted between list render and
+            // click). Don't leave the previous message in the panel next to
+            // the newly highlighted row — clear both and say why.
+            updateRowSelection(id, null);
+            state.selectedId = null;
+            state.selectedMessage = null;
+            resetDetailHeader();
+            document.getElementById('detail-content').innerHTML = DETAIL_EMPTY_HTML;
+            saveSession();
+            showToast('This message is no longer available on the server');
+            return;
+        }
         const msg = await resp.json();
         if (!isCurrent()) return;
         state.selectedMessage = msg;
