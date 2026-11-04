@@ -47,6 +47,8 @@ function connectWs() {
             updateMessageTags(data.data);
         } else if (data.type === 'bookmark_toggled') {
             updateMessageBookmark(data.data);
+        } else if (data.type === 'evicted') {
+            removeEvictedMessages(data.data);
         } else if (data.type === 'lagged') {
             console.warn(`Missed ${data.missed} messages, reloading...`);
             loadMessages();
@@ -123,6 +125,56 @@ function updateMessageBookmark(summary) {
         patchRow(summary.id, { bookmarked: summary.bookmarked });
     }
     updateHeaderCounters();
+}
+
+// Server evicted messages (memory/count limit). Drop them from the client
+// buffers so stale rows don't linger and 404 on click, undo their share of
+// the incremental counters (inverse of addMessage), and tell the user when
+// bookmarks were among them. One full list rebuild per eviction pass — the
+// server batches evictions down to a 90 % watermark, so this is rare.
+function removeEvictedMessages(ids) {
+    if (!Array.isArray(ids) || ids.length === 0) return;
+    const gone = new Set(ids);
+    let lostBookmarks = 0;
+
+    const keep = (m) => {
+        if (!gone.has(m.id)) return true;
+        state.totalValidationCount -= (m.validation_warning_count || 0) + (m.has_segment_errors ? 1 : 0);
+        if (m.bookmarked) {
+            state.totalBookmarkCount--;
+            lostBookmarks++;
+        }
+        const label = srcLabelFor(m.source_addr);
+        if (label) {
+            const n = (state.sourceCounts.get(label) || 0) - 1;
+            if (n > 0) state.sourceCounts.set(label, n);
+            else state.sourceCounts.delete(label);
+        }
+        return false;
+    };
+
+    const listBefore = state.messages.length;
+    state.messages = state.messages.filter(keep);
+    const removedFromList = listBefore - state.messages.length;
+    state.pendingMessages = state.pendingMessages.filter(keep);
+    state.totalValidationCount = Math.max(0, state.totalValidationCount);
+    state.totalBookmarkCount = Math.max(0, state.totalBookmarkCount);
+    state.totalMessagesCount = Math.max(0, state.totalMessagesCount - ids.length);
+
+    if (state.selectedId && gone.has(state.selectedId)) {
+        state.selectedId = null;
+        state.selectedMessage = null;
+        resetDetailHeader();
+        document.getElementById('detail-content').innerHTML = DETAIL_EMPTY_HTML;
+    }
+
+    if (removedFromList > 0) renderMessageList();
+    renderSourceLegend();
+    updateHeaderCounters();
+
+    if (lostBookmarks > 0) {
+        showToast(`${lostBookmarks} bookmarked message${lostBookmarks === 1 ? ' was' : 's were'} evicted — the store reached its bookmark budget`);
+    }
 }
 
 // Buffer incoming messages, flush at most every 250 ms (prevents DOM freeze at high message rates)

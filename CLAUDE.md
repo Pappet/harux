@@ -67,7 +67,8 @@ Limits are **config-driven** via `StoreConfig` (`src/config.rs`), not hardcoded 
 - **Count limit:** `store.max_messages` (default `10_000`) — secondary safeguard
 - **Size limit:** `store.max_memory_mb` (default `512` MB) — primary safeguard
 - **Trigger:** either limit hit → background eviction task evicts the oldest messages until **both** bytes and count are at or below 90% of their limits (low watermark, byte-targeted — not a fixed share of the count)
-- **Bookmark protection:** bookmarked messages are skipped during eviction (popped and pushed back to the front in original order) — but only within `store.bookmark_budget_percent` (default 50%, clamped to max 80%) of either limit. Under eviction pressure, bookmarks beyond that budget are evicted oldest-first, so bookmarking can never lift the memory cap. See `StoreInner::evict` in `src/store.rs`
+- **Bookmark protection:** bookmarked messages are skipped during eviction (popped and pushed back to the front in original order) — but only within `store.bookmark_budget_percent` (default 50%, clamped to max 80%) of either limit. Under eviction pressure, bookmarks beyond that budget are evicted oldest-first, so bookmarking can never lift the memory cap. Bookmark count/bytes are tracked incrementally, so checking the budget is O(1). See `StoreInner::evict` in `src/store.rs`
+- **UI sync:** every eviction pass broadcasts `StoreEvent::Evicted(ids)` → WS `evicted`; `removeEvictedMessages` in `static/ws.js` removes the rows and undoes their counter contributions
 - **Reason:** MDM messages with Base64-encoded attachments can be several MB each; count-only eviction is insufficient for real-world Orchestra traffic
 
 ### HL7 Parsing (`src/hl7/`)
@@ -96,7 +97,7 @@ Limits are **config-driven** via `StoreConfig` (`src/config.rs`), not hardcoded 
 - `POST /api/messages/{id}/bookmark` — Toggle bookmark
 - `POST /api/clear` — Clear all messages
 - `GET /api/export` — Download every stored message as one MLLP-framed `.hl7` file (raw payloads, oldest first, directly replayable)
-- `WS /ws` — Real-time updates (`init`, `new_message`, `tags_updated`, `bookmark_toggled`, `cleared`, `lagged` events)
+- `WS /ws` — Real-time updates (`init`, `new_message`, `tags_updated`, `bookmark_toggled`, `evicted`, `cleared`, `lagged` events). `evicted` carries the array of IDs removed by an eviction pass; the UI drops those rows and warns when bookmarks were among them
 
 ### Frontend (`static/`)
 

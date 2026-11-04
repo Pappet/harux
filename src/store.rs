@@ -35,6 +35,9 @@ pub enum StoreEvent {
     NewMessage(Box<Hl7MessageSummary>),
     TagsUpdated(Box<Hl7MessageSummary>),
     BookmarkToggled(Box<Hl7MessageSummary>),
+    /// IDs removed by an eviction pass (oldest first). Shared via `Arc` so the
+    /// broadcast clone per subscriber does not copy the ID list.
+    Evicted(Arc<Vec<String>>),
     Cleared,
 }
 
@@ -63,10 +66,15 @@ struct StoreInner {
     bookmark_budget_count: usize,
     /// Max estimated bytes of bookmarked messages kept under eviction pressure.
     bookmark_budget_bytes: usize,
+    /// Number of bookmarked messages currently stored — maintained
+    /// incrementally so an eviction pass never has to scan the whole store.
+    bookmark_count: usize,
+    /// Sum of `estimated_bytes()` over bookmarked messages (incremental).
+    bookmark_bytes: usize,
 }
 
 /// Result of a single eviction pass (see [`StoreInner::evict`]).
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
 struct EvictionOutcome {
     /// Non-bookmarked messages evicted to reach the low watermark.
     evicted: usize,
@@ -74,6 +82,8 @@ struct EvictionOutcome {
     evicted_bookmarks: usize,
     /// Estimated bytes released by this pass.
     freed_bytes: usize,
+    /// IDs of every evicted message, in eviction order — broadcast to the UI.
+    ids: Vec<String>,
 }
 
 /// `limit` minus 10 % (at least 1) — the hysteresis target an eviction pass
@@ -96,12 +106,31 @@ impl StoreInner {
             || self.order.len() + set_aside > low_watermark(self.capacity)
     }
 
+    /// Add (`add = true`) or remove a message's share of the bookmark totals.
+    fn account_bookmark(&mut self, bytes: usize, add: bool) {
+        if add {
+            self.bookmark_count += 1;
+            self.bookmark_bytes += bytes;
+        } else {
+            self.bookmark_count = self.bookmark_count.saturating_sub(1);
+            self.bookmark_bytes = self.bookmark_bytes.saturating_sub(bytes);
+        }
+    }
+
+    fn bookmarks_over_budget(&self) -> bool {
+        self.bookmark_count > self.bookmark_budget_count
+            || self.bookmark_bytes > self.bookmark_budget_bytes
+    }
+
     /// Remove a message by ID and release its bytes from the accounting.
     /// Does not touch `order` — callers manage the queue themselves.
     fn remove_message(&mut self, id: &str) -> Option<usize> {
         let removed = self.messages.remove(id)?;
         let bytes = removed.estimated_bytes();
         self.current_bytes = self.current_bytes.saturating_sub(bytes);
+        if removed.bookmarked {
+            self.account_bookmark(bytes, false);
+        }
         Some(bytes)
     }
 
@@ -117,8 +146,10 @@ impl StoreInner {
     ///    ([`crate::config::MAX_BOOKMARK_BUDGET_PERCENT`]), this always
     ///    succeeds — the store is back under its limits after every pass.
     ///
-    /// Both phases are a single linear walk over `order` with O(1) removals;
-    /// surviving bookmarks keep their original relative order.
+    /// Phase 1 is O(n) over `order` but only runs when bookmarks actually
+    /// exceed their budget (checked in O(1) via the incremental totals);
+    /// Phase 2 touches only the messages it evicts plus skipped bookmarks.
+    /// Surviving bookmarks keep their original relative order.
     fn evict(&mut self) -> EvictionOutcome {
         let mut outcome = EvictionOutcome::default();
         if !self.over_limit() {
@@ -126,27 +157,24 @@ impl StoreInner {
         }
 
         // Phase 1: enforce the bookmark budget (oldest bookmarks first).
-        let (mut bm_count, mut bm_bytes) = self
-            .messages
-            .values()
-            .filter(|m| m.bookmarked)
-            .fold((0usize, 0usize), |(c, b), m| {
-                (c + 1, b + m.estimated_bytes())
-            });
-
-        if bm_count > self.bookmark_budget_count || bm_bytes > self.bookmark_budget_bytes {
+        //
+        // This deliberately runs *before* the watermark phase, even when
+        // evicting non-bookmarks alone would have been enough this time: the
+        // budget is what bounds Phase 2. With bookmarks capped at <= 80 % of
+        // each limit, Phase 2 is guaranteed to reach the 90 % watermark; if
+        // Phase 2 ran first, an over-budget bookmark set could leave it unable
+        // to reach the target (the pre-#178 starvation bug), and live traffic
+        // would be squeezed into the remaining headroom.
+        if self.bookmarks_over_budget() {
             let order = std::mem::take(&mut self.order);
             let mut remaining = VecDeque::with_capacity(order.len());
             for id in order {
-                let over_budget =
-                    bm_count > self.bookmark_budget_count || bm_bytes > self.bookmark_budget_bytes;
                 let bookmarked = self.messages.get(&id).is_some_and(|m| m.bookmarked);
-                if over_budget && bookmarked {
+                if bookmarked && self.bookmarks_over_budget() {
                     if let Some(bytes) = self.remove_message(&id) {
-                        bm_count -= 1;
-                        bm_bytes = bm_bytes.saturating_sub(bytes);
                         outcome.evicted_bookmarks += 1;
                         outcome.freed_bytes += bytes;
+                        outcome.ids.push(id);
                     }
                 } else {
                     remaining.push_back(id);
@@ -165,8 +193,18 @@ impl StoreInner {
                 Some(true) => kept_bookmarks.push(id),
                 Some(false) => {
                     if let Some(bytes) = self.remove_message(&id) {
+                        if bytes >= self.max_bytes {
+                            warn!(
+                                "Message {} ({} KB) alone exceeds the store memory limit \
+                                 ({} KB, store.max_memory_mb) and was dropped",
+                                id,
+                                bytes / 1024,
+                                self.max_bytes / 1024,
+                            );
+                        }
                         outcome.evicted += 1;
                         outcome.freed_bytes += bytes;
+                        outcome.ids.push(id);
                     }
                 }
                 // Dangling ID without a message — drop it from the queue.
@@ -220,7 +258,9 @@ impl MessageStore {
                 max_bytes,
                 current_bytes: 0,
                 bookmark_budget_count: config.max_messages * pct / 100,
-                bookmark_budget_bytes: max_bytes / 100 * pct,
+                bookmark_budget_bytes: max_bytes.saturating_mul(pct) / 100,
+                bookmark_count: 0,
+                bookmark_bytes: 0,
             })),
             tx,
             eviction_notify: Arc::new(tokio::sync::Notify::new()),
@@ -237,6 +277,9 @@ impl MessageStore {
         let raw_len = msg.estimated_bytes();
         let id = msg.id.clone();
         inner.current_bytes += raw_len;
+        if msg.bookmarked {
+            inner.account_bookmark(raw_len, true);
+        }
         inner.order.push_back(id.clone());
         inner.messages.insert(id, Arc::new(msg));
         let count = inner.order.len();
@@ -343,13 +386,23 @@ impl MessageStore {
         // *current* `estimated_bytes()`. Without this delta `current_bytes`
         // drifts downward and the byte limit fires too late.
         let before = arc.estimated_bytes();
+        let was_bookmarked = arc.bookmarked;
         if !f(Arc::make_mut(arc)) {
             return None;
         }
         let after = arc.estimated_bytes();
-        inner.current_bytes = (inner.current_bytes + after).saturating_sub(before);
+        let is_bookmarked = arc.bookmarked;
+        let summary = Hl7MessageSummary::from(arc.as_ref());
 
-        Some(Hl7MessageSummary::from(arc.as_ref()))
+        inner.current_bytes = (inner.current_bytes + after).saturating_sub(before);
+        if was_bookmarked {
+            inner.account_bookmark(before, false);
+        }
+        if is_bookmarked {
+            inner.account_bookmark(after, true);
+        }
+
+        Some(summary)
     }
 
     /// Add a tag to a message and broadcast the update
@@ -413,6 +466,8 @@ impl MessageStore {
         inner.order.clear();
         inner.messages.clear();
         inner.current_bytes = 0;
+        inner.bookmark_count = 0;
+        inner.bookmark_bytes = 0;
         info!("Message store cleared");
         let _ = self.tx.send(StoreEvent::Cleared);
     }
@@ -435,9 +490,17 @@ impl MessageStore {
 
         if outcome.evicted_bookmarks > 0 {
             warn!(
-                "Bookmarks exceeded their memory budget — evicted {} oldest bookmarked messages",
+                "Bookmarks exceeded their budget (store.bookmark_budget_percent of the \
+                 count/bytes limit) — evicted {} oldest bookmarked messages",
                 outcome.evicted_bookmarks
             );
+        }
+        if !outcome.ids.is_empty() {
+            // Sent under the write lock (same pattern as `clear`) so subscribers
+            // see the eviction before any later insert/mutation event.
+            let _ = self
+                .tx
+                .send(StoreEvent::Evicted(Arc::new(outcome.ids.clone())));
         }
         if outcome.evicted + outcome.evicted_bookmarks > 0 {
             info!(
@@ -505,6 +568,14 @@ mod tests {
                 self.recomputed_bytes().await,
                 "current_bytes drifted from the sum of estimated_bytes()"
             );
+            let inner = self.inner.read().await;
+            let (count, bytes) = inner
+                .messages
+                .values()
+                .filter(|m| m.bookmarked)
+                .fold((0, 0), |(c, b), m| (c + 1, b + m.estimated_bytes()));
+            assert_eq!(inner.bookmark_count, count, "bookmark_count drifted");
+            assert_eq!(inner.bookmark_bytes, bytes, "bookmark_bytes drifted");
         }
     }
 
@@ -639,6 +710,11 @@ mod tests {
         // Bookmark toggles and no-op mutations leave the accounting untouched.
         let before = store.current_bytes().await;
         store.toggle_bookmark("a").await;
+        store.assert_bytes_in_sync().await;
+        // Tagging a bookmarked message must move its bookmark bytes too.
+        assert!(store.add_tag("a", "while-bookmarked".into()).await);
+        store.assert_bytes_in_sync().await;
+        assert!(store.remove_tag("a", "while-bookmarked").await);
         assert!(!store.add_tag("a", "Test scenario A".into()).await);
         assert!(!store.remove_tag("a", "missing").await);
         assert_eq!(store.current_bytes().await, before);
@@ -663,6 +739,51 @@ mod tests {
         store.assert_bytes_in_sync().await;
 
         store.clear().await;
+        assert_eq!(store.current_bytes().await, 0);
+    }
+
+    /// Review of #200: evictions must reach the UI, otherwise evicted rows
+    /// (including force-evicted bookmarks) linger and 404 on click.
+    #[tokio::test]
+    async fn test_eviction_broadcasts_evicted_ids() {
+        let store = manual_store(10, 512);
+        for i in 0..10 {
+            store.insert(make_msg(&format!("msg-{i}"))).await;
+        }
+        for i in 0..6 {
+            store.toggle_bookmark(&format!("msg-{i}")).await;
+        }
+        store.insert(make_msg("trigger")).await;
+
+        let mut rx = store.subscribe();
+        let outcome = store.evict_now().await;
+        // Phase 1 drops the oldest bookmark (6 > budget 5) → 10 messages,
+        // Phase 2 the oldest non-bookmark → 9 (watermark).
+        assert_eq!(outcome.evicted_bookmarks, 1);
+        assert_eq!(outcome.evicted, 1);
+        assert_eq!(store.count().await, 9);
+
+        match rx.recv().await.unwrap() {
+            StoreEvent::Evicted(ids) => {
+                assert_eq!(*ids, ["msg-0", "msg-6"]);
+            }
+            _ => panic!("Expected Evicted event"),
+        }
+        // No event when a pass has nothing to do.
+        store.evict_now().await;
+        assert!(rx.try_recv().is_err());
+    }
+
+    /// A single message larger than the whole byte limit cannot be kept —
+    /// it is evicted on the next pass (and logged with a dedicated warning).
+    #[tokio::test]
+    async fn test_single_oversize_message_is_dropped() {
+        let store = manual_store(10_000, 1);
+        store.insert(make_big_msg("huge", 2048)).await;
+
+        let outcome = store.evict_now().await;
+        assert_eq!(outcome.ids, ["huge"]);
+        assert_eq!(store.count().await, 0);
         assert_eq!(store.current_bytes().await, 0);
     }
 
@@ -721,7 +842,9 @@ mod tests {
             store.toggle_bookmark(&format!("bm-{i}")).await;
         }
         // 1.2 MB of bookmarks in a 1 MB store with a 50 % bookmark budget.
+        store.assert_bytes_in_sync().await;
         let outcome = store.evict_now().await;
+        store.assert_bytes_in_sync().await;
         assert_eq!(outcome.evicted, 0);
         assert_eq!(outcome.evicted_bookmarks, 3);
         assert!(store.current_bytes().await <= MB / 2);
@@ -761,6 +884,7 @@ mod tests {
         }
 
         let outcome = store.evict_now().await;
+        store.assert_bytes_in_sync().await;
         assert_eq!(outcome.evicted_bookmarks, 3);
         assert!(store.count().await <= 9);
         for i in 0..3 {
