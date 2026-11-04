@@ -40,15 +40,13 @@ You must ensure your code satisfies these requirements locally before pushing.
 
 ## Commit & Changelog Workflow
 
-**Before every commit and push**, update `CHANGELOG.md`:
+**Before every commit and push**, update `CHANGELOG.md` in the same commit:
 
-1. Add a new row to the commit-history table under today's date (add a new `#### YYYY-MM-DD` heading if it doesn't exist yet).
-2. Row format: `| [\`<short-hash>\`](<https://github.com/Pappet/harux/commit/<full-hash>>) | \`<type>:\` Short description |`
-   — The short hash is the first 7 characters of the commit hash.
-3. For substantive changes (new feature, fix, refactor): also update the relevant `### Added`, `### Fixed`, or `### Changed` entries in the `[Unreleased]` or the active release section.
-4. The changelog format follows [Keep a Changelog](https://keepachangelog.com/de/1.0.0/).
+1. For substantive changes (new feature, fix, refactor): add or update the relevant `### Added`, `### Fixed`, or `### Changed` entry in the `[Unreleased]` section. Reference the issue number (e.g. `(#178)`).
+2. The changelog format follows [Keep a Changelog](https://keepachangelog.com/de/1.0.0/).
+3. There is **no per-commit hash table** — PRs are squash-merged, so branch commit hashes never survive on `main`. Git history is the commit log.
 
-The commit hash is only available **after** `git commit`. Update the changelog as part of the same commit — amend or add a follow-up commit if needed. Do not create a separate "update changelog" commit when it can be included in the main commit.
+Do not create a separate "update changelog" commit — the entry belongs to the commit it documents.
 
 ## Architecture
 
