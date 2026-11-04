@@ -265,6 +265,11 @@ impl MessageMeta {
 /// immutable payload plus its current metadata. Serializes as a single flat
 /// JSON object (all `Hl7Message` fields plus `tags` and `bookmarked`), exactly
 /// as before the payload/metadata split.
+///
+/// `#[serde(flatten)]` requires both parts to serialize as maps (structs with
+/// named fields). Turning `Hl7Message` or `MessageMeta` into a newtype/tuple
+/// struct would fail at *runtime* serialization, not at compile time —
+/// `test_snapshot_serializes_flat` guards this.
 #[derive(Debug, Clone, Serialize)]
 pub struct MessageSnapshot {
     #[serde(flatten)]

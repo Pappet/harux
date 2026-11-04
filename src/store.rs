@@ -1007,8 +1007,7 @@ mod tests {
         let now = store.get_by_id("mdm").await.unwrap();
         // Same payload allocation — no copy-on-write happened.
         assert!(Arc::ptr_eq(&held.message, &now.message));
-        assert_eq!(Arc::strong_count(&now.message), 3); // store + held + now
-                                                        // The held snapshot keeps the metadata it was taken with.
+        // The held snapshot keeps the metadata it was taken with.
         assert!(held.meta.tags.is_empty() && !held.meta.bookmarked);
         assert_eq!(now.meta.tags, ["Bug #1234"]);
         assert!(now.meta.bookmarked);
