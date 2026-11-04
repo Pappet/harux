@@ -151,6 +151,11 @@ function trimClientBuffer() {
     const dropped = new Set();
     let excess = state.messages.length - CLIENT_MESSAGE_CAP;
     if (excess <= 0) return dropped;
+    // O(1) early exit: if exempt entries alone account for the excess there
+    // is nothing droppable, so don't scan the whole buffer on every flush.
+    // (pendingMessages is empty here, so totalBookmarkCount covers messages[].)
+    const selectedExempt = state.selectedId && !(state.selectedMessage && state.selectedMessage.bookmarked) ? 1 : 0;
+    if (state.messages.length - state.totalBookmarkCount - selectedExempt <= CLIENT_MESSAGE_CAP) return dropped;
 
     for (let i = state.messages.length - 1; i >= 0 && excess > 0; i--) {
         const m = state.messages[i];
@@ -264,6 +269,9 @@ async function loadMessages() {
         const resp = await fetch('/api/messages?limit=1000');
         if (!resp.ok) return;
         state.messages = await resp.json();
+        // The total normally comes from the WS `init` event / pollStats; make
+        // sure it is never below what is actually loaded (e.g. socket not up).
+        state.totalMessagesCount = Math.max(state.totalMessagesCount, state.messages.length);
         state.pendingMessages = [];
         // Recompute all incremental counters from the freshly-loaded batch.
         // This is O(n) but only runs on init/lagged reload, never per-message.

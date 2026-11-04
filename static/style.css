@@ -582,6 +582,15 @@ body.resizing * {
 }
 
 /* ── Time-bucket group headers ─────────────────────────────────────── */
+.list-truncated-note {
+    padding: 14px 18px 18px;
+    color: var(--text-muted);
+    font-size: 11px;
+    line-height: 1.5;
+    text-align: center;
+    border-top: 1px dashed var(--border);
+}
+
 .group-header {
     position: sticky;
     top: 0;

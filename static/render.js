@@ -194,6 +194,8 @@ function updateHeaderCounters() {
 
     const bookmarkCount = state.totalBookmarkCount;
     const bookmarkBtn = document.getElementById('btn-bookmarks');
+    updateTruncationNote();
+
     if (bookmarkBtn) {
         const existing = bookmarkBtn.querySelector('.count');
         if (bookmarkCount > 0) {
@@ -351,18 +353,16 @@ function prependMessagesToList(newSummaries) {
 
 // Remove the rows for `ids` from the list without rebuilding it. Dropped
 // rows are normally the oldest ones, so the walk starts at the bottom and
-// stops once every present row has been found. Group headers left without
-// any row beneath them are removed in the same pass.
+// stops as soon as every ID has been removed. IDs without a row (filtered
+// out, or dropped before they were ever rendered) just let the walk run to
+// the top — a plain sibling walk with a Set lookup, no selector matching
+// (a per-ID querySelector prepass cost ~70x the removal itself). Group
+// headers left without any row beneath them are removed afterwards.
 function removeRowsFromList(ids) {
     const list = document.getElementById('message-list');
     if (!list || ids.size === 0) return;
 
-    let remaining = 0;
-    for (const id of ids) {
-        if (list.querySelector(`.message-row[data-id="${CSS.escape(id)}"]`)) remaining++;
-    }
-    if (remaining === 0) return;
-
+    let remaining = ids.size;
     let el = list.lastElementChild;
     while (el && remaining > 0) {
         const prev = el.previousElementSibling;
@@ -373,17 +373,51 @@ function removeRowsFromList(ids) {
         el = prev;
     }
 
-    // Drop orphaned group headers (header followed by another header or by
-    // nothing). Only the region we walked can contain new orphans, but a
-    // single linear pass over headers is cheap and keeps this obviously right.
+    // Drop orphaned group headers (header not directly followed by a row —
+    // i.e. by another header, the truncation note, or nothing). Headers are
+    // few (one per time bucket), so a pass over all of them is cheap.
     for (const header of list.querySelectorAll('.group-header')) {
         const next = header.nextElementSibling;
-        if (!next || next.classList.contains('group-header')) header.remove();
+        if (!next || !next.classList.contains('message-row')) header.remove();
     }
 
     if (!list.querySelector('.message-row')) {
         const empty = document.getElementById('empty-state');
         if (empty) empty.style.display = 'flex';
+        updateTruncationNote();
+    }
+}
+
+// Bottom-of-list note shown when the server holds more messages than this
+// view has loaded (client cap, #177; initial 1000-row load, #198). Filters
+// and search run client-side, so without this a search for a trimmed
+// message would silently show nothing. Kept as the last child of the list;
+// when no row is shown (e.g. a search with no loaded match) it goes first,
+// above the full-height empty state, so it stays visible.
+function updateTruncationNote() {
+    const list = document.getElementById('message-list');
+    if (!list) return;
+    const held = state.messages.length + state.pendingMessages.length;
+    const total = state.totalMessagesCount;
+    let note = document.getElementById('list-truncated-note');
+    if (total <= held) {
+        if (note) note.classList.add('hidden');
+        return;
+    }
+    if (!note) {
+        note = document.createElement('div');
+        note.id = 'list-truncated-note';
+        note.className = 'list-truncated-note';
+        note.setAttribute('role', 'note');
+    }
+    note.textContent = `This view holds the newest ${held.toLocaleString()} of ` +
+        `${total.toLocaleString()} messages. Older messages are kept on the server ` +
+        `but not loaded here — filters and search only cover the loaded ones.`;
+    note.classList.remove('hidden');
+    if (list.querySelector('.message-row')) {
+        if (list.lastElementChild !== note) list.appendChild(note);
+    } else if (list.firstElementChild !== note) {
+        list.insertBefore(note, list.firstElementChild);
     }
 }
 
@@ -478,6 +512,7 @@ function renderMessageList() {
     if (filtered.length === 0) {
         empty.style.display = 'flex';
         list.querySelectorAll('.message-row, .group-header').forEach(r => r.remove());
+        updateTruncationNote();
         return;
     }
 
@@ -502,6 +537,7 @@ function renderMessageList() {
 
     list.querySelectorAll('.message-row, .group-header').forEach(r => r.remove());
     list.appendChild(fragment);
+    updateTruncationNote(); // rows were appended after it — move it back to the end
 
     if (state.autoscroll) {
         list.scrollTop = 0;
