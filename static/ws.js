@@ -127,11 +127,47 @@ function updateMessageBookmark(summary) {
     updateHeaderCounters();
 }
 
+// Undo a message's contribution to the incremental client counters — the
+// inverse of what addMessage adds. Used when a message leaves the client
+// buffer (server eviction or client-side cap). `totalMessagesCount` is the
+// server total and is deliberately not touched here.
+function forgetMessageCounters(m) {
+    state.totalValidationCount = Math.max(0,
+        state.totalValidationCount - (m.validation_warning_count || 0) - (m.has_segment_errors ? 1 : 0));
+    if (m.bookmarked) state.totalBookmarkCount = Math.max(0, state.totalBookmarkCount - 1);
+    const label = srcLabelFor(m.source_addr);
+    if (label) {
+        const n = (state.sourceCounts.get(label) || 0) - 1;
+        if (n > 0) state.sourceCounts.set(label, n);
+        else state.sourceCounts.delete(label);
+    }
+}
+
+// Keep `state.messages` at or below CLIENT_MESSAGE_CAP (#177) by dropping the
+// oldest entries. Bookmarked messages and the selected message are kept, so
+// the bookmark filter and the open detail panel never lose their row.
+// Returns the Set of dropped IDs (empty when nothing was trimmed).
+function trimClientBuffer() {
+    const dropped = new Set();
+    let excess = state.messages.length - CLIENT_MESSAGE_CAP;
+    if (excess <= 0) return dropped;
+
+    for (let i = state.messages.length - 1; i >= 0 && excess > 0; i--) {
+        const m = state.messages[i];
+        if (m.bookmarked || m.id === state.selectedId) continue;
+        dropped.add(m.id);
+        forgetMessageCounters(m);
+        excess--;
+    }
+    if (dropped.size > 0) {
+        state.messages = state.messages.filter(m => !dropped.has(m.id));
+    }
+    return dropped;
+}
+
 // Server evicted messages (memory/count limit). Drop them from the client
 // buffers so stale rows don't linger and 404 on click, undo their share of
-// the incremental counters (inverse of addMessage), and tell the user when
-// bookmarks were among them. One full list rebuild per eviction pass — the
-// server batches evictions down to a 90 % watermark, so this is rare.
+// the incremental counters, and tell the user when bookmarks were among them.
 function removeEvictedMessages(ids) {
     if (!Array.isArray(ids) || ids.length === 0) return;
     const gone = new Set(ids);
@@ -139,17 +175,8 @@ function removeEvictedMessages(ids) {
 
     const keep = (m) => {
         if (!gone.has(m.id)) return true;
-        state.totalValidationCount -= (m.validation_warning_count || 0) + (m.has_segment_errors ? 1 : 0);
-        if (m.bookmarked) {
-            state.totalBookmarkCount--;
-            lostBookmarks++;
-        }
-        const label = srcLabelFor(m.source_addr);
-        if (label) {
-            const n = (state.sourceCounts.get(label) || 0) - 1;
-            if (n > 0) state.sourceCounts.set(label, n);
-            else state.sourceCounts.delete(label);
-        }
+        if (m.bookmarked) lostBookmarks++;
+        forgetMessageCounters(m);
         return false;
     };
 
@@ -157,8 +184,6 @@ function removeEvictedMessages(ids) {
     state.messages = state.messages.filter(keep);
     const removedFromList = listBefore - state.messages.length;
     state.pendingMessages = state.pendingMessages.filter(keep);
-    state.totalValidationCount = Math.max(0, state.totalValidationCount);
-    state.totalBookmarkCount = Math.max(0, state.totalBookmarkCount);
     state.totalMessagesCount = Math.max(0, state.totalMessagesCount - ids.length);
 
     if (state.selectedId && gone.has(state.selectedId)) {
@@ -168,7 +193,7 @@ function removeEvictedMessages(ids) {
         document.getElementById('detail-content').innerHTML = DETAIL_EMPTY_HTML;
     }
 
-    if (removedFromList > 0) renderMessageList();
+    if (removedFromList > 0) removeRowsFromList(gone);
     renderSourceLegend();
     updateHeaderCounters();
 
@@ -188,6 +213,12 @@ function addMessage(summary) {
     state.totalMessagesCount++;
     state.totalValidationCount += (summary.validation_warning_count || 0) + (summary.has_segment_errors ? 1 : 0);
     if (summary.bookmarked) state.totalBookmarkCount++; // defensive: normally false, but safe on reconnect
+    // While paused nothing is flushed, so cap the pending buffer too (#177):
+    // keep the newest CLIENT_MESSAGE_CAP, drop the oldest pending one. On
+    // resume the flush then shows a contiguous run of the newest messages.
+    if (state.pendingMessages.length > CLIENT_MESSAGE_CAP) {
+        forgetMessageCounters(state.pendingMessages.pop());
+    }
     const now = Date.now();
     state.rateWindow.push(now);
     state.lastMessageReceivedAt = now;
@@ -213,11 +244,14 @@ function flushAndRender() {
     const newOnes = state.pendingMessages;
     state.messages = [...newOnes, ...state.messages];
     state.pendingMessages = [];
+    const dropped = trimClientBuffer();
 
     // Hot path: no client-side filters → DOM diff via prepend instead of
-    // tearing down and rebuilding every row.
+    // tearing down and rebuilding every row. Rows trimmed from the buffer are
+    // removed from the bottom of the list in the same flush.
     if (canPrependOnly()) {
-        prependMessagesToList(newOnes);
+        prependMessagesToList(newOnes.filter(m => !dropped.has(m.id)));
+        removeRowsFromList(dropped);
     } else {
         renderMessageList();
     }
@@ -270,6 +304,7 @@ async function pollStats() {
         if (!resp.ok) return;
         const stats = await resp.json();
         state.totalMessagesCount = stats.total_messages;
+        updateHeaderCounters(); // keep the total live while paused (O(1))
 
         document.getElementById('pill-conns-value').textContent =
             `${stats.active_connections} / ${stats.max_connections}`;

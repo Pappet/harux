@@ -109,6 +109,7 @@ Key frontend behaviors:
 - Messages are batched and flushed at most every 250ms (prevents DOM freeze at high message rates)
 - When no client-side filters are active, new messages are **prepended** to the list (`prependMessagesToList`); when a filter/search/bookmark filter is active, the list is fully rebuilt (`renderMessageList`)
 - ⏸ Pause/▶ Live button buffers incoming messages without displaying them
+- **Client buffer cap:** `state.messages` (and the paused `pendingMessages` buffer) is capped at `CLIENT_MESSAGE_CAP` (2000, `util.js`). Excess oldest messages are dropped via `trimClientBuffer()` and their rows removed bottom-up via `removeRowsFromList()` — no full rebuild. Bookmarked and selected messages are exempt. Dropped messages stay on the server. The header `total` shows the server total (`state.totalMessagesCount`), not the buffer length
 - Search is client-side (filters `messages[]` array via `matchesSearch()`), debounced 300ms
 - Parse errors are shown with `⚠ PARSE ERROR` in red (`var(--error)`) in the message list
 

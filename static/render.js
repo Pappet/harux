@@ -179,7 +179,9 @@ function tickRowRelativeTimes() {
 function updateHeaderCounters() {
     const totalEl = document.getElementById('pill-total-value');
     if (totalEl) {
-        totalEl.textContent = state.messages.length + state.pendingMessages.length;
+        // Server-side total (init / addMessage / evicted / pollStats), not the
+        // client buffer length — the buffer is capped at CLIENT_MESSAGE_CAP.
+        totalEl.textContent = state.totalMessagesCount;
     }
 
     const validationCount = state.totalValidationCount;
@@ -344,6 +346,44 @@ function prependMessagesToList(newSummaries) {
 
     if (state.autoscroll) {
         list.scrollTop = 0;
+    }
+}
+
+// Remove the rows for `ids` from the list without rebuilding it. Dropped
+// rows are normally the oldest ones, so the walk starts at the bottom and
+// stops once every present row has been found. Group headers left without
+// any row beneath them are removed in the same pass.
+function removeRowsFromList(ids) {
+    const list = document.getElementById('message-list');
+    if (!list || ids.size === 0) return;
+
+    let remaining = 0;
+    for (const id of ids) {
+        if (list.querySelector(`.message-row[data-id="${CSS.escape(id)}"]`)) remaining++;
+    }
+    if (remaining === 0) return;
+
+    let el = list.lastElementChild;
+    while (el && remaining > 0) {
+        const prev = el.previousElementSibling;
+        if (el.classList.contains('message-row') && ids.has(el.dataset.id)) {
+            el.remove();
+            remaining--;
+        }
+        el = prev;
+    }
+
+    // Drop orphaned group headers (header followed by another header or by
+    // nothing). Only the region we walked can contain new orphans, but a
+    // single linear pass over headers is cheap and keeps this obviously right.
+    for (const header of list.querySelectorAll('.group-header')) {
+        const next = header.nextElementSibling;
+        if (!next || next.classList.contains('group-header')) header.remove();
+    }
+
+    if (!list.querySelector('.message-row')) {
+        const empty = document.getElementById('empty-state');
+        if (empty) empty.style.display = 'flex';
     }
 }
 
