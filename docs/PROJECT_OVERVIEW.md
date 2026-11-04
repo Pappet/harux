@@ -7,7 +7,7 @@ Harux is a high-performance MLLP server with a real-time web UI for inspecting H
 ## Project Status
 
 - **Language:** Rust
-- **Latest Release:** v0.5.0 — UI Redesign & Accessibility complete
+- **Latest Release:** v0.6.0 — Memory Safety & Hardening (audit Phases 0–1)
 - **Next Milestone:** Milestone 4 (Workflow & Testing)
 
 ---
