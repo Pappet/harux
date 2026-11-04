@@ -57,7 +57,10 @@ pub struct Hl7Message {
     /// Character set declared in MSH-18, e.g. `"UTF-8"` or `"8859/1"`; `None` if absent.
     pub charset: Option<String>,
     /// MSH-9.3 message structure identifier, e.g. `"ADT_A01"` or `"ORU_R01"`.
-    /// Used by Milestone 3 validation to select the correct structure definition.
+    /// Exposed through the REST API / WebSocket JSON (visible in the UI's JSON
+    /// tab). Validation does **not** use it yet — `validate_message` dispatches
+    /// on `message_type`; structure-based validation depends on repetition /
+    /// sub-component parsing (#185) and is tracked in #186.
     /// `None` when MSH-9 has fewer than three components (common in HL7 v2.3 senders).
     pub message_structure: Option<String>,
 }

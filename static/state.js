@@ -28,6 +28,12 @@ const state = {
     wsReconnectDelay: 1000, // initial; ws.js caps via WS_RECONNECT_MAX
 
     // Server-derived counters
+    // Total messages held by the *server* — the single source for the header
+    // `total` pill (#182). Writers: WS `init` (authoritative), addMessage (+1),
+    // removeEvictedMessages (−n), `cleared` (0), pollStats every 3 s
+    // (authoritative resync) and loadMessages (never below what is loaded).
+    // It is deliberately NOT the client buffer length — that is capped at
+    // CLIENT_MESSAGE_CAP (#177).
     totalMessagesCount: 0,
     // Incrementally-maintained totals so updateHeaderCounters never iterates messages[].
     // Reset to 0 on clear/reload; recomputed from fresh batch in loadMessages().

@@ -93,6 +93,59 @@ mod tests {
         assert_eq!(desc, Some("Patient Name".to_string()));
     }
 
+    /// MSH numbering contract relied on by the parser's synthetic MSH-1 (#189):
+    /// seq 1 must be the field separator, seq 2 the encoding characters, and
+    /// the header fields the parser and validator read must sit at their HL7
+    /// positions with the expected datatypes.
+    #[test]
+    fn test_msh_dictionary_numbering_contract() {
+        let msh = get_v251()
+            .segments
+            .get("MSH")
+            .expect("MSH must be in the embedded dictionary");
+        let expected = [
+            (1, "Field Separator", "ST"),
+            (2, "Encoding Characters", "ST"),
+            (3, "Sending Application", "HD"),
+            (4, "Sending Facility", "HD"),
+            (7, "Date/Time Of Message", "TS"),
+            (9, "Message Type", "MSG"),
+            (10, "Message Control ID", "ST"),
+            (12, "Version ID", "VID"),
+        ];
+        for (seq, desc, datatype) in expected {
+            let f = msh
+                .field_by_seq(seq)
+                .unwrap_or_else(|| panic!("MSH seq {seq} missing"));
+            assert_eq!(f.desc, desc, "MSH seq {seq} description");
+            assert_eq!(f.datatype, datatype, "MSH seq {seq} datatype");
+        }
+    }
+
+    /// Data contract of the embedded dictionary asset (see
+    /// `src/assets/hl7/README.md`): within a segment, every field `seq >= 1`
+    /// must be unique, otherwise `field_by_seq` resolves by file order.
+    ///
+    /// This covers every segment, not only a curated subset, because the code
+    /// resolves *any* segment that appears in a received message
+    /// (`inject_descriptions`, `validate_data_types`). `seq 0` rows — which
+    /// published HL7 tables use for segment-level notes — are tolerated: no
+    /// HL7 field index is 0, so they are never looked up.
+    #[test]
+    fn test_field_seq_unique_per_segment() {
+        for (name, seg) in &get_v251().segments {
+            let mut seen = std::collections::HashSet::new();
+            for f in seg.fields.iter().filter(|f| f.seq >= 1) {
+                assert!(
+                    seen.insert(f.seq),
+                    "v2.5.1.json data issue — segment {name} has duplicate seq {} \
+                     (see src/assets/hl7/README.md)",
+                    f.seq
+                );
+            }
+        }
+    }
+
     #[test]
     fn test_invalid_segment() {
         let desc = get_field_description("ZZZ", 1);
