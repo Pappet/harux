@@ -94,7 +94,7 @@
             <div class="source-rail" id="source-rail"></div>
             <div class="message-list" id="message-list">
                 <div class="empty-state" id="empty-state">
-                    <div class="empty-card">
+                    <div class="empty-card" id="empty-onboarding">
                         <div class="glyph">
                             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
                                 <polyline points="22 12 16 12 14 15 10 15 8 12 2 12" />
@@ -114,6 +114,16 @@
                                 </svg>
                             </button>
                         </div>
+                    </div>
+                    <div class="empty-card hidden" id="empty-no-match">
+                        <div class="glyph">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+                                <circle cx="11" cy="11" r="8" />
+                                <line x1="21" y1="21" x2="16.65" y2="16.65" />
+                            </svg>
+                        </div>
+                        <h3>No matching messages</h3>
+                        <p>None of the loaded messages match the current search or filters. Clear them to see all messages.</p>
                     </div>
                 </div>
             </div>

@@ -290,11 +290,17 @@ async function loadMessages() {
         if (state._pendingDiffPinnedId) {
             const pinId = state._pendingDiffPinnedId;
             delete state._pendingDiffPinnedId;
+            // Same sequencing as toggleDiffPin (#183): a pin/unpin the user
+            // makes while this restore is in flight wins.
+            const seq = ++state.diffPinRequestSeq;
             try {
                 const r = await fetch(`/api/messages/${pinId}`);
                 if (r.ok) {
-                    state.diffPinnedMessage = await r.json();
-                    renderMessageList();
+                    const msg = await r.json();
+                    if (seq === state.diffPinRequestSeq) {
+                        state.diffPinnedMessage = msg;
+                        renderMessageList();
+                    }
                 }
             } catch (_) { /* pinned message gone — silently drop */ }
         }

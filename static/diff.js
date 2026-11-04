@@ -153,6 +153,9 @@ function renderDiffTab(container, msgB) {
 
 async function toggleDiffPin(id, event) {
     if (event) event.stopPropagation();
+    // Every pin/unpin invalidates in-flight pin requests (#183), so a slow
+    // response for an earlier pin can't override a newer pin or an unpin.
+    const seq = ++state.diffPinRequestSeq;
     if (state.diffPinnedMessage && state.diffPinnedMessage.id === id) {
         state.diffPinnedMessage = null;
         saveSession();
@@ -162,8 +165,11 @@ async function toggleDiffPin(id, event) {
     }
     try {
         const resp = await fetch(`/api/messages/${id}`);
+        if (seq !== state.diffPinRequestSeq) return;
         if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-        state.diffPinnedMessage = await resp.json();
+        const msg = await resp.json();
+        if (seq !== state.diffPinRequestSeq) return;
+        state.diffPinnedMessage = msg;
     } catch (e) {
         console.error('Failed to fetch pinned message:', e);
         return;
