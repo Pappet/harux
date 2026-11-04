@@ -122,16 +122,24 @@ mod tests {
         }
     }
 
-    /// `field_by_seq` assumes sequence numbers are unique within a segment;
-    /// a duplicate would make lookups depend on file order.
+    /// Data contract of the embedded dictionary asset (see
+    /// `src/assets/hl7/README.md`): within a segment, every field `seq >= 1`
+    /// must be unique, otherwise `field_by_seq` resolves by file order.
+    ///
+    /// This covers every segment, not only a curated subset, because the code
+    /// resolves *any* segment that appears in a received message
+    /// (`inject_descriptions`, `validate_data_types`). `seq 0` rows — which
+    /// published HL7 tables use for segment-level notes — are tolerated: no
+    /// HL7 field index is 0, so they are never looked up.
     #[test]
     fn test_field_seq_unique_per_segment() {
         for (name, seg) in &get_v251().segments {
             let mut seen = std::collections::HashSet::new();
-            for f in &seg.fields {
+            for f in seg.fields.iter().filter(|f| f.seq >= 1) {
                 assert!(
-                    f.seq >= 1 && seen.insert(f.seq),
-                    "segment {name}: duplicate or zero seq {}",
+                    seen.insert(f.seq),
+                    "v2.5.1.json data issue — segment {name} has duplicate seq {} \
+                     (see src/assets/hl7/README.md)",
                     f.seq
                 );
             }
