@@ -386,6 +386,64 @@ async fn export_empty_store_returns_empty_body() {
     assert!(body.is_empty());
 }
 
+/// #195: the streamed export must be byte-identical to "VT raw FS CR" per
+/// message, oldest first — across the coalescing path (many small messages
+/// crossing the 64 KiB chunk boundary) and the zero-copy path (payloads
+/// >= 64 KiB) — and announce the exact Content-Length.
+#[tokio::test]
+async fn export_streams_exact_mllp_framing_for_small_and_large_messages() {
+    let state = make_state();
+    let mut raws: Vec<String> = Vec::new();
+    // 300 small (~1 KiB) messages, two large ones (100 KiB / 64 KiB exactly)
+    // interleaved, so both chunking paths and their boundaries are exercised.
+    for i in 0..300 {
+        raws.push(format!("{}{}", simple_raw(), "x".repeat(1000 + i)));
+        if i == 120 {
+            raws.push(format!("{}{}", simple_raw(), "L".repeat(100 * 1024)));
+        }
+        if i == 250 {
+            let pad = 64 * 1024 - simple_raw().len();
+            raws.push(format!("{}{}", simple_raw(), "M".repeat(pad)));
+        }
+    }
+    for (i, raw) in raws.iter().enumerate() {
+        let mut msg = Hl7Message::new_empty(raw.clone(), "127.0.0.1".to_string());
+        msg.id = format!("exp-{i}");
+        state.store.insert(msg).await;
+    }
+
+    let mut expected = Vec::new();
+    for raw in &raws {
+        expected.push(0x0B);
+        expected.extend_from_slice(raw.as_bytes());
+        expected.extend_from_slice(&[0x1C, 0x0D]);
+    }
+
+    let app = create_router(state);
+    let res = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/export")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let content_length: usize = res.headers()[header::CONTENT_LENGTH]
+        .to_str()
+        .unwrap()
+        .parse()
+        .unwrap();
+    let body = collect_body(res.into_body()).await;
+    assert_eq!(content_length, expected.len());
+    assert_eq!(body.len(), expected.len());
+    assert!(
+        body[..] == expected[..],
+        "export bytes differ from expected framing"
+    );
+}
+
 // ── GET /ws ───────────────────────────────────────────────────────────────────
 
 #[tokio::test]

@@ -95,7 +95,7 @@ Limits are **config-driven** via `StoreConfig` (`src/config.rs`), not hardcoded 
 - `DELETE /api/messages/{id}/tags/{tag}` — Remove a tag
 - `POST /api/messages/{id}/bookmark` — Toggle bookmark
 - `POST /api/clear` — Clear all messages
-- `GET /api/export` — Download every stored message as one MLLP-framed `.hl7` file (raw payloads, oldest first, directly replayable)
+- `GET /api/export` — Download every stored message as one MLLP-framed `.hl7` file (raw payloads, oldest first, directly replayable). **Streamed** (`MllpExportStream` in `src/web.rs`): the store lock is held only to snapshot payload `Arc`s (`payload_snapshot`), large payloads go out zero-copy, small ones are coalesced into ~64 KiB chunks — never build the whole export in memory
 - `WS /ws` — Real-time updates (`init`, `new_message`, `tags_updated`, `bookmark_toggled`, `evicted`, `cleared`, `lagged` events). `evicted` carries the array of IDs removed by an eviction pass; the UI drops those rows and warns when bookmarks were among them
 
 ### Frontend (`static/`)
