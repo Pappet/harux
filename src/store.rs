@@ -333,14 +333,23 @@ impl MessageStore {
         id: &str,
         f: impl FnOnce(&mut Hl7Message) -> bool,
     ) -> Option<Hl7MessageSummary> {
-        let mut inner = self.inner.write().await;
+        let mut guard = self.inner.write().await;
+        // Reborrow once so `messages` and `current_bytes` can be borrowed disjointly.
+        let inner = &mut *guard;
         let arc = inner.messages.get_mut(id)?;
-        if f(Arc::make_mut(arc)) {
-            let summary = Hl7MessageSummary::from(arc.as_ref());
-            Some(summary)
-        } else {
-            None
+
+        // Keep the byte accounting in sync with the mutation (#179): tags grow
+        // or shrink the message, and eviction later subtracts the message's
+        // *current* `estimated_bytes()`. Without this delta `current_bytes`
+        // drifts downward and the byte limit fires too late.
+        let before = arc.estimated_bytes();
+        if !f(Arc::make_mut(arc)) {
+            return None;
         }
+        let after = arc.estimated_bytes();
+        inner.current_bytes = (inner.current_bytes + after).saturating_sub(before);
+
+        Some(Hl7MessageSummary::from(arc.as_ref()))
     }
 
     /// Add a tag to a message and broadcast the update
@@ -483,6 +492,20 @@ mod tests {
         async fn current_bytes(&self) -> usize {
             self.inner.read().await.current_bytes
         }
+
+        /// Ground truth: `estimated_bytes()` summed over every stored message.
+        async fn recomputed_bytes(&self) -> usize {
+            let inner = self.inner.read().await;
+            inner.messages.values().map(|m| m.estimated_bytes()).sum()
+        }
+
+        async fn assert_bytes_in_sync(&self) {
+            assert_eq!(
+                self.current_bytes().await,
+                self.recomputed_bytes().await,
+                "current_bytes drifted from the sum of estimated_bytes()"
+            );
+        }
     }
 
     const MB: usize = 1024 * 1024;
@@ -592,6 +615,55 @@ mod tests {
             .map(|m| m.id)
             .collect();
         assert_eq!(ids, ["msg-0", "msg-2", "msg-4", "msg-6"]);
+    }
+
+    /// #179: tag mutations must be reflected in `current_bytes`.
+    #[tokio::test]
+    async fn test_tag_mutations_keep_byte_accounting_in_sync() {
+        let store = manual_store(100, 512);
+        store.insert(make_msg("a")).await;
+        store.assert_bytes_in_sync().await;
+
+        let before = store.current_bytes().await;
+        assert!(store.add_tag("a", "Bug #1234".into()).await);
+        assert!(store.add_tag("a", "Test scenario A".into()).await);
+        store.assert_bytes_in_sync().await;
+        assert_eq!(
+            store.current_bytes().await,
+            before + "Bug #1234".len() + "Test scenario A".len()
+        );
+
+        assert!(store.remove_tag("a", "Bug #1234").await);
+        store.assert_bytes_in_sync().await;
+
+        // Bookmark toggles and no-op mutations leave the accounting untouched.
+        let before = store.current_bytes().await;
+        store.toggle_bookmark("a").await;
+        assert!(!store.add_tag("a", "Test scenario A".into()).await);
+        assert!(!store.remove_tag("a", "missing").await);
+        assert_eq!(store.current_bytes().await, before);
+    }
+
+    /// #179: after tagging and evicting, nothing may be left over or missing
+    /// in `current_bytes` — the old code subtracted the post-mutation size of
+    /// tagged messages and drifted below the real total.
+    #[tokio::test]
+    async fn test_byte_accounting_survives_tagging_and_eviction() {
+        let store = manual_store(10, 512);
+        for i in 0..10 {
+            store.insert(make_msg(&format!("msg-{i}"))).await;
+            store
+                .add_tag(&format!("msg-{i}"), format!("a-rather-long-tag-{i}"))
+                .await;
+        }
+        store.toggle_bookmark("msg-0").await;
+        store.insert(make_msg("trigger")).await;
+
+        store.evict_now().await;
+        store.assert_bytes_in_sync().await;
+
+        store.clear().await;
+        assert_eq!(store.current_bytes().await, 0);
     }
 
     #[tokio::test]
