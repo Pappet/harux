@@ -9,6 +9,7 @@ async fn benchmark_concurrent_insert_p99() {
     let store = MessageStore::new(StoreConfig {
         max_messages: 1000,
         max_memory_mb: 10,
+        ..StoreConfig::default()
     });
 
     let mut handles: Vec<JoinHandle<Vec<u128>>> = Vec::new();

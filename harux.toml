@@ -14,6 +14,9 @@ level = "info"
 [store]
 max_messages = 10000
 max_memory_mb = 512
+# Max share of the two limits above that bookmarked messages may hold under
+# memory pressure (0-80). Older bookmarks beyond this budget are evicted.
+bookmark_budget_percent = 50
 
 [mllp]
 max_message_size_mb = 10

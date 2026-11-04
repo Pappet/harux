@@ -66,8 +66,8 @@ Limits are **config-driven** via `StoreConfig` (`src/config.rs`), not hardcoded 
 
 - **Count limit:** `store.max_messages` (default `10_000`) — secondary safeguard
 - **Size limit:** `store.max_memory_mb` (default `512` MB) — primary safeguard
-- **Trigger:** either limit hit → background eviction task evicts oldest 10% of messages
-- **Bookmark protection:** bookmarked messages are skipped during eviction (popped and pushed back to the front in original order); see `run_eviction_loop` in `src/store.rs`
+- **Trigger:** either limit hit → background eviction task evicts the oldest messages until **both** bytes and count are at or below 90% of their limits (low watermark, byte-targeted — not a fixed share of the count)
+- **Bookmark protection:** bookmarked messages are skipped during eviction (popped and pushed back to the front in original order) — but only within `store.bookmark_budget_percent` (default 50%, clamped to max 80%) of either limit. Under eviction pressure, bookmarks beyond that budget are evicted oldest-first, so bookmarking can never lift the memory cap. See `StoreInner::evict` in `src/store.rs`
 - **Reason:** MDM messages with Base64-encoded attachments can be several MB each; count-only eviction is insufficient for real-world Orchestra traffic
 
 ### HL7 Parsing (`src/hl7/`)
