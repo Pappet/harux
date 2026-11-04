@@ -55,6 +55,14 @@ const SOURCE_PALETTE = [
     'hsl(15,  90%, 58%)',   // coral
 ];
 
+// Upper bound for `state.messages` (#177). A long-running tab on a busy feed
+// would otherwise accumulate every message ever received in memory and in the
+// DOM. Beyond this cap the oldest messages are dropped client-side — they
+// remain on the server and can be re-fetched. Bookmarked rows and the
+// selected row are exempt; bookmarks are bounded by the server-side
+// bookmark budget, so the buffer stays bounded overall.
+const CLIENT_MESSAGE_CAP = 2000;
+
 // Fields that change every transmission — used by the diff view to suppress
 // noise when the user enables "Hide dynamic fields".
 const DYNAMIC_DIFF_FIELDS = new Set(['MSH-7', 'MSH-10']);

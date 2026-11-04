@@ -109,6 +109,7 @@ Key frontend behaviors:
 - Messages are batched and flushed at most every 250ms (prevents DOM freeze at high message rates)
 - When no client-side filters are active, new messages are **prepended** to the list (`prependMessagesToList`); when a filter/search/bookmark filter is active, the list is fully rebuilt (`renderMessageList`)
 - ⏸ Pause/▶ Live button buffers incoming messages without displaying them
+- **Client buffer cap:** `state.messages` (and the paused `pendingMessages` buffer) holds at most `CLIENT_MESSAGE_CAP` (2000, `util.js`) messages **plus** bookmarked and selected ones, which are exempt (bookmarks are bounded server-side by `store.bookmark_budget_percent`). Excess oldest messages are dropped via `trimClientBuffer()` (O(1) early exit when only exempt entries are over the cap) and their rows removed bottom-up via `removeRowsFromList()` — no full rebuild. Dropped messages stay on the server; `updateTruncationNote()` keeps a note at the bottom of the list whenever the server holds more than the view, because filters/search only cover loaded messages (server-side search: #197/#198). The header `total` shows the server total (`state.totalMessagesCount`, from WS `init` / `addMessage` / `pollStats` every 3 s — so it can lag by one poll while paused), not the buffer length
 - Search is client-side (filters `messages[]` array via `matchesSearch()`), debounced 300ms
 - Parse errors are shown with `⚠ PARSE ERROR` in red (`var(--error)`) in the message list
 
