@@ -1,5 +1,6 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use std::borrow::Cow;
 use std::collections::HashMap;
 use uuid::Uuid;
 
@@ -69,10 +70,28 @@ pub struct Hl7Field {
     pub index: usize,
     /// The raw field value string, possibly containing component separators (`^`).
     pub value: String,
-    /// Pre-split components from `value`, split on the `^` delimiter.
+    /// Components of `value`, split on the component delimiter — **only when
+    /// there are at least two**. A single-component field (the common case,
+    /// including multi-MB Base64 OBX-5 payloads) leaves this empty instead of
+    /// holding a second copy of `value` (#180). Omitted from JSON when empty;
+    /// use [`Hl7Field::component`] to read components uniformly.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub components: Vec<String>,
-    /// Human-readable field name from the embedded HL7 dictionary, if available.
-    pub description: Option<String>,
+    /// Human-readable field name, borrowed from the embedded HL7 dictionary
+    /// (`Cow::Borrowed`, no per-field allocation — #180).
+    pub description: Option<Cow<'static, str>>,
+}
+
+impl Hl7Field {
+    /// Component `i` (0-based) of this field: from `components` when the
+    /// field has several, otherwise the whole `value` for `i == 0`.
+    pub fn component(&self, i: usize) -> Option<&str> {
+        if self.components.is_empty() {
+            (i == 0).then_some(self.value.as_str())
+        } else {
+            self.components.get(i).map(String::as_str)
+        }
+    }
 }
 
 /// One field within an HL7 segment.
@@ -80,12 +99,22 @@ pub struct Hl7Field {
 pub struct Hl7Segment {
     /// Segment identifier, e.g. `"MSH"`, `"PID"`, `"OBX"`.
     pub name: String,
-    /// All fields in this segment, in order.
+    /// All fields in this segment, in order. The segment's original text is
+    /// not stored separately (#180) — it is a line of `Hl7Message::raw`
+    /// (split on `\r` / `\n`, skipping blank lines, as the parser does).
     pub fields: Vec<Hl7Field>,
-    /// The original segment text (one line of the raw message).
-    pub raw: String,
-    /// Human-readable description from the HL7 dictionary (e.g. "Patient Identification")
-    pub description: Option<String>,
+    /// Human-readable description from the HL7 dictionary (e.g. "Patient
+    /// Identification"), borrowed from the embedded dictionary.
+    pub description: Option<Cow<'static, str>>,
+}
+
+/// Heap bytes owned by an optional dictionary text: zero when it is borrowed
+/// from the static dictionary.
+fn owned_len(s: &Option<Cow<'static, str>>) -> usize {
+    match s {
+        Some(Cow::Owned(o)) => o.len(),
+        _ => 0,
+    }
 }
 
 /// Separators / encoding characters extracted from MSH-1 (field separator) and MSH-2.
@@ -153,11 +182,11 @@ impl Hl7Message {
             .sum::<usize>();
 
         for seg in &self.segments {
-            total += seg.name.len() + seg.raw.len();
-            total += seg.description.as_deref().map_or(0, str::len);
+            total += seg.name.len();
+            total += owned_len(&seg.description);
             for field in &seg.fields {
                 total += field.value.len();
-                total += field.description.as_deref().map_or(0, str::len);
+                total += owned_len(&field.description);
                 total += field.components.iter().map(String::len).sum::<usize>();
             }
         }

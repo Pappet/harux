@@ -67,10 +67,11 @@ pub fn inject_descriptions(segments: &mut [crate::hl7::types::Hl7Segment]) {
     for segment in segments.iter_mut() {
         let seg_name = segment.name.clone();
         if let Some(seg_def) = dict.segments.get(&seg_name) {
-            segment.description = Some(seg_def.desc.clone());
+            // Borrow from the static dictionary — no per-field clone (#180).
+            segment.description = Some(std::borrow::Cow::Borrowed(seg_def.desc.as_str()));
             for field in segment.fields.iter_mut() {
                 if let Some(field_def) = seg_def.field_by_seq(field.index) {
-                    field.description = Some(field_def.desc.clone());
+                    field.description = Some(std::borrow::Cow::Borrowed(field_def.desc.as_str()));
                 }
             }
         }

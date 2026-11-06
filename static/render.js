@@ -954,7 +954,8 @@ function buildFieldRow(seg, f, isWarn) {
 
     const tdComp = document.createElement('td');
     tdComp.className = 'field-components';
-    if (f.components.length > 1) {
+    // `components` is only present for multi-component fields (#180).
+    if (f.components && f.components.length > 1) {
         for (let i = 0; i < f.components.length; i++) {
             if (i > 0) {
                 const sep = document.createElement('span');

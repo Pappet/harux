@@ -178,10 +178,26 @@ async function toggleBookmark(id, event) {
 }
 
 // --- Copy helpers (DOM-bound; pure copyToClipboard lives in util.js) ---
+// The server no longer ships a per-segment copy of the text (#180); derive
+// it from the message's raw payload exactly as the parser splits segments:
+// on \r or \n, skipping blank lines.
+// Cached per message object, so repeated copies on a 10 MB message split it
+// once rather than on every click.
+const segmentLinesCache = new WeakMap();
+
+function segmentLines(msg) {
+    let lines = segmentLinesCache.get(msg);
+    if (!lines) {
+        lines = (msg.raw || '').split(/[\r\n]/).filter(s => s.trim() !== '');
+        segmentLinesCache.set(msg, lines);
+    }
+    return lines;
+}
+
 function copySegment(segIdx, el) {
     if (!state.selectedMessage) return;
-    const seg = state.selectedMessage.segments[segIdx];
-    if (seg) copyToClipboard(seg.raw, el);
+    const line = segmentLines(state.selectedMessage)[segIdx];
+    if (line !== undefined) copyToClipboard(line, el);
 }
 
 function copyRawMessage(el) {
