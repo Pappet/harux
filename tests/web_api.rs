@@ -97,6 +97,61 @@ async fn get_message_known_id_returns_200() {
     assert_eq!(json["id"], "known");
 }
 
+/// Locks the detail JSON contract from #180: segments carry no `raw` copy,
+/// single-component fields omit `components`, multi-component fields keep
+/// them, and the dictionary description is still delivered.
+#[tokio::test]
+async fn get_message_json_shape_has_no_duplicate_payload() {
+    let state = make_state();
+    let raw = "MSH|^~\\&|APP|FAC|RCV|RFAC|20240101||ADT^A01|C1|P|2.5\rPID|||12345^^^HOSP||Smith^John||19800515|M";
+    let mut msg = harux::hl7::parser::parse_message(raw, "127.0.0.1:1").unwrap();
+    msg.id = "shape".to_string();
+    state.store.insert(msg).await;
+
+    let app = create_router(state);
+    let res = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/messages/shape")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let json: serde_json::Value =
+        serde_json::from_slice(&collect_body(res.into_body()).await).unwrap();
+
+    let segments = json["segments"].as_array().unwrap();
+    for seg in segments {
+        let mut keys: Vec<&str> = seg
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(String::as_str)
+            .collect();
+        keys.sort_unstable();
+        assert_eq!(keys, ["description", "fields", "name"], "segment keys");
+    }
+    let pid = segments.iter().find(|s| s["name"] == "PID").unwrap();
+    let field = |i: u64| {
+        pid["fields"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|f| f["index"] == i)
+            .unwrap()
+    };
+    // PID-7 (single component): value only, no components key.
+    assert_eq!(field(7)["value"], "19800515");
+    assert!(field(7).get("components").is_none());
+    // PID-5 (multi component): components present.
+    assert_eq!(field(5)["components"], serde_json::json!(["Smith", "John"]));
+    assert_eq!(field(5)["description"], "Patient Name");
+    // The message raw is still there for the UI to derive segment lines.
+    assert_eq!(json["raw"], raw);
+}
+
 #[tokio::test]
 async fn get_message_unknown_id_returns_404() {
     let app = create_router(make_state());

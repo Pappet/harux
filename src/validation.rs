@@ -358,10 +358,11 @@ fn validate_data_types(msg: &Hl7Message, warnings: &mut Vec<ValidationWarning>) 
             };
             // Use only the first component — composite values include sub-component
             // separators (^) that are not part of the primitive value itself.
-            let primary = field.component(0).unwrap_or(field.value.as_str());
-            if primary.is_empty() {
+            // `component(0)` is always `Some` (the whole value for a
+            // single-component field); only empty first components are skipped.
+            let Some(primary) = field.component(0).filter(|p| !p.is_empty()) else {
                 continue;
-            }
+            };
             if let Some(err) = check_datatype(&field_def.datatype, primary) {
                 warnings.push(ValidationWarning {
                     code: "INVALID_DATATYPE".into(),

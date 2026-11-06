@@ -355,7 +355,19 @@ mod tests {
             .collect();
         assert_eq!(lines.len(), msg.segments.len());
         for (line, seg) in lines.iter().zip(&msg.segments) {
-            assert!(line.starts_with(&seg.name), "{line:?} vs {}", seg.name);
+            // Rebuild the line from the parsed segment: it must match the raw
+            // line exactly, not just share a prefix. MSH skips the synthetic
+            // MSH-1 (the separator itself).
+            let skip = usize::from(seg.name == "MSH");
+            let rebuilt = std::iter::once(seg.name.as_str())
+                .chain(seg.fields.iter().skip(skip).map(|f| f.value.as_str()))
+                .collect::<Vec<_>>()
+                .join("|");
+            assert_eq!(
+                *line, rebuilt,
+                "segment {} does not match its raw line",
+                seg.name
+            );
         }
     }
 

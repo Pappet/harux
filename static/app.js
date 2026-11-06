@@ -181,13 +181,22 @@ async function toggleBookmark(id, event) {
 // The server no longer ships a per-segment copy of the text (#180); derive
 // it from the message's raw payload exactly as the parser splits segments:
 // on \r or \n, skipping blank lines.
-function segmentLines(raw) {
-    return (raw || '').split(/[\r\n]/).filter(s => s.trim() !== '');
+// Cached per message object, so repeated copies on a 10 MB message split it
+// once rather than on every click.
+const segmentLinesCache = new WeakMap();
+
+function segmentLines(msg) {
+    let lines = segmentLinesCache.get(msg);
+    if (!lines) {
+        lines = (msg.raw || '').split(/[\r\n]/).filter(s => s.trim() !== '');
+        segmentLinesCache.set(msg, lines);
+    }
+    return lines;
 }
 
 function copySegment(segIdx, el) {
     if (!state.selectedMessage) return;
-    const line = segmentLines(state.selectedMessage.raw)[segIdx];
+    const line = segmentLines(state.selectedMessage)[segIdx];
     if (line !== undefined) copyToClipboard(line, el);
 }
 
