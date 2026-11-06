@@ -351,15 +351,25 @@ impl MessageStore {
             })
     }
 
-    /// Snapshot of every stored message's raw HL7 payload, in insertion order
-    /// (oldest first — so replaying the result preserves the original sequence).
-    pub async fn list_all_raw(&self) -> Vec<String> {
+    /// Snapshot of every stored message payload, in insertion order (oldest
+    /// first — so replaying an export preserves the original sequence).
+    ///
+    /// Only the `Arc`s are cloned (O(n) pointer copies, no payload bytes), so
+    /// the read lock is held briefly and a full store costs a few hundred KB
+    /// here instead of a second copy of every raw message (#195). The
+    /// snapshot keeps evicted messages alive until the caller drops them.
+    ///
+    /// Safe to hold during tag/bookmark writes only because metadata lives in
+    /// `MessageMeta`, not in the payload (#192): the extra `Arc` references
+    /// never trigger a copy-on-write. Do not move mutable fields back into
+    /// `Hl7Message`.
+    pub async fn payload_snapshot(&self) -> Vec<Arc<Hl7Message>> {
         let inner = self.inner.read().await;
         inner
             .order
             .iter()
             .filter_map(|id| inner.messages.get(id))
-            .map(|e| e.message.raw.clone())
+            .map(|e| Arc::clone(&e.message))
             .collect()
     }
 
@@ -1012,6 +1022,21 @@ mod tests {
         assert_eq!(now.meta.tags, ["Bug #1234"]);
         assert!(now.meta.bookmarked);
         store.assert_bytes_in_sync().await;
+    }
+
+    /// #195: the export snapshot shares the stored payloads (no copy of the
+    /// raw bytes) and lists them oldest first.
+    #[tokio::test]
+    async fn test_payload_snapshot_shares_payloads_in_order() {
+        let store = manual_store(10, 512);
+        for i in 0..3 {
+            store.insert(make_msg(&format!("p-{i}"))).await;
+        }
+        let snap = store.payload_snapshot().await;
+        let ids: Vec<&str> = snap.iter().map(|m| m.id.as_str()).collect();
+        assert_eq!(ids, ["p-0", "p-1", "p-2"]);
+        let detail = store.get_by_id("p-1").await.unwrap();
+        assert!(Arc::ptr_eq(&snap[1], &detail.message));
     }
 
     /// The detail JSON keeps its shape: payload fields and `tags` /

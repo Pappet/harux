@@ -350,6 +350,7 @@ dependencies = [
  "axum",
  "chrono",
  "encoding_rs",
+ "futures-core",
  "http-body-util",
  "mime_guess",
  "rust-embed",

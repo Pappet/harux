@@ -11,10 +11,11 @@ use tokio::sync::Semaphore;
 use tokio::time::timeout;
 use tracing::{debug, info, warn};
 
-/// MLLP framing constants
-const MLLP_START: u8 = 0x0B; // Vertical Tab (VT)
-const MLLP_END_1: u8 = 0x1C; // File Separator (FS)
-const MLLP_END_2: u8 = 0x0D; // Carriage Return (CR)
+/// MLLP framing constants — the single definition, also used by the
+/// `/api/export` stream in `web.rs`.
+pub(crate) const MLLP_START: u8 = 0x0B; // Vertical Tab (VT)
+pub(crate) const MLLP_END_1: u8 = 0x1C; // File Separator (FS)
+pub(crate) const MLLP_END_2: u8 = 0x0D; // Carriage Return (CR)
 
 /// Stats for the MLLP server
 #[derive(Clone)]

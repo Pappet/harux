@@ -1,5 +1,7 @@
-use crate::mllp::MllpStats;
+use crate::hl7::types::Hl7Message;
+use crate::mllp::{MllpStats, MLLP_END_1, MLLP_END_2, MLLP_START};
 use crate::store::{MessageStore, StoreEvent};
+use axum::body::{Body, Bytes};
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::{Path, Query, State};
 use axum::http::{HeaderName, HeaderValue, StatusCode};
@@ -9,7 +11,12 @@ use axum::routing::get;
 use axum::{Json, Router};
 use rust_embed::Embed;
 use serde::Deserialize;
+use std::collections::VecDeque;
+use std::convert::Infallible;
+use std::pin::Pin;
 use std::sync::atomic::Ordering;
+use std::sync::Arc;
+use std::task::{Context, Poll};
 
 #[derive(serde::Serialize)]
 struct StatsResponse {
@@ -148,31 +155,111 @@ async fn clear_messages(State(state): State<AppState>) -> impl IntoResponse {
 /// `nc host port < harux-export.hl7`) and the framing also serves as an
 /// unambiguous message separator when opening the file in tools that
 /// understand HL7.
+///
+/// The body is **streamed** (#195): the store lock is held only to snapshot
+/// the payload `Arc`s, and frames are produced as the client reads. Large
+/// payloads go out zero-copy straight from the stored message; small ones are
+/// coalesced into ~64 KiB chunks. Peak extra memory is one chunk instead of
+/// two full copies of the store.
 async fn export_raw_hl7(State(state): State<AppState>) -> impl IntoResponse {
-    const MLLP_START: u8 = 0x0B;
-    const MLLP_END_1: u8 = 0x1C;
-    const MLLP_END_2: u8 = 0x0D;
-
-    let raws = state.store.list_all_raw().await;
-    let total: usize = raws.iter().map(|r| r.len() + 3).sum();
-    let mut body = Vec::with_capacity(total);
-    for raw in raws {
-        body.push(MLLP_START);
-        body.extend_from_slice(raw.as_bytes());
-        body.push(MLLP_END_1);
-        body.push(MLLP_END_2);
-    }
+    let messages = state.store.payload_snapshot().await;
+    let content_length: usize = messages.iter().map(|m| m.raw.len() + 3).sum();
 
     (
         [
-            (axum::http::header::CONTENT_TYPE, "application/octet-stream"),
+            (
+                axum::http::header::CONTENT_TYPE,
+                "application/octet-stream".to_string(),
+            ),
             (
                 axum::http::header::CONTENT_DISPOSITION,
-                "attachment; filename=\"harux-export.hl7\"",
+                "attachment; filename=\"harux-export.hl7\"".to_string(),
+            ),
+            (
+                axum::http::header::CONTENT_LENGTH,
+                content_length.to_string(),
             ),
         ],
-        body,
+        Body::from_stream(MllpExportStream::new(messages)),
     )
+}
+
+/// Chunks of at most this size are built by copying small payloads; a payload
+/// at least this large is sent zero-copy as its own chunk.
+const EXPORT_COALESCE_BYTES: usize = 64 * 1024;
+
+static MLLP_START_BYTE: [u8; 1] = [MLLP_START];
+static MLLP_END_FRAME: [u8; 2] = [MLLP_END_1, MLLP_END_2];
+
+/// Lets `Bytes::from_owner` borrow a stored message's raw payload without
+/// copying it; the `Arc` keeps the message alive until the chunk is written.
+struct RawPayload(Arc<Hl7Message>);
+
+impl AsRef<[u8]> for RawPayload {
+    fn as_ref(&self) -> &[u8] {
+        self.0.raw.as_bytes()
+    }
+}
+
+/// Yields the MLLP-framed export (`VT raw FS CR` per message, oldest first)
+/// chunk by chunk. Consumed `Arc`s are dropped as the iterator advances.
+struct MllpExportStream {
+    messages: std::vec::IntoIter<Arc<Hl7Message>>,
+    ready: VecDeque<Bytes>,
+    buf: Vec<u8>,
+}
+
+impl MllpExportStream {
+    fn new(messages: Vec<Arc<Hl7Message>>) -> Self {
+        Self {
+            messages: messages.into_iter(),
+            ready: VecDeque::new(),
+            buf: Vec::new(),
+        }
+    }
+
+    fn flush_buf(&mut self) {
+        if !self.buf.is_empty() {
+            self.ready
+                .push_back(Bytes::from(std::mem::take(&mut self.buf)));
+        }
+    }
+}
+
+impl futures_core::Stream for MllpExportStream {
+    type Item = Result<Bytes, Infallible>;
+
+    fn poll_next(mut self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        // Purely CPU-bound and never pending: each call emits the next chunk.
+        // Fine for a store bounded by `store.max_memory_mb`; if exports ever
+        // span far larger data, yield `Pending` periodically (or move framing
+        // to `spawn_blocking`) so one export can't monopolize a worker thread.
+        loop {
+            if let Some(chunk) = self.ready.pop_front() {
+                return Poll::Ready(Some(Ok(chunk)));
+            }
+            let Some(msg) = self.messages.next() else {
+                self.flush_buf();
+                return Poll::Ready(self.ready.pop_front().map(Ok));
+            };
+            if msg.raw.len() >= EXPORT_COALESCE_BYTES {
+                self.flush_buf();
+                self.ready.push_back(Bytes::from_static(&MLLP_START_BYTE));
+                self.ready.push_back(Bytes::from_owner(RawPayload(msg)));
+                self.ready.push_back(Bytes::from_static(&MLLP_END_FRAME));
+            } else {
+                if self.buf.capacity() == 0 {
+                    self.buf.reserve(EXPORT_COALESCE_BYTES + 3);
+                }
+                self.buf.push(MLLP_START);
+                self.buf.extend_from_slice(msg.raw.as_bytes());
+                self.buf.extend_from_slice(&MLLP_END_FRAME);
+                if self.buf.len() >= EXPORT_COALESCE_BYTES {
+                    self.flush_buf();
+                }
+            }
+        }
+    }
 }
 
 #[derive(Deserialize)]
