@@ -258,30 +258,147 @@ fn get_field_value(segment: &Hl7Segment, index: usize) -> String {
         .unwrap_or_default()
 }
 
-/// Build an ACK message for a received HL7 message
-pub fn build_ack(original: &Hl7Message, ack_code: &str) -> String {
-    let now = chrono::Utc::now().format("%Y%m%d%H%M%S").to_string();
-    let msh = format!(
-        "MSH|^~\\&|Harux|Harux|{}|{}|{}||ACK^{}|{}|P|{}",
-        original.sending_application,
-        original.sending_facility,
-        now,
-        original.trigger_event,
-        &uuid::Uuid::new_v4().to_string().replace('-', "")[..20],
-        original.version,
-    );
-    let msa = format!("MSA|{}|{}", ack_code, original.message_control_id,);
-    format!("{}\r{}", msh, msa)
+/// MSH-12 used when the original message declares no version, and for NACKs
+/// of unparseable frames (no original version known).
+const DEFAULT_ACK_VERSION: &str = "2.5";
+
+/// Everything that differs between an ACK and a NACK. The MSH/MSA layout
+/// itself lives in [`render_ack`] only, so the two can't drift apart (#187).
+struct AckSpec<'a> {
+    /// Encoding of the ACK. ACKs reuse the original message's delimiters, so
+    /// values echoed from it (MSH-3/4 → MSH-5/6, MSH-10 → MSA-2, MSH-11)
+    /// stay valid verbatim even for senders with non-default delimiters.
+    delimiters: Delimiters,
+    receiving_application: &'a str,
+    receiving_facility: &'a str,
+    /// MSH-9.2 of the original; empty → MSH-9 is plain `ACK`.
+    trigger_event: &'a str,
+    /// MSH-11 of the original (`P`/`T`/`D`); empty → `P`.
+    processing_id: &'a str,
+    /// MSH-12 of the original; empty → [`DEFAULT_ACK_VERSION`].
+    version: &'a str,
+    /// MSA-1: `AA`, `AE` or `AR`.
+    ack_code: &'a str,
+    /// MSA-2: MSH-10 of the message being acknowledged.
+    acknowledged_control_id: &'a str,
+    /// MSA-3 free text; escaped before it is written.
+    text: Option<&'a str>,
 }
 
-/// Build a NACK response (Application Error) for an unparseable message.
-/// Used when the raw frame cannot be parsed into a valid Hl7Message.
+/// Render an [`AckSpec`] as `MSH…\rMSA…`. Every ACK/NACK gets a fresh
+/// 20-character MSH-10 control ID.
+fn render_ack(spec: &AckSpec) -> String {
+    let d = spec.delimiters;
+    let f = d.field;
+    let message_type = if spec.trigger_event.is_empty() {
+        "ACK".to_string()
+    } else {
+        format!("ACK{}{}", d.component, spec.trigger_event)
+    };
+    let processing_id = non_empty_or(spec.processing_id, "P");
+    let version = non_empty_or(spec.version, DEFAULT_ACK_VERSION);
+    let control_id = &uuid::Uuid::new_v4().simple().to_string()[..20];
+    let now = chrono::Utc::now().format("%Y%m%d%H%M%S");
+
+    let mut ack = format!(
+        "MSH{f}{}{}{}{}{f}Harux{f}Harux{f}{}{f}{}{f}{now}{f}{f}{message_type}{f}{control_id}{f}{processing_id}{f}{version}\rMSA{f}{}{f}{}",
+        d.component,
+        d.repetition,
+        d.escape,
+        d.subcomponent,
+        spec.receiving_application,
+        spec.receiving_facility,
+        spec.ack_code,
+        spec.acknowledged_control_id,
+    );
+    if let Some(text) = spec.text {
+        ack.push(f);
+        ack.push_str(&escape_text(text, d));
+    }
+    ack
+}
+
+fn non_empty_or<'a>(value: &'a str, default: &'a str) -> &'a str {
+    if value.is_empty() {
+        default
+    } else {
+        value
+    }
+}
+
+/// Escape free text for use inside a field (HL7 v2 escape sequences
+/// `\F\ \S\ \T\ \R\ \E\`). Line breaks would end the segment, so they
+/// become spaces.
+fn escape_text(text: &str, d: Delimiters) -> String {
+    let mut out = String::with_capacity(text.len());
+    for c in text.chars() {
+        let code = if c == d.escape {
+            'E'
+        } else if c == d.field {
+            'F'
+        } else if c == d.component {
+            'S'
+        } else if c == d.subcomponent {
+            'T'
+        } else if c == d.repetition {
+            'R'
+        } else if c == '\r' || c == '\n' {
+            out.push(' ');
+            continue;
+        } else {
+            out.push(c);
+            continue;
+        };
+        out.push(d.escape);
+        out.push(code);
+        out.push(d.escape);
+    }
+    out
+}
+
+/// Build an ACK for a successfully parsed message.
+pub fn build_ack(original: &Hl7Message, ack_code: &str) -> String {
+    // `raw` of a parsed message starts with a validated MSH header; the
+    // fallback only matters for hand-built messages (tests).
+    let delimiters = if original.raw.starts_with("MSH") {
+        parse_delimiters(&original.raw).unwrap_or_default()
+    } else {
+        Delimiters::default()
+    };
+    let processing_id = original
+        .segments
+        .first()
+        .filter(|msh| msh.name == "MSH")
+        .map(|msh| get_field_value(msh, 11))
+        .unwrap_or_default();
+    render_ack(&AckSpec {
+        delimiters,
+        receiving_application: &original.sending_application,
+        receiving_facility: &original.sending_facility,
+        trigger_event: &original.trigger_event,
+        processing_id: &processing_id,
+        version: &original.version,
+        ack_code,
+        acknowledged_control_id: &original.message_control_id,
+        text: None,
+    })
+}
+
+/// Build a NACK (`AE`, Application Error) for a frame that could not be
+/// parsed. Nothing of the original is trustworthy, so it uses default
+/// delimiters, MSH-9 `ACK` and MSA-2 `UNKNOWN`; `reason` goes into MSA-3.
 pub fn build_nack(reason: &str) -> String {
-    format!(
-        "MSH|^~\\&|Harux|Harux|||{}||ACK||P|2.5\rMSA|AE|UNKNOWN|{}",
-        chrono::Utc::now().format("%Y%m%d%H%M%S"),
-        reason
-    )
+    render_ack(&AckSpec {
+        delimiters: Delimiters::default(),
+        receiving_application: "",
+        receiving_facility: "",
+        trigger_event: "",
+        processing_id: "",
+        version: "",
+        ack_code: "AE",
+        acknowledged_control_id: "UNKNOWN",
+        text: Some(reason),
+    })
 }
 
 #[cfg(test)]
@@ -436,12 +553,99 @@ mod tests {
         assert_eq!(msg.segments.len(), 3);
     }
 
+    /// Field `index` (HL7 numbering) of the first `segment` in `msg`.
+    fn field(msg: &Hl7Message, segment: &str, index: usize) -> String {
+        let seg = msg.segments.iter().find(|s| s.name == segment).unwrap();
+        get_field_value(seg, index)
+    }
+
     #[test]
     fn test_build_ack() {
         let msg = parse_message(SAMPLE_ADT, "127.0.0.1:9999").unwrap();
         let ack = build_ack(&msg, "AA");
-        assert!(ack.starts_with("MSH|^~\\&|Harux"));
-        assert!(ack.contains("MSA|AA|MSG00001"));
+        assert!(ack.starts_with("MSH|^~\\&|Harux|Harux|SENDING_APP|SENDING_FAC|"));
+
+        // The ACK is itself valid HL7: parse it back and check every field.
+        let parsed = parse_message(&ack, "test").unwrap();
+        assert_eq!(parsed.segments.len(), 2);
+        assert_eq!(parsed.message_type, "ACK^A01");
+        assert_eq!(parsed.receiving_application, "SENDING_APP");
+        assert_eq!(parsed.receiving_facility, "SENDING_FAC");
+        assert_eq!(parsed.message_control_id.len(), 20);
+        assert_eq!(field(&parsed, "MSH", 11), "P");
+        assert_eq!(parsed.version, "2.5");
+        assert_eq!(field(&parsed, "MSA", 1), "AA");
+        assert_eq!(field(&parsed, "MSA", 2), "MSG00001");
+        assert_eq!(parsed.segments[1].fields.len(), 2, "no MSA-3 on an ACK");
+    }
+
+    /// #187: the NACK shares the ACK's MSH layout — it now carries its own
+    /// MSH-10 control ID instead of an empty one.
+    #[test]
+    fn test_build_nack() {
+        let nack = build_nack("Message parse error");
+        let parsed = parse_message(&nack, "test").unwrap();
+        assert_eq!(parsed.message_type, "ACK");
+        assert_eq!(parsed.sending_application, "Harux");
+        assert_eq!(parsed.receiving_application, "");
+        assert_eq!(parsed.message_control_id.len(), 20);
+        assert_eq!(field(&parsed, "MSH", 11), "P");
+        assert_eq!(parsed.version, "2.5");
+        assert_eq!(field(&parsed, "MSA", 1), "AE");
+        assert_eq!(field(&parsed, "MSA", 2), "UNKNOWN");
+        assert_eq!(field(&parsed, "MSA", 3), "Message parse error");
+    }
+
+    #[test]
+    fn test_ack_control_ids_are_unique() {
+        let msg = parse_message(SAMPLE_ADT, "test").unwrap();
+        let a = parse_message(&build_ack(&msg, "AA"), "test").unwrap();
+        let b = parse_message(&build_ack(&msg, "AA"), "test").unwrap();
+        let n = parse_message(&build_nack("x"), "test").unwrap();
+        assert_ne!(a.message_control_id, b.message_control_id);
+        assert_ne!(a.message_control_id, n.message_control_id);
+    }
+
+    /// The ACK is written in the sender's encoding, so echoed values that
+    /// contain the sender's delimiters stay intact.
+    #[test]
+    fn test_ack_uses_original_delimiters() {
+        let raw = "MSH#*~\\&#APP*NS*ISO#FAC#REC#RFAC#20240101##ADT*A01#CTRL1#T#2.5.1\rPID###42";
+        let msg = parse_message(raw, "test").unwrap();
+        let ack = build_ack(&msg, "AA");
+        assert!(
+            ack.starts_with("MSH#*~\\&#Harux#Harux#APP*NS*ISO#FAC#"),
+            "{ack}"
+        );
+        assert!(!ack.contains('|'), "{ack}");
+
+        let parsed = parse_message(&ack, "test").unwrap();
+        assert_eq!(field(&parsed, "MSH", 9), "ACK*A01");
+        assert_eq!(parsed.receiving_application, "APP*NS*ISO");
+        assert_eq!(field(&parsed, "MSH", 11), "T", "processing ID is echoed");
+        assert_eq!(parsed.version, "2.5.1");
+        assert_eq!(field(&parsed, "MSA", 2), "CTRL1");
+    }
+
+    #[test]
+    fn test_ack_defaults_for_missing_original_fields() {
+        // MSH-9 without trigger, no MSH-11, no MSH-12.
+        let msg = parse_message("MSH|^~\\&|APP|FAC|||20240101||ADT|C1", "test").unwrap();
+        let parsed = parse_message(&build_ack(&msg, "AA"), "test").unwrap();
+        assert_eq!(parsed.message_type, "ACK", "no dangling ACK^");
+        assert_eq!(field(&parsed, "MSH", 11), "P");
+        assert_eq!(parsed.version, "2.5");
+        assert_eq!(field(&parsed, "MSA", 2), "C1");
+    }
+
+    #[test]
+    fn test_nack_text_is_escaped() {
+        let nack = build_nack("a|b^c&d~e\\f\r\ng");
+        assert!(
+            nack.ends_with("MSA|AE|UNKNOWN|a\\F\\b\\S\\c\\T\\d\\R\\e\\E\\f  g"),
+            "{nack:?}"
+        );
+        assert_eq!(nack.matches('\r').count(), 1, "only the MSH/MSA separator");
     }
 
     #[test]
