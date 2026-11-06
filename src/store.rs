@@ -594,6 +594,35 @@ mod tests {
             self.inner.read().await.current_bytes
         }
 
+        /// Wait until the store is within its limits again (#191) — used to
+        /// wait for the **background** eviction task without sleeping.
+        ///
+        /// Subscribes to the store's broadcast channel *before* checking the
+        /// state; every eviction pass that evicts anything sends
+        /// `StoreEvent::Evicted` under the write lock, and any event (or
+        /// `Lagged`) just triggers a re-check, so a pass finishing between
+        /// check and wait can't be missed. No production code exists only
+        /// for this helper.
+        ///
+        /// Caveats: it returns immediately if the store is already within its
+        /// limits (it does not prove that a pass ran), and it needs a running
+        /// background task — on a `without_eviction_task` store that is over
+        /// its limit it times out after 5 s.
+        async fn wait_until_within_limits(&self) {
+            let mut rx = self.subscribe();
+            let wait = async {
+                loop {
+                    if !self.inner.read().await.over_limit() {
+                        return;
+                    }
+                    let _ = rx.recv().await;
+                }
+            };
+            tokio::time::timeout(std::time::Duration::from_secs(5), wait)
+                .await
+                .expect("background eviction did not bring the store within limits");
+        }
+
         /// Ground truth: payload + metadata bytes recomputed from scratch for
         /// every stored message (ignores the cached `StoredEntry::bytes`).
         async fn recomputed_bytes(&self) -> usize {
@@ -960,7 +989,10 @@ mod tests {
         );
     }
 
-    #[tokio::test]
+    // multi_thread: the background eviction task runs truly concurrently with
+    // the test, so the wait helper's check/wait window is actually exercised
+    // (on current_thread the task can only run while the test is parked).
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_byte_based_eviction_triggers() {
         // Store with a very small byte limit so a single large message overflows it
         let store = MessageStore::new(StoreConfig {
@@ -977,8 +1009,8 @@ mod tests {
             store.insert(msg).await;
         }
 
-        // Give eviction task time to run
-        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        // Wait for the real background task (not a fixed sleep — #191).
+        store.wait_until_within_limits().await;
 
         // The background task must have brought the store back under its limit
         assert!(

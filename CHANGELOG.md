@@ -9,6 +9,9 @@ and this project follows [Semantic Versioning](https://semver.org/lang/en/).
 
 ## [Unreleased]
 
+### Changed
+- **Tests — no sleep-based synchronisation left in the Rust tests** — the last test that exercised the real background eviction task (`test_byte_based_eviction_triggers` in `src/store.rs`) slept 50 ms and hoped the task had finished. It now runs on the multi-threaded runtime, so the background task really runs concurrently with the test, and waits with the helper `wait_until_within_limits`: it subscribes to the store's existing broadcast channel *before* checking the state and re-checks on every event (`Evicted` is sent under the write lock after each pass that evicts), so a pass finishing in between can't be missed; a 5 s timeout turns a broken eviction loop into a clear failure instead of a hung CI. No production code was added for this. The other eviction tests already drive `evict_now()` directly (#178). The pointless 50 ms sleep at the end of `tests/benchmark_concurrent_insert.rs` (which only asserts insert latencies) is removed. Verified on the multi-threaded runtime under full CPU load; with eviction disabled the test fails after 5 s with "background eviction did not bring the store within limits". (#191)
+
 ---
 
 ## [0.7.0] – 2026-11-06 – Memory Footprint & Hot-Path Performance
