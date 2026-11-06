@@ -48,10 +48,6 @@ pub struct MessageStore {
     tx: broadcast::Sender<StoreEvent>,
     eviction_notify: Arc<tokio::sync::Notify>,
     eviction_flag: Arc<std::sync::atomic::AtomicBool>,
-    /// Signalled (`notify_waiters`) after every background eviction pass, once
-    /// the write lock is released. Lets tests wait for the real background
-    /// task deterministically instead of sleeping (#191).
-    eviction_done: Arc<tokio::sync::Notify>,
 }
 
 /// One stored message: the immutable payload, its mutable metadata and the
@@ -281,7 +277,6 @@ impl MessageStore {
             tx,
             eviction_notify: Arc::new(tokio::sync::Notify::new()),
             eviction_flag: Arc::new(std::sync::atomic::AtomicBool::new(false)),
-            eviction_done: Arc::new(tokio::sync::Notify::new()),
         }
     }
 
@@ -522,8 +517,7 @@ impl MessageStore {
             self.eviction_flag
                 .store(false, std::sync::atomic::Ordering::Relaxed);
 
-            self.evict_now().await; // the write lock is released on return
-            self.eviction_done.notify_waiters();
+            self.evict_now().await;
         }
     }
 
@@ -600,21 +594,28 @@ mod tests {
             self.inner.read().await.current_bytes
         }
 
-        /// Wait until the **background** eviction task has brought the store
-        /// back within its limits (#191). Deterministic: the waiter registers
-        /// for `eviction_done` *before* checking the state (`enable`), so a
-        /// pass that finishes in between can't be missed. A bounded timeout
-        /// turns a broken eviction loop into a test failure, not a hung CI.
+        /// Wait until the store is within its limits again (#191) — used to
+        /// wait for the **background** eviction task without sleeping.
+        ///
+        /// Subscribes to the store's broadcast channel *before* checking the
+        /// state; every eviction pass that evicts anything sends
+        /// `StoreEvent::Evicted` under the write lock, and any event (or
+        /// `Lagged`) just triggers a re-check, so a pass finishing between
+        /// check and wait can't be missed. No production code exists only
+        /// for this helper.
+        ///
+        /// Caveats: it returns immediately if the store is already within its
+        /// limits (it does not prove that a pass ran), and it needs a running
+        /// background task — on a `without_eviction_task` store that is over
+        /// its limit it times out after 5 s.
         async fn wait_until_within_limits(&self) {
+            let mut rx = self.subscribe();
             let wait = async {
                 loop {
-                    let done = self.eviction_done.notified();
-                    tokio::pin!(done);
-                    done.as_mut().enable();
                     if !self.inner.read().await.over_limit() {
                         return;
                     }
-                    done.await;
+                    let _ = rx.recv().await;
                 }
             };
             tokio::time::timeout(std::time::Duration::from_secs(5), wait)
@@ -988,7 +989,10 @@ mod tests {
         );
     }
 
-    #[tokio::test]
+    // multi_thread: the background eviction task runs truly concurrently with
+    // the test, so the wait helper's check/wait window is actually exercised
+    // (on current_thread the task can only run while the test is parked).
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_byte_based_eviction_triggers() {
         // Store with a very small byte limit so a single large message overflows it
         let store = MessageStore::new(StoreConfig {
