@@ -204,10 +204,15 @@ fn parse_segment(raw: &str, delimiters: Delimiters) -> Hl7Segment {
 
     // For MSH, field indexing is special: MSH-1 is the separator itself
     for (i, part) in parts.enumerate() {
-        let components: Vec<String> = part
-            .split(delimiters.component)
-            .map(|c| c.to_string())
-            .collect();
+        // Only split when there is something to split: a single-component
+        // field would otherwise store a second copy of `value` (#180).
+        let components: Vec<String> = if part.contains(delimiters.component) {
+            part.split(delimiters.component)
+                .map(|c| c.to_string())
+                .collect()
+        } else {
+            Vec::new()
+        };
 
         fields.push(Hl7Field {
             index: i + 1,
@@ -229,7 +234,7 @@ fn parse_segment(raw: &str, delimiters: Delimiters) -> Hl7Segment {
             Hl7Field {
                 index: 1,
                 value: sep.to_string(),
-                components: vec![sep.to_string()],
+                components: Vec::new(),
                 description: None,
             },
         );
@@ -238,7 +243,6 @@ fn parse_segment(raw: &str, delimiters: Delimiters) -> Hl7Segment {
     Hl7Segment {
         name,
         fields,
-        raw: raw.to_string(),
         description: None,
     }
 }
@@ -285,6 +289,75 @@ mod tests {
     use super::*;
 
     const SAMPLE_ADT: &str = "MSH|^~\\&|SENDING_APP|SENDING_FAC|REC_APP|REC_FAC|20240101120000||ADT^A01^ADT_A01|MSG00001|P|2.5\rPID|||12345^^^HOSP||Smith^John^Peter||19800515|M\rPV1||I|WARD1^ROOM1^BED1";
+
+    /// #180: single-component fields don't duplicate `value` into
+    /// `components`; multi-component fields still split; `component(i)`
+    /// reads both uniformly.
+    #[test]
+    fn test_components_only_for_multi_component_fields() {
+        let msg = parse_message(SAMPLE_ADT, "127.0.0.1:9999").unwrap();
+        let pid = msg.segments.iter().find(|s| s.name == "PID").unwrap();
+        let pid5 = pid.fields.iter().find(|f| f.index == 5).unwrap();
+        assert_eq!(pid5.components, ["Smith", "John", "Peter"]);
+        assert_eq!(pid5.component(1), Some("John"));
+
+        let pid7 = pid.fields.iter().find(|f| f.index == 7).unwrap();
+        assert!(
+            pid7.components.is_empty(),
+            "single component must not be duplicated"
+        );
+        assert_eq!(pid7.component(0), Some("19800515"));
+        assert_eq!(pid7.component(1), None);
+
+        let msh1 = &msg.segments[0].fields[0];
+        assert_eq!((msh1.value.as_str(), msh1.components.len()), ("|", 0));
+    }
+
+    /// #180: a large single-component payload (Base64 OBX-5) is held once in
+    /// `raw` and once as the field value — not additionally as a segment copy
+    /// and as `components[0]`. Descriptions are borrowed from the dictionary.
+    #[test]
+    fn test_large_payload_is_not_duplicated() {
+        let b64 = "QUJD".repeat(256 * 1024); // 1 MiB
+        let raw = format!(
+            "MSH|^~\\&|APP|FAC|RCV|RFAC|20240101||MDM^T02|C1|P|2.5\rPID|||1\rOBX|1|ED|DOC||{b64}"
+        );
+        let msg = parse_message(&raw, "127.0.0.1:9999").unwrap();
+        let obx5 = msg.segments[2]
+            .fields
+            .iter()
+            .find(|f| f.index == 5)
+            .unwrap();
+        assert!(obx5.components.is_empty());
+        let bytes = msg.estimated_bytes();
+        assert!(
+            bytes < raw.len() * 2 + 16 * 1024,
+            "estimated {bytes} bytes for {} raw — payload held more than twice",
+            raw.len()
+        );
+        assert!(matches!(
+            obx5.description,
+            Some(std::borrow::Cow::Borrowed(_))
+        ));
+    }
+
+    /// Contract the UI's "copy segment" relies on now that segments carry no
+    /// text of their own (#180): segment `i` is the `i`-th non-blank line of
+    /// `raw` when split on `\r` / `\n` (see `segmentLines` in static/app.js).
+    #[test]
+    fn test_segments_match_nonblank_raw_lines() {
+        let raw = "MSH|^~\\&|A|B|C|D|20240101||ADT^A01|1|P|2.5\r\nPID|||1\n\nPV1||I\r";
+        let msg = parse_message(raw, "127.0.0.1:9999").unwrap();
+        let lines: Vec<&str> = msg
+            .raw
+            .split(['\r', '\n'])
+            .filter(|s| !s.trim().is_empty())
+            .collect();
+        assert_eq!(lines.len(), msg.segments.len());
+        for (line, seg) in lines.iter().zip(&msg.segments) {
+            assert!(line.starts_with(&seg.name), "{line:?} vs {}", seg.name);
+        }
+    }
 
     /// Regression guard for the MSH field-index shift (#189).
     ///

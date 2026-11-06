@@ -358,11 +358,7 @@ fn validate_data_types(msg: &Hl7Message, warnings: &mut Vec<ValidationWarning>) 
             };
             // Use only the first component — composite values include sub-component
             // separators (^) that are not part of the primitive value itself.
-            let primary = field
-                .components
-                .first()
-                .map(String::as_str)
-                .unwrap_or(field.value.as_str());
+            let primary = field.component(0).unwrap_or(field.value.as_str());
             if primary.is_empty() {
                 continue;
             }

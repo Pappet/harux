@@ -178,10 +178,17 @@ async function toggleBookmark(id, event) {
 }
 
 // --- Copy helpers (DOM-bound; pure copyToClipboard lives in util.js) ---
+// The server no longer ships a per-segment copy of the text (#180); derive
+// it from the message's raw payload exactly as the parser splits segments:
+// on \r or \n, skipping blank lines.
+function segmentLines(raw) {
+    return (raw || '').split(/[\r\n]/).filter(s => s.trim() !== '');
+}
+
 function copySegment(segIdx, el) {
     if (!state.selectedMessage) return;
-    const seg = state.selectedMessage.segments[segIdx];
-    if (seg) copyToClipboard(seg.raw, el);
+    const line = segmentLines(state.selectedMessage.raw)[segIdx];
+    if (line !== undefined) copyToClipboard(line, el);
 }
 
 function copyRawMessage(el) {
