@@ -58,9 +58,6 @@ async fn benchmark_concurrent_insert_p99() {
     println!("P95 Latency: {} us", all_latencies[p95_idx]);
     println!("P99 Latency: {} us", all_latencies[p99_idx]);
 
-    // Sleep a bit to let the background eviction task finish
-    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-
     // We expect the P99 latency to be extremely low now (e.g. under 1ms),
     // because eviction happens asynchronously. We assert < 100_000us (100ms) to avoid flakiness in CI.
     assert!(

@@ -9,6 +9,9 @@ and this project follows [Semantic Versioning](https://semver.org/lang/en/).
 
 ## [Unreleased]
 
+### Changed
+- **Tests — no more sleep-based synchronisation** — the last test that exercised the real background eviction task (`test_byte_based_eviction_triggers` in `src/store.rs`) slept 50 ms and hoped the task had finished; under CI load that is a race. The store now signals `eviction_done` (`tokio::sync::Notify`) after every background pass, once the write lock is released, and the test helper `wait_until_within_limits` registers for it *before* checking the store (`Notified::enable`), so a pass finishing in between can't be missed; a 5 s timeout turns a broken eviction loop into a clear failure instead of a hung CI. The other eviction tests already drive `evict_now()` directly (#178). The pointless 50 ms sleep at the end of `tests/benchmark_concurrent_insert.rs` (which only asserts insert latencies) is removed. Verified: 300 consecutive runs under full CPU load on all cores — 0 failures; with eviction deliberately disabled the test fails after 5 s with "background eviction did not bring the store within limits". (#191)
+
 ---
 
 ## [0.7.0] – 2026-11-06 – Memory Footprint & Hot-Path Performance

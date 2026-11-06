@@ -48,6 +48,10 @@ pub struct MessageStore {
     tx: broadcast::Sender<StoreEvent>,
     eviction_notify: Arc<tokio::sync::Notify>,
     eviction_flag: Arc<std::sync::atomic::AtomicBool>,
+    /// Signalled (`notify_waiters`) after every background eviction pass, once
+    /// the write lock is released. Lets tests wait for the real background
+    /// task deterministically instead of sleeping (#191).
+    eviction_done: Arc<tokio::sync::Notify>,
 }
 
 /// One stored message: the immutable payload, its mutable metadata and the
@@ -277,6 +281,7 @@ impl MessageStore {
             tx,
             eviction_notify: Arc::new(tokio::sync::Notify::new()),
             eviction_flag: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            eviction_done: Arc::new(tokio::sync::Notify::new()),
         }
     }
 
@@ -517,7 +522,8 @@ impl MessageStore {
             self.eviction_flag
                 .store(false, std::sync::atomic::Ordering::Relaxed);
 
-            self.evict_now().await;
+            self.evict_now().await; // the write lock is released on return
+            self.eviction_done.notify_waiters();
         }
     }
 
@@ -592,6 +598,28 @@ mod tests {
     impl MessageStore {
         async fn current_bytes(&self) -> usize {
             self.inner.read().await.current_bytes
+        }
+
+        /// Wait until the **background** eviction task has brought the store
+        /// back within its limits (#191). Deterministic: the waiter registers
+        /// for `eviction_done` *before* checking the state (`enable`), so a
+        /// pass that finishes in between can't be missed. A bounded timeout
+        /// turns a broken eviction loop into a test failure, not a hung CI.
+        async fn wait_until_within_limits(&self) {
+            let wait = async {
+                loop {
+                    let done = self.eviction_done.notified();
+                    tokio::pin!(done);
+                    done.as_mut().enable();
+                    if !self.inner.read().await.over_limit() {
+                        return;
+                    }
+                    done.await;
+                }
+            };
+            tokio::time::timeout(std::time::Duration::from_secs(5), wait)
+                .await
+                .expect("background eviction did not bring the store within limits");
         }
 
         /// Ground truth: payload + metadata bytes recomputed from scratch for
@@ -977,8 +1005,8 @@ mod tests {
             store.insert(msg).await;
         }
 
-        // Give eviction task time to run
-        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        // Wait for the real background task (not a fixed sleep — #191).
+        store.wait_until_within_limits().await;
 
         // The background task must have brought the store back under its limit
         assert!(
