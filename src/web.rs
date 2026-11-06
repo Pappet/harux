@@ -188,7 +188,7 @@ async fn export_raw_hl7(State(state): State<AppState>) -> impl IntoResponse {
 /// at least this large is sent zero-copy as its own chunk.
 const EXPORT_COALESCE_BYTES: usize = 64 * 1024;
 
-static MLLP_START_FRAME: [u8; 1] = [MLLP_START];
+static MLLP_START_BYTE: [u8; 1] = [MLLP_START];
 static MLLP_END_FRAME: [u8; 2] = [MLLP_END_1, MLLP_END_2];
 
 /// Lets `Bytes::from_owner` borrow a stored message's raw payload without
@@ -231,6 +231,9 @@ impl futures_core::Stream for MllpExportStream {
 
     fn poll_next(mut self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         // Purely CPU-bound and never pending: each call emits the next chunk.
+        // Fine for a store bounded by `store.max_memory_mb`; if exports ever
+        // span far larger data, yield `Pending` periodically (or move framing
+        // to `spawn_blocking`) so one export can't monopolize a worker thread.
         loop {
             if let Some(chunk) = self.ready.pop_front() {
                 return Poll::Ready(Some(Ok(chunk)));
@@ -241,7 +244,7 @@ impl futures_core::Stream for MllpExportStream {
             };
             if msg.raw.len() >= EXPORT_COALESCE_BYTES {
                 self.flush_buf();
-                self.ready.push_back(Bytes::from_static(&MLLP_START_FRAME));
+                self.ready.push_back(Bytes::from_static(&MLLP_START_BYTE));
                 self.ready.push_back(Bytes::from_owner(RawPayload(msg)));
                 self.ready.push_back(Bytes::from_static(&MLLP_END_FRAME));
             } else {

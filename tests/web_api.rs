@@ -444,6 +444,43 @@ async fn export_streams_exact_mllp_framing_for_small_and_large_messages() {
     );
 }
 
+/// The export works on a snapshot of payload `Arc`s: messages removed from
+/// the store after the response was created (eviction, Clear) must still be
+/// streamed in full.
+#[tokio::test]
+async fn export_survives_store_clear_while_streaming() {
+    let state = make_state();
+    let store = state.store.clone();
+    let raws: Vec<String> = (0..50)
+        .map(|i| format!("{}{}", simple_raw(), "y".repeat(2000 * (i % 50 + 1))))
+        .collect();
+    for (i, raw) in raws.iter().enumerate() {
+        let mut msg = Hl7Message::new_empty(raw.clone(), "127.0.0.1".to_string());
+        msg.id = format!("ev-{i}");
+        store.insert(msg).await;
+    }
+
+    let app = create_router(state);
+    let res = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/export")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    // The handler has taken its snapshot; empty the store before reading.
+    store.clear().await;
+    assert_eq!(store.count().await, 0);
+
+    let body = collect_body(res.into_body()).await;
+    let expected: usize = raws.iter().map(|r| r.len() + 3).sum();
+    assert_eq!(body.len(), expected);
+    assert_eq!(body[0], 0x0B);
+    assert_eq!(&body[body.len() - 2..], &[0x1C, 0x0D]);
+}
+
 // ── GET /ws ───────────────────────────────────────────────────────────────────
 
 #[tokio::test]

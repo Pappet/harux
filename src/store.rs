@@ -358,6 +358,11 @@ impl MessageStore {
     /// the read lock is held briefly and a full store costs a few hundred KB
     /// here instead of a second copy of every raw message (#195). The
     /// snapshot keeps evicted messages alive until the caller drops them.
+    ///
+    /// Safe to hold during tag/bookmark writes only because metadata lives in
+    /// `MessageMeta`, not in the payload (#192): the extra `Arc` references
+    /// never trigger a copy-on-write. Do not move mutable fields back into
+    /// `Hl7Message`.
     pub async fn payload_snapshot(&self) -> Vec<Arc<Hl7Message>> {
         let inner = self.inner.read().await;
         inner
