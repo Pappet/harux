@@ -1416,6 +1416,19 @@ body.resizing * {
     font-size: 11px;
 }
 
+.field-table .field-components .field-leaf {
+    white-space: pre-wrap; /* decoded \.br\ line breaks */
+}
+
+.field-table .field-components .field-sep {
+    color: var(--text-muted);
+}
+
+.field-table .field-components .field-sep.rep {
+    color: var(--accent);
+    font-weight: 600;
+}
+
 .field-table tr.warn {
     background: rgba(229, 165, 75, 0.05);
 }

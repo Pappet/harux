@@ -125,9 +125,13 @@ fn test_non_default_delimiters() {
     let pid = msg.segments.iter().find(|s| s.name == "PID").unwrap();
     let name_field = pid.fields.iter().find(|f| f.index == 5).unwrap();
     assert_eq!(name_field.value, "Smith$John#E#Doe");
-    // components should be split by $
-    assert_eq!(name_field.components[0], "Smith");
-    assert_eq!(name_field.components[1], "John#E#Doe");
+    // Split by the message's own `$`, and `#E#` (its escape char `#`)
+    // decodes to a literal `#`.
+    let d = msg.delimiters;
+    assert_eq!(d.as_msh_prefix(), "*$!#%");
+    assert_eq!(name_field.leaf(d, 0, 0, 0).as_deref(), Some("Smith"));
+    assert_eq!(name_field.leaf(d, 0, 1, 0).as_deref(), Some("John#Doe"));
+    assert_eq!(msg.patient_name.as_deref(), Some("Smith, John#Doe"));
 }
 
 #[test]
@@ -154,12 +158,19 @@ fn test_windows_line_endings() {
 
 #[test]
 fn test_repeated_pid_3() {
-    // Repeated PID-3 using ~.
-    // Note: This tests a known limitation. Repetitions are currently not split into
-    // separate field objects, so the raw string including the ~ is retained.
+    // Repeated PID-3 using ~: the patient ID is the first repetition (#185);
+    // the field value keeps both, and each repetition is reachable.
     let raw = "MSH|^~\\&|SENDING|FAC|||2024||ADT^A01|123|P|2.5\rPID|||ID1~ID2||Smith^John";
     let msg = parse_message(raw, "127.0.0.1:9999").unwrap();
-    assert_eq!(msg.patient_id.unwrap(), "ID1~ID2");
+    assert_eq!(msg.patient_id.as_deref(), Some("ID1"));
+    let pid3 = msg.segments[1]
+        .fields
+        .iter()
+        .find(|f| f.index == 3)
+        .unwrap();
+    assert_eq!(pid3.value, "ID1~ID2");
+    let reps: Vec<&str> = pid3.repetitions(msg.delimiters).collect();
+    assert_eq!(reps, ["ID1", "ID2"]);
 }
 
 #[test]

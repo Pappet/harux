@@ -871,7 +871,7 @@ function buildValidationBanner(warnings) {
     return details;
 }
 
-function buildSegmentBlock(seg, segIdx, key, collapsed, warnFields) {
+function buildSegmentBlock(seg, segIdx, key, collapsed, warnFields, delims) {
     const block = document.createElement('div');
     block.className = collapsed ? 'segment-block collapsed' : 'segment-block';
 
@@ -914,7 +914,7 @@ function buildSegmentBlock(seg, segIdx, key, collapsed, warnFields) {
     table.className = 'field-table';
     const tbody = document.createElement('tbody');
     for (const f of seg.fields) {
-        tbody.appendChild(buildFieldRow(seg, f, warnFields && warnFields.has(f.index)));
+        tbody.appendChild(buildFieldRow(seg, f, warnFields && warnFields.has(f.index), delims));
     }
     table.appendChild(tbody);
     block.appendChild(table);
@@ -922,7 +922,46 @@ function buildSegmentBlock(seg, segIdx, key, collapsed, warnFields) {
     return block;
 }
 
-function buildFieldRow(seg, f, isWarn) {
+// Renders a field's decoded structure (#185). `f.repetitions` is only present
+// for structured fields: [rep][comp][sub] leaves, escape-decoded server-side
+// (`value` stays raw). Separators are the sender's own (`msg.delimiters`,
+// "|^~\\&" form). Leaf tooltips use HL7 positions: PID-3[2].4.1 (the
+// repetition index only when the field repeats, the sub-component index only
+// when the component has several).
+function buildFieldStructure(td, seg, f, delims) {
+    const reps = f.repetitions;
+    if (!reps) return;
+    // A lone leaf identical to the raw value adds nothing (e.g. an unknown
+    // escape kept verbatim).
+    if (reps.length === 1 && reps[0].length === 1 && reps[0][0].length === 1 && reps[0][0][0] === f.value) return;
+
+    const d = (typeof delims === 'string' && delims.length === 5) ? delims : '|^~\\&';
+    const sep = (ch, cls) => {
+        const el = document.createElement('span');
+        el.className = 'field-sep ' + cls;
+        el.textContent = ` ${ch} `;
+        return el;
+    };
+    reps.forEach((comps, r) => {
+        if (r > 0) td.appendChild(sep(d[2], 'rep'));
+        comps.forEach((subs, c) => {
+            if (c > 0) td.appendChild(sep(d[1], 'comp'));
+            subs.forEach((leaf, sIdx) => {
+                if (sIdx > 0) td.appendChild(sep(d[4], 'sub'));
+                const el = document.createElement('span');
+                el.className = 'field-leaf';
+                el.title = `${seg.name}-${f.index}`
+                    + (reps.length > 1 ? `[${r + 1}]` : '')
+                    + `.${c + 1}`
+                    + (subs.length > 1 ? `.${sIdx + 1}` : '');
+                el.textContent = leaf;
+                td.appendChild(el);
+            });
+        });
+    });
+}
+
+function buildFieldRow(seg, f, isWarn, delims) {
     const tr = document.createElement('tr');
     if (isWarn) tr.className = 'warn';
 
@@ -954,21 +993,7 @@ function buildFieldRow(seg, f, isWarn) {
 
     const tdComp = document.createElement('td');
     tdComp.className = 'field-components';
-    // `components` is only present for multi-component fields (#180).
-    if (f.components && f.components.length > 1) {
-        for (let i = 0; i < f.components.length; i++) {
-            if (i > 0) {
-                const sep = document.createElement('span');
-                sep.style.color = 'var(--text-muted)';
-                sep.textContent = ' ^ ';
-                tdComp.appendChild(sep);
-            }
-            const cs = document.createElement('span');
-            cs.title = `${seg.name}-${f.index}.${i + 1}`;
-            cs.textContent = f.components[i];
-            tdComp.appendChild(cs);
-        }
-    }
+    buildFieldStructure(tdComp, seg, f, delims);
     tr.appendChild(tdComp);
 
     return tr;
@@ -1006,7 +1031,7 @@ function renderParsedTab(content, msg) {
     for (let segIdx = 0; segIdx < msg.segments.length; segIdx++) {
         const seg = msg.segments[segIdx];
         const key = `${msg.id}-${segIdx}`;
-        children.push(buildSegmentBlock(seg, segIdx, key, state.collapsedSegments.has(key), missingFieldByseg.get(seg.name)));
+        children.push(buildSegmentBlock(seg, segIdx, key, state.collapsedSegments.has(key), missingFieldByseg.get(seg.name), msg.delimiters));
     }
     content.replaceChildren(...children);
 }

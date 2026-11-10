@@ -94,7 +94,7 @@ A thread-safe in-memory buffer with dual eviction:
 
 The parser operates in four passes:
 
-1. **Segment parsing** — extracts delimiters from MSH, splits on `\r`/`\n`, decomposes fields and components.
+1. **Segment parsing** — extracts delimiters from MSH, splits on `\r`/`\n` and into fields. Repetitions, components, sub-components and escape sequences are derived from each field's raw value on demand with the message's own delimiters (#185).
 2. **Dictionary injection** — `inject_descriptions` walks every segment and field, filling `Hl7Segment.description` and `Hl7Field.description` from the embedded v2.5.1 JSON via a single `HashMap::get` per segment.
 3. **Message type lookup** — `message_types::get_message_type_info` resolves the `TYPE^EVENT` string to a human-readable description and a list of typical segments; also builds the `typical_segment_descriptions` map for the UI badges.
 4. **Validation** — `validation::validate_message` applies two layers of checks: (a) rule-based structural checks — universal MSH required fields and per-type required segments/fields for ADT, ORU^R01, ORM^O01, OML^O21, SIU, and MDM; (b) data type checks — `validate_data_types` iterates all fields, looks up each field's `datatype` from the dictionary, and validates NM/DT/TS/SI values using pure char pattern checks. Only the first component of each field is checked to avoid false positives on composite types.

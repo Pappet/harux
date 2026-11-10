@@ -1,4 +1,5 @@
 use super::types::*;
+use std::borrow::Cow;
 
 /// Parse a raw HL7 v2.x message string into a structured Hl7Message.
 /// Handles standard and custom delimiters from MSH segment.
@@ -31,6 +32,7 @@ fn parse_structure(raw: &str, source_addr: &str) -> Result<(Hl7Message, Delimite
     // Extract delimiters from MSH-1 (field sep) and MSH-2 (encoding chars)
     let delimiters = parse_delimiters(raw.as_bytes())?;
     let mut msg = Hl7Message::new_empty(raw.to_string(), source_addr.to_string());
+    msg.delimiters = delimiters;
 
     // Split into segments (HL7 uses \r as segment terminator, but be lenient)
     for seg_str in raw.split(['\r', '\n']).filter(|s| !s.trim().is_empty()) {
@@ -74,35 +76,33 @@ fn enrich_msh(mut msg: Hl7Message, delimiters: Delimiters) -> Hl7Message {
     msg
 }
 
-fn enrich_pid(mut msg: Hl7Message, delimiters: Delimiters) -> Hl7Message {
-    // Extract patient info from PID segment
-    if let Some(pid) = msg.segments.iter().find(|s| s.name == "PID") {
-        // PID-3: Patient ID
-        let pid3 = get_field_value(pid, 3);
-        if !pid3.is_empty() {
-            // Take first component (ID itself, before ^^^authority)
-            msg.patient_id = Some(
-                pid3.split(delimiters.component)
-                    .next()
-                    .unwrap_or(&pid3)
-                    .to_string(),
-            );
-        }
+fn enrich_pid(mut msg: Hl7Message, d: Delimiters) -> Hl7Message {
+    let Some(pid) = msg.segments.iter().find(|s| s.name == "PID") else {
+        return msg;
+    };
+    let field = |index| pid.fields.iter().find(|f| f.index == index);
 
-        // PID-5: Patient Name (Family^Given^Middle^Suffix^Prefix)
-        let pid5 = get_field_value(pid, 5);
-        if !pid5.is_empty() {
-            let name_parts: Vec<&str> = pid5.split(delimiters.component).collect();
-            let name = match name_parts.len() {
-                0 => String::new(),
-                1 => name_parts[0].to_string(),
-                _ => format!("{}, {}", name_parts[0], name_parts[1]),
-            };
-            if !name.is_empty() {
-                msg.patient_name = Some(name);
-            }
-        }
-    }
+    // PID-3 (CX, repeating): the ID itself is CX.1 of the first repetition,
+    // before `^^^authority` and before any `~second-id` (#185).
+    let patient_id = field(3)
+        .and_then(|f| f.leaf(d, 0, 0, 0))
+        .filter(|id| !id.is_empty())
+        .map(Cow::into_owned);
+
+    // PID-5 (XPN, repeating): "Family, Given" from the first repetition.
+    // XPN.1 is itself composite (FN: Surname&Prefix…), so take its first
+    // sub-component. Escapes are decoded (`O\T\Brien` → `O&Brien`).
+    let patient_name = field(5).filter(|f| !f.value.is_empty()).and_then(|f| {
+        let family = f.leaf(d, 0, 0, 0).unwrap_or_default();
+        let name = match f.leaf(d, 0, 1, 0) {
+            Some(given) => format!("{family}, {given}"),
+            None => family.into_owned(),
+        };
+        (!name.is_empty()).then_some(name)
+    });
+
+    msg.patient_id = patient_id;
+    msg.patient_name = patient_name;
     msg
 }
 
@@ -217,21 +217,12 @@ fn parse_segment(raw: &str, delimiters: Delimiters) -> Hl7Segment {
     let mut fields = Vec::new();
 
     // For MSH, field indexing is special: MSH-1 is the separator itself
+    // Only the raw value is stored; repetitions / components /
+    // sub-components / escapes are derived on demand (#180, #185).
     for (i, part) in parts.enumerate() {
-        // Only split when there is something to split: a single-component
-        // field would otherwise store a second copy of `value` (#180).
-        let components: Vec<String> = if part.contains(delimiters.component) {
-            part.split(delimiters.component)
-                .map(|c| c.to_string())
-                .collect()
-        } else {
-            Vec::new()
-        };
-
         fields.push(Hl7Field {
             index: i + 1,
             value: part.to_string(),
-            components,
             description: None,
         });
     }
@@ -248,7 +239,6 @@ fn parse_segment(raw: &str, delimiters: Delimiters) -> Hl7Segment {
             Hl7Field {
                 index: 1,
                 value: sep.to_string(),
-                components: Vec::new(),
                 description: None,
             },
         );
@@ -258,6 +248,7 @@ fn parse_segment(raw: &str, delimiters: Delimiters) -> Hl7Segment {
         name,
         fields,
         description: None,
+        delimiters,
     }
 }
 
@@ -329,7 +320,7 @@ fn render_ack(spec: &AckSpec) -> String {
     );
     if let Some(text) = spec.text {
         ack.push(f);
-        ack.push_str(&escape_text(text, d));
+        ack.push_str(&super::escape::encode(text, d));
     }
     ack
 }
@@ -342,45 +333,9 @@ fn non_empty_or<'a>(value: &'a str, default: &'a str) -> &'a str {
     }
 }
 
-/// Escape free text for use inside a field (HL7 v2 escape sequences
-/// `\F\ \S\ \T\ \R\ \E\`). Line breaks would end the segment, so they
-/// become spaces.
-fn escape_text(text: &str, d: Delimiters) -> String {
-    let mut out = String::with_capacity(text.len());
-    for c in text.chars() {
-        let code = if c == d.escape {
-            'E'
-        } else if c == d.field {
-            'F'
-        } else if c == d.component {
-            'S'
-        } else if c == d.subcomponent {
-            'T'
-        } else if c == d.repetition {
-            'R'
-        } else if c == '\r' || c == '\n' {
-            out.push(' ');
-            continue;
-        } else {
-            out.push(c);
-            continue;
-        };
-        out.push(d.escape);
-        out.push(code);
-        out.push(d.escape);
-    }
-    out
-}
-
 /// Build an ACK for a successfully parsed message.
 pub fn build_ack(original: &Hl7Message, ack_code: &str) -> String {
-    // `raw` of a parsed message starts with a validated MSH header; the
-    // fallback only matters for hand-built messages (tests).
-    let delimiters = if original.raw.starts_with("MSH") {
-        parse_delimiters(original.raw.as_bytes()).unwrap_or_default()
-    } else {
-        Delimiters::default()
-    };
+    let delimiters = original.delimiters;
     let processing_id = original
         .segments
         .first()
@@ -423,27 +378,78 @@ mod tests {
 
     const SAMPLE_ADT: &str = "MSH|^~\\&|SENDING_APP|SENDING_FAC|REC_APP|REC_FAC|20240101120000||ADT^A01^ADT_A01|MSG00001|P|2.5\rPID|||12345^^^HOSP||Smith^John^Peter||19800515|M\rPV1||I|WARD1^ROOM1^BED1";
 
-    /// #180: single-component fields don't duplicate `value` into
-    /// `components`; multi-component fields still split; `component(i)`
-    /// reads both uniformly.
+    /// #185: structure is derived from `value` on demand — repetitions,
+    /// components and sub-components, escape-decoded — and nothing but
+    /// `value` is stored.
     #[test]
-    fn test_components_only_for_multi_component_fields() {
+    fn test_field_structure_accessors() {
         let msg = parse_message(SAMPLE_ADT, "127.0.0.1:9999").unwrap();
+        let d = msg.delimiters;
+        assert_eq!(d, Delimiters::default());
         let pid = msg.segments.iter().find(|s| s.name == "PID").unwrap();
         let pid5 = pid.fields.iter().find(|f| f.index == 5).unwrap();
-        assert_eq!(pid5.components, ["Smith", "John", "Peter"]);
-        assert_eq!(pid5.component(1), Some("John"));
+        assert!(pid5.is_structured(d));
+        assert_eq!(pid5.leaf(d, 0, 0, 0).as_deref(), Some("Smith"));
+        assert_eq!(pid5.leaf(d, 0, 2, 0).as_deref(), Some("Peter"));
+        assert_eq!(pid5.leaf(d, 0, 3, 0), None);
+        assert_eq!(pid5.leaf(d, 1, 0, 0), None, "no second repetition");
 
         let pid7 = pid.fields.iter().find(|f| f.index == 7).unwrap();
-        assert!(
-            pid7.components.is_empty(),
-            "single component must not be duplicated"
-        );
-        assert_eq!(pid7.component(0), Some("19800515"));
-        assert_eq!(pid7.component(1), None);
+        assert!(!pid7.is_structured(d));
+        assert_eq!(pid7.leaf(d, 0, 0, 0).as_deref(), Some("19800515"));
+        assert_eq!(pid7.leaf(d, 0, 1, 0), None);
+    }
 
-        let msh1 = &msg.segments[0].fields[0];
-        assert_eq!((msh1.value.as_str(), msh1.components.len()), ("|", 0));
+    #[test]
+    fn test_repetitions_subcomponents_and_escapes() {
+        let raw = "MSH|^~\\&|A|B|C|D|20240101||ADT^A01|1|P|2.5\r\
+                   PID|||111^^^HOSP&1.2.3&ISO~222^^^LAB||O\\T\\Brien&van^Hans~Alias^X";
+        let msg = parse_message(raw, "t").unwrap();
+        let d = msg.delimiters;
+        let pid = &msg.segments[1];
+        let pid3 = pid.fields.iter().find(|f| f.index == 3).unwrap();
+        assert_eq!(pid3.repetitions(d).count(), 2);
+        assert_eq!(pid3.leaf(d, 1, 0, 0).as_deref(), Some("222"));
+        assert_eq!(pid3.leaf(d, 0, 3, 1).as_deref(), Some("1.2.3"));
+        assert_eq!(
+            pid3.structure(d),
+            vec![
+                vec![
+                    vec!["111"],
+                    vec![""],
+                    vec![""],
+                    vec!["HOSP", "1.2.3", "ISO"]
+                ],
+                vec![vec!["222"], vec![""], vec![""], vec!["LAB"]],
+            ]
+        );
+        let pid5 = pid.fields.iter().find(|f| f.index == 5).unwrap();
+        // `\T\` is a literal `&`, not a sub-component separator.
+        assert_eq!(pid5.leaf(d, 0, 0, 0).as_deref(), Some("O&Brien"));
+        assert_eq!(pid5.leaf(d, 0, 0, 1).as_deref(), Some("van"));
+        assert!(matches!(pid5.leaf(d, 0, 0, 1), Some(Cow::Borrowed("van"))));
+
+        // Summary fields come from the first repetition, decoded.
+        assert_eq!(msg.patient_id.as_deref(), Some("111"));
+        assert_eq!(msg.patient_name.as_deref(), Some("O&Brien, Hans"));
+    }
+
+    #[test]
+    fn test_patient_summary_edge_cases() {
+        let parse = |pid: &str| {
+            let raw = format!("MSH|^~\\&|A|B|C|D|20240101||ADT^A01|1|P|2.5\r{pid}");
+            parse_message(&raw, "t").unwrap()
+        };
+        // Family only, no given-name component: no dangling ", ".
+        let m = parse("PID|||1||Smith");
+        assert_eq!(m.patient_name.as_deref(), Some("Smith"));
+        // Empty ID before the authority: no empty patient ID.
+        let m = parse("PID|||^^^HOSP||^John");
+        assert_eq!(m.patient_id, None);
+        assert_eq!(m.patient_name.as_deref(), Some(", John"));
+        // No PID-5 at all.
+        let m = parse("PID|||1");
+        assert_eq!(m.patient_name, None);
     }
 
     /// #180: a large single-component payload (Base64 OBX-5) is held once in
@@ -461,7 +467,7 @@ mod tests {
             .iter()
             .find(|f| f.index == 5)
             .unwrap();
-        assert!(obx5.components.is_empty());
+        assert!(!obx5.is_structured(msg.delimiters));
         let bytes = msg.estimated_bytes();
         assert!(
             bytes < raw.len() * 2 + 16 * 1024,
@@ -472,6 +478,33 @@ mod tests {
             obx5.description,
             Some(std::borrow::Cow::Borrowed(_))
         ));
+    }
+
+    /// #185: an MDM attachment as a real ED value (`^application^pdf^Base64^…`)
+    /// is structured, but its components are derived from `value` — the
+    /// payload is not copied into a component (it used to be, via
+    /// `components`), and reading it is zero-copy.
+    #[test]
+    fn test_ed_payload_is_not_duplicated() {
+        let b64 = "QUJD".repeat(256 * 1024); // 1 MiB
+        let raw = format!(
+            "MSH|^~\\&|APP|FAC|RCV|RFAC|20240101||MDM^T02|C1|P|2.5\rOBX|1|ED|DOC||^application^pdf^Base64^{b64}"
+        );
+        let msg = parse_message(&raw, "t").unwrap();
+        let d = msg.delimiters;
+        let obx5 = msg.segments[1]
+            .fields
+            .iter()
+            .find(|f| f.index == 5)
+            .unwrap();
+        assert!(obx5.is_structured(d));
+        assert!(matches!(obx5.leaf(d, 0, 4, 0), Some(Cow::Borrowed(p)) if p.len() == b64.len()));
+        let bytes = msg.estimated_bytes();
+        assert!(
+            bytes < raw.len() * 2 + 16 * 1024,
+            "estimated {bytes} bytes for {} raw — ED payload held more than twice",
+            raw.len()
+        );
     }
 
     /// Contract the UI's "copy segment" relies on now that segments carry no

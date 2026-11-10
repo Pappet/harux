@@ -9,6 +9,23 @@ and this project follows [Semantic Versioning](https://semver.org/lang/en/).
 
 ## [Unreleased]
 
+### Upgrade Notes
+- **API change in `GET /api/messages/{id}`:** `fields[].components` is replaced by `fields[].repetitions`. It is a `[repetition][component][sub-component]` array of escape-decoded strings and is present only for fields that contain a separator or an escape. `value` still holds the field exactly as received, and the message gains `delimiters` (e.g. `"|^~\\&"`). The bundled web UI is updated, so only custom REST clients are affected. List summaries, WebSocket events and the export are unchanged. (#185)
+
+### Added
+- **Repetitions, sub-components and escape sequences are parsed** (#185). Previously the parser only split on `^`, which caused several problems:
+  - A repeated PID-3 (`ID1~ID2`) became the patient ID `ID1~ID2`.
+  - Sub-components (`&`) and escapes (`\T\`, `\.br\`) showed up raw in the detail view.
+  - A repeated date such as `20240101~20240202` raised a false `INVALID_DATATYPE` warning.
+  - The detail view always drew `^` between components, whatever the sender's delimiter was.
+
+  Now:
+  - Patient ID and name come from the first repetition, escape-decoded (`O\T\Brien` → `O&Brien`).
+  - Datatype validation checks each repetition separately and names the failing one (`PID-7[2]`).
+  - The detail view shows `value` raw next to its decoded structure, drawn with the sender's own separators. Repetition separators are highlighted, `\.br\` becomes a real line break, and tooltips give HL7 positions such as `PID-3[2].4.1`.
+
+  The decoding table is in `src/hl7/escape.rs`. Sequences that can't be decoded without more context (`\Xhh\`, `\Z…\`) stay verbatim.
+
 ### Fixed
 - **Charset handling: one MSH parser, and a fallback instead of mojibake.** `mllp.rs` used to read MSH-18 with its own byte scanner, separate from the parser, and the two disagreed:
   - The scanner applied a charset even when the parser rejects the MSH-2 encoding characters.
@@ -23,6 +40,7 @@ and this project follows [Semantic Versioning](https://semver.org/lang/en/).
   Each fallback is logged and shows up on the message as a `CHARSET_FALLBACK` validation warning on MSH-18. HL7 table 0211 names such as `UNICODE UTF-8`, `ISO IR100`, `BIG-5` and `GB 18030-2000` are now recognised. ASCII-only payloads, such as Base64 MDM attachments, skip all of this, so a 9 MB message round-trips in about 47 ms as before. (#188)
 
 ### Changed
+- **Less RAM for MDM attachments** (#185). The field structure is no longer stored: it is derived from `Hl7Field::value` on demand and computed only when a message's detail JSON is serialized. As a result, an ED attachment (`^application^pdf^Base64^…`) is no longer held a third time as a parsed component. With 10 × 9.4 MB ED messages, the server's resident memory drops from 330 MB to 247 MB.
 - **ACK/NACK built by one shared builder** — `build_ack` and `build_nack` (`src/hl7/parser.rs`) had drifted apart. Both are now thin wrappers around one `render_ack`, so the MSH/MSA layout exists once. Visible on the wire:
   - The NACK for an unparseable frame now carries its own MSH-10 control ID (was empty).
   - The ACK echoes the original MSH-11 processing ID (`T`/`D` test senders were answered with `P`).
