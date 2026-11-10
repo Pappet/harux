@@ -10,6 +10,15 @@ and this project follows [Semantic Versioning](https://semver.org/lang/en/).
 ## [Unreleased]
 
 ### Changed
+- **ACK/NACK built by one shared builder** — `build_ack` and `build_nack` (`src/hl7/parser.rs`) had drifted apart. Both are now thin wrappers around one `render_ack`, so the MSH/MSA layout exists once. Visible on the wire:
+  - The NACK for an unparseable frame now carries its own MSH-10 control ID (was empty).
+  - The ACK echoes the original MSH-11 processing ID (`T`/`D` test senders were answered with `P`).
+  - It falls back to `2.5` when the original has no MSH-12, and to MSA-2 `UNKNOWN` (as the NACK does) when it has no MSH-10.
+  - It sends plain `ACK` instead of a dangling `ACK^` when MSH-9 has no trigger event.
+  - ACKs are written in the **sender's delimiters**, so values echoed from a sender with non-default delimiters (e.g. `#*~\&`) stay valid instead of corrupting the ACK's field structure.
+  - MSA-3 text is HL7-escaped (`\F\ \S\ \T\ \R\ \E\`).
+  
+  The public signatures are unchanged. Verified by round-trip tests that parse every generated ACK/NACK back, and against a live server over MLLP. (#187)
 - **Tests — no sleep-based synchronisation left in the Rust tests** — the last test that exercised the real background eviction task (`test_byte_based_eviction_triggers` in `src/store.rs`) slept 50 ms and hoped the task had finished. It now runs on the multi-threaded runtime, so the background task really runs concurrently with the test, and waits with the helper `wait_until_within_limits`: it subscribes to the store's existing broadcast channel *before* checking the state and re-checks on every event (`Evicted` is sent under the write lock after each pass that evicts), so a pass finishing in between can't be missed; a 5 s timeout turns a broken eviction loop into a clear failure instead of a hung CI. No production code was added for this. The other eviction tests already drive `evict_now()` directly (#178). The pointless 50 ms sleep at the end of `tests/benchmark_concurrent_insert.rs` (which only asserts insert latencies) is removed. Verified on the multi-threaded runtime under full CPU load; with eviction disabled the test fails after 5 s with "background eviction did not bring the store within limits". (#191)
 
 ---

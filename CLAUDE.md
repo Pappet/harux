@@ -84,6 +84,7 @@ Limits are **config-driven** via `StoreConfig` (`src/config.rs`), not hardcoded 
 - End: `0x1C 0x0D` (FS + CR)
 - Max payload: 10 MB — connection closed immediately if exceeded
 - Read timeout: 60s, Write timeout: 30s
+- **ACK/NACK:** `build_ack` / `build_nack` are thin wrappers around `render_ack` (`src/hl7/parser.rs`) — change the MSH/MSA layout there only. ACKs reuse the sender's delimiters (echoed values stay valid) and get a fresh MSH-10; NACKs (unparseable frames) use default delimiters, MSA-2 `UNKNOWN` and an escaped MSA-3 reason
 - **ACK storm prevention:** incoming messages with `message_type.starts_with("ACK")` are stored but never ACK'd back. Violating this rule creates an infinite ACK ping-pong with Orchestra.
 
 ### Web API Routes
