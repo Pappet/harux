@@ -74,6 +74,7 @@ Limits are **config-driven** via `StoreConfig` (`src/config.rs`), not hardcoded 
 
 - `parser.rs` — Parses raw HL7 text by extracting delimiters from the MSH segment, splitting on `\r`/`\n` into segments, and decomposing fields/components. Also builds ACK responses.
 - `types.rs` — Data structures: `Hl7Message`, `Hl7MessageSummary`, `Hl7Segment`, `Hl7Field`, `Delimiters`.
+- `charset.rs` — `decode_payload` turns an MLLP payload's bytes into text before parsing. It reads MSH-18 from the bytes with the parser's own `parse_delimiters` (byte-based) and `msh_split_index`, so there is only one definition of the MSH layout; don't add a second MSH scanner (#188). If the declared charset doesn't fit the bytes, it falls back (Latin-1 declared + UTF-8 bytes → UTF-8; invalid UTF-8 → Windows-1252) and adds a `CHARSET_FALLBACK` validation warning to the message instead of producing silent mojibake.
 - **No duplicate payload copies (#180):** a message's text lives in `Hl7Message::raw` and, per field, in `Hl7Field::value` — nothing else. Segments carry no text of their own (the UI derives segment lines from `raw`, split on `\r`/`\n` skipping blank lines — `segmentLines()` in `static/app.js`, guarded by `test_segments_match_nonblank_raw_lines`); `Hl7Field::components` is filled only for multi-component fields (read via `Hl7Field::component(i)`; omitted from JSON when empty); dictionary descriptions are `Cow::Borrowed` from the static dictionary. Don't reintroduce per-field/per-segment copies — for MDM payloads each copy is another full Base64 attachment in RAM.
 
 **⚠ MSH field indexing quirk:** MSH-1 is the field separator character itself (`|`). The parser inserts a synthetic `Hl7Field { index: 1, value: "|" }` and shifts all other fields up by 1, so that `get_field_value(msh, 3)` correctly returns Sending Application (HL7 standard). Do not change this logic without understanding it — it will silently break all MSH field extractions. The coupling is guarded by `test_msh_shift_dictionary_alignment` (`src/hl7/parser.rs`) and `test_msh_dictionary_numbering_contract` (`src/dictionary.rs`); if either fails, fix the shift/dictionary mismatch rather than the test.
@@ -149,13 +150,14 @@ src/
 ├── main.rs          # Entry point, tokio::select! over MLLP + Web tasks
 ├── lib.rs           # Library crate root (re-exports modules for integration tests)
 ├── config.rs        # TOML → env → defaults config loading (Config + typed sections)
-├── mllp.rs          # TCP listener, MLLP framing, charset decode, ACK/NACK dispatch
+├── mllp.rs          # TCP listener, MLLP framing, ACK/NACK dispatch
 ├── store.rs         # In-memory store with broadcast channel, dual eviction
 ├── web.rs           # Axum router, REST handlers, WebSocket handler
 ├── dictionary.rs    # Embedded HL7 field/segment dictionary (v2.5.1.json)
 ├── validation.rs    # Required segment/field + primitive datatype validation
 ├── hl7/
 │   ├── mod.rs
+│   ├── charset.rs       # Payload bytes → text per MSH-18, fallback + CHARSET_FALLBACK warning
 │   ├── parser.rs        # Raw HL7 → Hl7Message, delimiter extraction, ACK builder
 │   ├── types.rs         # Hl7Message, Hl7MessageSummary, Hl7Segment, Hl7Field, Delimiters
 │   └── message_types.rs # Message-type registry (message_types.json)
