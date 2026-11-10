@@ -9,6 +9,19 @@ and this project follows [Semantic Versioning](https://semver.org/lang/en/).
 
 ## [Unreleased]
 
+### Fixed
+- **Charset handling: one MSH parser, and a fallback instead of mojibake.** `mllp.rs` used to read MSH-18 with its own byte scanner, separate from the parser, and the two disagreed:
+  - The scanner applied a charset even when the parser rejects the MSH-2 encoding characters.
+  - It only stopped at `\r`, so with `\n` segment endings MSH-18 read as `8859/1\nPID…` and the charset was ignored.
+  - It used the whole repeating MSH-18 value (`8859/1~UNICODE UTF-8`) as the charset name.
+
+  Decoding now lives in `src/hl7/charset.rs` (`decode_payload`), built on the parser's own byte-based `parse_delimiters` and a shared `msh_split_index`. A wrong or missing declaration no longer turns silently into garbled text:
+  - `8859/1` declared but UTF-8 sent: previously `MÃ¼ller`, now decoded as UTF-8.
+  - UTF-8 or nothing declared but Latin-1 bytes sent: previously `M�ller`, now decoded as Windows-1252.
+  - Unsupported MSH-18 values (e.g. `UNICODE UTF-16`): previously decoded silently as lossy UTF-8; they now fall back the same way, with a warning.
+
+  Each fallback is logged and shows up on the message as a `CHARSET_FALLBACK` validation warning on MSH-18. HL7 table 0211 names such as `UNICODE UTF-8`, `ISO IR100`, `BIG-5` and `GB 18030-2000` are now recognised. ASCII-only payloads, such as Base64 MDM attachments, skip all of this, so a 9 MB message round-trips in about 47 ms as before. (#188)
+
 ### Changed
 - **ACK/NACK built by one shared builder** — `build_ack` and `build_nack` (`src/hl7/parser.rs`) had drifted apart. Both are now thin wrappers around one `render_ack`, so the MSH/MSA layout exists once. Visible on the wire:
   - The NACK for an unparseable frame now carries its own MSH-10 control ID (was empty).

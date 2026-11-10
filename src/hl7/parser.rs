@@ -29,7 +29,7 @@ fn parse_structure(raw: &str, source_addr: &str) -> Result<(Hl7Message, Delimite
     }
 
     // Extract delimiters from MSH-1 (field sep) and MSH-2 (encoding chars)
-    let delimiters = parse_delimiters(raw)?;
+    let delimiters = parse_delimiters(raw.as_bytes())?;
     let mut msg = Hl7Message::new_empty(raw.to_string(), source_addr.to_string());
 
     // Split into segments (HL7 uses \r as segment terminator, but be lenient)
@@ -137,13 +137,19 @@ fn validate(msg: &Hl7Message) -> Vec<crate::validation::ValidationWarning> {
     crate::validation::validate_message(msg)
 }
 
-fn parse_delimiters(raw: &str) -> Result<Delimiters, String> {
+/// Extract and validate the delimiters from an MSH header (`MSH|^~\&…`).
+///
+/// Works on bytes so the MLLP layer can read MSH-18 *before* it knows the
+/// payload's charset (#188): delimiters are printable ASCII, which is the
+/// same byte in every ASCII-compatible encoding and never part of a UTF-8
+/// multi-byte sequence. The single validation for both the parser and the
+/// charset lookup — keep it that way.
+pub(crate) fn parse_delimiters(bytes: &[u8]) -> Result<Delimiters, String> {
     // MSH|^~\&  ->  field=|, component=^, repetition=~, escape=\, subcomponent=&
-    if raw.len() < 8 {
+    if bytes.len() < 8 {
         return Err("MSH segment too short to extract delimiters".into());
     }
 
-    let bytes = raw.as_bytes();
     let field_sep = bytes[3] as char;
 
     if !field_sep.is_ascii_graphic() {
@@ -193,6 +199,14 @@ fn parse_delimiters(raw: &str) -> Result<Delimiters, String> {
         escape: enc[2] as char,
         subcomponent: enc[3] as char,
     })
+}
+
+/// Position of field MSH-`n` (HL7 numbering, `n >= 2`) in
+/// `msh.split(field_separator)`: element 0 is `"MSH"`, and MSH-1 *is* the
+/// separator, so MSH-2 is element 1. This is the same shift `parse_segment`
+/// applies; `test_msh_split_index_matches_parser` keeps the two in sync.
+pub(crate) const fn msh_split_index(n: usize) -> usize {
+    n - 1
 }
 
 fn parse_segment(raw: &str, delimiters: Delimiters) -> Hl7Segment {
@@ -363,7 +377,7 @@ pub fn build_ack(original: &Hl7Message, ack_code: &str) -> String {
     // `raw` of a parsed message starts with a validated MSH header; the
     // fallback only matters for hand-built messages (tests).
     let delimiters = if original.raw.starts_with("MSH") {
-        parse_delimiters(&original.raw).unwrap_or_default()
+        parse_delimiters(original.raw.as_bytes()).unwrap_or_default()
     } else {
         Delimiters::default()
     };
@@ -665,6 +679,24 @@ mod tests {
         assert_eq!(get_field_value(msh, 3), "SENDING_APP");
         assert_eq!(get_field_value(msh, 4), "SENDING_FAC");
         assert_eq!(get_field_value(msh, 9), "ADT^A01^ADT_A01");
+    }
+
+    /// #188: `msh_split_index` (used by the byte-level MSH-18 lookup in
+    /// `charset.rs`) must agree with the parser's MSH shift for every field.
+    #[test]
+    fn test_msh_split_index_matches_parser() {
+        let fields: Vec<String> = (3..=21).map(|n| format!("F{n}")).collect();
+        let raw = format!("MSH|^~\\&|{}", fields.join("|"));
+        let msg = parse_message(&raw, "test").unwrap();
+        let msh = &msg.segments[0];
+        let parts: Vec<&str> = raw.split('|').collect();
+        for n in 2..=21 {
+            assert_eq!(
+                parts[msh_split_index(n)],
+                get_field_value(msh, n),
+                "MSH-{n}"
+            );
+        }
     }
 
     #[test]
