@@ -13,7 +13,7 @@ and this project follows [Semantic Versioning](https://semver.org/lang/en/).
 - **ACK/NACK built by one shared builder** — `build_ack` and `build_nack` (`src/hl7/parser.rs`) had drifted apart. Both are now thin wrappers around one `render_ack`, so the MSH/MSA layout exists once. Visible on the wire:
   - The NACK for an unparseable frame now carries its own MSH-10 control ID (was empty).
   - The ACK echoes the original MSH-11 processing ID (`T`/`D` test senders were answered with `P`).
-  - It falls back to `2.5` when the original has no MSH-12.
+  - It falls back to `2.5` when the original has no MSH-12, and to MSA-2 `UNKNOWN` (as the NACK does) when it has no MSH-10.
   - It sends plain `ACK` instead of a dangling `ACK^` when MSH-9 has no trigger event.
   - ACKs are written in the **sender's delimiters**, so values echoed from a sender with non-default delimiters (e.g. `#*~\&`) stay valid instead of corrupting the ACK's field structure.
   - MSA-3 text is HL7-escaped (`\F\ \S\ \T\ \R\ \E\`).

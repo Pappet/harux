@@ -279,7 +279,8 @@ struct AckSpec<'a> {
     version: &'a str,
     /// MSA-1: `AA`, `AE` or `AR`.
     ack_code: &'a str,
-    /// MSA-2: MSH-10 of the message being acknowledged.
+    /// MSA-2: MSH-10 of the message being acknowledged; empty → `UNKNOWN`
+    /// (MSA-2 is required, same fallback as the NACK).
     acknowledged_control_id: &'a str,
     /// MSA-3 free text; escaped before it is written.
     text: Option<&'a str>,
@@ -297,6 +298,7 @@ fn render_ack(spec: &AckSpec) -> String {
     };
     let processing_id = non_empty_or(spec.processing_id, "P");
     let version = non_empty_or(spec.version, DEFAULT_ACK_VERSION);
+    let acknowledged_control_id = non_empty_or(spec.acknowledged_control_id, "UNKNOWN");
     let control_id = &uuid::Uuid::new_v4().simple().to_string()[..20];
     let now = chrono::Utc::now().format("%Y%m%d%H%M%S");
 
@@ -309,7 +311,7 @@ fn render_ack(spec: &AckSpec) -> String {
         spec.receiving_application,
         spec.receiving_facility,
         spec.ack_code,
-        spec.acknowledged_control_id,
+        acknowledged_control_id,
     );
     if let Some(text) = spec.text {
         ack.push(f);
@@ -636,6 +638,11 @@ mod tests {
         assert_eq!(field(&parsed, "MSH", 11), "P");
         assert_eq!(parsed.version, "2.5");
         assert_eq!(field(&parsed, "MSA", 2), "C1");
+
+        // No MSH-10 at all → MSA-2 falls back like the NACK's instead of staying empty.
+        let msg = parse_message("MSH|^~\\&|APP|FAC|||20240101||ADT^A01", "test").unwrap();
+        let parsed = parse_message(&build_ack(&msg, "AA"), "test").unwrap();
+        assert_eq!(field(&parsed, "MSA", 2), "UNKNOWN");
     }
 
     #[test]

@@ -124,12 +124,12 @@ pub struct Delimiters {
     pub field: char,
     /// MSH-2 first char: separates components within a field (standard: `^`).
     pub component: char,
-    // Parsed from MSH-2 but not yet applied in field splitting (future use)
-    #[allow(dead_code)]
+    // Not yet applied in field splitting (#185); used when writing ACKs.
+    /// MSH-2 second char: separates repetitions of a field (standard: `~`).
     pub repetition: char,
-    #[allow(dead_code)]
+    /// MSH-2 third char: introduces escape sequences (standard: `\`).
     pub escape: char,
-    #[allow(dead_code)]
+    /// MSH-2 fourth char: separates sub-components (standard: `&`).
     pub subcomponent: char,
 }
 
