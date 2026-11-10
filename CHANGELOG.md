@@ -9,8 +9,35 @@ and this project follows [Semantic Versioning](https://semver.org/lang/en/).
 
 ## [Unreleased]
 
+---
+
+## [0.8.0] – 2026-11-10 – HL7 Conformance
+
+> Phase 3 of the May 2026 code audit. Harux now reads and answers HL7 the way the standard describes:
+> - Repetitions, sub-components and escape sequences are parsed, and the detail view shows them decoded.
+> - Patient ID, patient name and validation no longer trip over repeated fields.
+> - A wrong or missing MSH-18 charset falls back with a visible warning instead of garbling text.
+> - ACK and NACK come from one builder, written in the sender's own delimiters.
+>
+> MDM attachments in ED fields also take one copy less RAM.
+
 ### Upgrade Notes
 - **API change in `GET /api/messages/{id}`:** `fields[].components` is replaced by `fields[].repetitions`. It is a `[repetition][component][sub-component]` array of escape-decoded strings and is present only for fields that contain a separator or an escape. `value` still holds the field exactly as received, and the message gains `delimiters` (e.g. `"|^~\\&"`). The bundled web UI is updated, so only custom REST clients are affected. List summaries, WebSocket events and the export are unchanged. (#185)
+- **ACK/NACK wire changes**, all HL7-conformant (#187):
+  - ACKs are written in the **sender's** delimiters and echo its MSH-11 processing ID. Before, they always used `|^~\&` and `P`.
+  - NACKs now carry their own MSH-10 control ID.
+  - Receivers that hard-coded `|^~\&` or `P` for ACKs from senders with non-default delimiters or `T`/`D` processing should be checked.
+- **Charset decoding changes** (#188):
+  - Payloads that are not valid UTF-8 and declare no MSH-18 are now decoded as Windows-1252 (Latin-1) instead of having `U+FFFD` replacement characters.
+  - Payloads that declare a charset that doesn't fit the bytes fall back the same way.
+  - Both cases carry a new `CHARSET_FALLBACK` validation warning on MSH-18. It counts towards the validation badge and filter.
+- **Patient ID and patient name now come from the first repetition** and are escape-decoded. For example, `ID1~ID2` gives `ID1` and `O\T\Brien` gives `O&Brien`. An empty CX.1 now gives no patient ID instead of an empty one. Message lists and searches show the corrected values for newly received messages. (#185)
+- **No configuration change required.**
+- **Internal Rust API** (only relevant if you use `harux` as a library):
+  - `Hl7Field::components` and `Hl7Field::component(i)` are replaced by `repetitions(d)`, `leaf(d, rep, comp, sub)` and `structure(d)`.
+  - `Hl7Message` gains `delimiters` and is serialize-only (no `Deserialize`).
+  - `Hl7Segment` gains `delimiters` and a hand-written `Serialize`.
+  - New modules `hl7::escape` and `hl7::charset`.
 
 ### Added
 - **Repetitions, sub-components and escape sequences are parsed** (#185). Previously the parser only split on `^`, which caused several problems:
@@ -333,7 +360,8 @@ and this project follows [Semantic Versioning](https://semver.org/lang/en/).
 
 ---
 
-[Unreleased]: https://github.com/Pappet/harux/compare/v0.7.0...HEAD
+[Unreleased]: https://github.com/Pappet/harux/compare/v0.8.0...HEAD
+[0.8.0]: https://github.com/Pappet/harux/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/Pappet/harux/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/Pappet/harux/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/Pappet/harux/compare/v0.4.0...v0.5.0
