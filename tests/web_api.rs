@@ -97,13 +97,16 @@ async fn get_message_known_id_returns_200() {
     assert_eq!(json["id"], "known");
 }
 
-/// Locks the detail JSON contract from #180: segments carry no `raw` copy,
-/// single-component fields omit `components`, multi-component fields keep
-/// them, and the dictionary description is still delivered.
+/// Locks the detail JSON contract (#180, #185): segments carry no `raw`
+/// copy; plain fields are `{index, value, description}`; fields with any
+/// structure (repetition/component/sub-component separator or escape) add
+/// `repetitions` — `[rep][comp][sub]`, escape-decoded, computed at
+/// serialization; MSH-1/2 are never structured; the message carries its
+/// `delimiters`.
 #[tokio::test]
 async fn get_message_json_shape_has_no_duplicate_payload() {
     let state = make_state();
-    let raw = "MSH|^~\\&|APP|FAC|RCV|RFAC|20240101||ADT^A01|C1|P|2.5\rPID|||12345^^^HOSP||Smith^John||19800515|M";
+    let raw = "MSH|^~\\&|APP|FAC|RCV|RFAC|20240101||ADT^A01|C1|P|2.5\rPID|||12345^^^HOSP&1.2&ISO~678||Smith^John||19800515|M||||O\\T\\Brien";
     let mut msg = harux::hl7::parser::parse_message(raw, "127.0.0.1:1").unwrap();
     msg.id = "shape".to_string();
     state.store.insert(msg).await;
@@ -142,12 +145,32 @@ async fn get_message_json_shape_has_no_duplicate_payload() {
             .find(|f| f["index"] == i)
             .unwrap()
     };
-    // PID-7 (single component): value only, no components key.
+    // PID-7 (plain): value only.
     assert_eq!(field(7)["value"], "19800515");
-    assert!(field(7).get("components").is_none());
-    // PID-5 (multi component): components present.
-    assert_eq!(field(5)["components"], serde_json::json!(["Smith", "John"]));
+    assert!(field(7).get("repetitions").is_none());
+    // PID-5: one repetition, two components.
+    assert_eq!(
+        field(5)["repetitions"],
+        serde_json::json!([[["Smith"], ["John"]]])
+    );
     assert_eq!(field(5)["description"], "Patient Name");
+    // PID-3: two repetitions, sub-components; `value` stays raw.
+    assert_eq!(field(3)["value"], "12345^^^HOSP&1.2&ISO~678");
+    assert_eq!(
+        field(3)["repetitions"],
+        serde_json::json!([[["12345"], [""], [""], ["HOSP", "1.2", "ISO"]], [["678"]]])
+    );
+    // PID-12: escape only — decoded in the structure, raw in `value`.
+    assert_eq!(field(12)["value"], "O\\T\\Brien");
+    assert_eq!(field(12)["repetitions"], serde_json::json!([[["O&Brien"]]]));
+    // MSH-1/MSH-2 are the delimiters themselves, never structured.
+    let msh = &segments[0]["fields"];
+    assert_eq!(msh[1]["value"], "^~\\&");
+    assert!(msh[0].get("repetitions").is_none() && msh[1].get("repetitions").is_none());
+    // The old key is gone everywhere.
+    assert!(!json.to_string().contains("\"components\""));
+    assert_eq!(json["delimiters"], "|^~\\&");
+    assert_eq!(json["patient_id"], "12345");
     // The message raw is still there for the UI to derive segment lines.
     assert_eq!(json["raw"], raw);
 }

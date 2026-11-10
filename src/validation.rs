@@ -340,9 +340,9 @@ fn validate_mdm(msg: &Hl7Message, warnings: &mut Vec<ValidationWarning>) {
 /// are intentionally skipped — they are too format-ambiguous or table-dependent
 /// to validate without value sets.
 ///
-/// Only the first component of each field is checked. Multi-component values
-/// (e.g. `CODE^Text^System`) are typical for composite types and are skipped
-/// at the `check_datatype` level.
+/// Only the first component of each repetition is checked (escape-decoded).
+/// Multi-component values (e.g. `CODE^Text^System`) are typical for composite
+/// types and are skipped at the `check_datatype` level.
 fn validate_data_types(msg: &Hl7Message, warnings: &mut Vec<ValidationWarning>) {
     let dict = crate::dictionary::get_v251();
     for seg in &msg.segments {
@@ -356,17 +356,26 @@ fn validate_data_types(msg: &Hl7Message, warnings: &mut Vec<ValidationWarning>) 
             let Some(field_def) = seg_def.field_by_seq(field.index) else {
                 continue;
             };
-            // Use only the first component — composite values include sub-component
-            // separators (^) that are not part of the primitive value itself.
-            // `component(0)` is always `Some` (the whole value for a
-            // single-component field); only empty first components are skipped.
-            let Some(primary) = field.component(0).filter(|p| !p.is_empty()) else {
-                continue;
-            };
-            if let Some(err) = check_datatype(&field_def.datatype, primary) {
+            // Check each repetition's first component (its first
+            // sub-component, escape-decoded). Composite values carry `^`/`&`
+            // that aren't part of the primitive, and `20240101~20240202` is
+            // two valid dates, not one invalid one (#185). One warning per
+            // field: the first failing repetition.
+            let d = msg.delimiters;
+            let repetitions = field.repetitions(d).count();
+            let failure = (0..repetitions).find_map(|rep| {
+                let primary = field.leaf(d, rep, 0, 0).filter(|p| !p.is_empty())?;
+                check_datatype(&field_def.datatype, &primary).map(|err| (rep, err))
+            });
+            if let Some((rep, err)) = failure {
+                let position = if repetitions > 1 {
+                    format!("{}-{}[{}]", seg.name, field.index, rep + 1)
+                } else {
+                    format!("{}-{}", seg.name, field.index)
+                };
                 warnings.push(ValidationWarning {
                     code: "INVALID_DATATYPE".into(),
-                    message: format!("{}-{} ({}): {}", seg.name, field.index, field_def.desc, err),
+                    message: format!("{position} ({}): {err}", field_def.desc),
                     segment: seg.name.clone(),
                     field: Some(field.index),
                 });
@@ -655,5 +664,41 @@ mod tests {
             "Expected INVALID_DATATYPE for MSH-7, got: {:?}",
             warnings
         );
+    }
+    fn datatype_warnings_for_pid7(pid7: &str) -> Vec<ValidationWarning> {
+        let raw = format!(
+            "MSH|^~\\&|APP|FAC|R|R|20240101||ADT^A01|MSG001|P|2.5\r\
+             EVN||20240101\r\
+             PID|||12345^^^HOSP||Smith^John||{pid7}|M\r\
+             PV1||I"
+        );
+        let msg = parse_message(&raw, "127.0.0.1:9999").unwrap();
+        validate_message(&msg)
+            .into_iter()
+            .filter(|w| w.code == "INVALID_DATATYPE")
+            .collect()
+    }
+
+    /// #185: each repetition is validated on its own — two valid dates
+    /// separated by `~` used to be checked as one invalid TS.
+    #[test]
+    fn repeated_values_are_validated_per_repetition() {
+        assert!(datatype_warnings_for_pid7("19800515~19900101").is_empty());
+
+        let warnings = datatype_warnings_for_pid7("19800515~notadate");
+        assert_eq!(warnings.len(), 1, "one warning per field: {warnings:?}");
+        assert_eq!(warnings[0].field, Some(7));
+        assert!(
+            warnings[0].message.starts_with("PID-7[2] "),
+            "position names the failing repetition: {}",
+            warnings[0].message
+        );
+    }
+
+    /// Sub-components and escapes don't make a valid primitive invalid.
+    #[test]
+    fn subcomponents_and_escapes_are_not_part_of_the_primitive() {
+        assert!(datatype_warnings_for_pid7("19800515&extra").is_empty());
+        assert!(datatype_warnings_for_pid7("19800515\\H\\").is_empty());
     }
 }

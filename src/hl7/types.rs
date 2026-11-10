@@ -5,7 +5,10 @@ use std::collections::HashMap;
 use uuid::Uuid;
 
 /// A parsed HL7 v2.x message as stored in the in-memory store and serialised to the frontend.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+///
+/// Serialize-only: the detail JSON computes each field's `repetitions` on the
+/// fly (see [`Hl7Segment`]'s `Serialize`), so there is nothing to read back.
+#[derive(Debug, Clone, Serialize)]
 pub struct Hl7Message {
     /// Stable UUID assigned at receive time; used as the primary key for API and WebSocket events.
     pub id: String,
@@ -33,6 +36,10 @@ pub struct Hl7Message {
     pub version: String,
     /// All segments parsed from the raw message, in order.
     pub segments: Vec<Hl7Segment>,
+    /// The message's delimiters from MSH-1/MSH-2, serialized as the 5-char
+    /// string `"|^~\\&"` so the UI can draw the sender's own separators.
+    /// Default delimiters for messages that failed to parse.
+    pub delimiters: Delimiters,
     /// Extracted from PID-5 as `"Family, Given"` for display; `None` if PID is absent.
     pub patient_name: Option<String>,
     /// First component of PID-3 (patient identifier); `None` if PID is absent.
@@ -62,40 +69,74 @@ pub struct Hl7Message {
     pub message_structure: Option<String>,
 }
 
-/// One segment within an HL7 message (e.g. `MSH`, `PID`, `OBR`).
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// One field within an HL7 segment.
+#[derive(Debug, Clone)]
 pub struct Hl7Field {
     /// 1-based field position within the segment (matches the HL7 standard numbering, e.g. PID-3).
     /// MSH is special: field 1 is synthetically `"|"`, so MSH-3 is Sending Application.
     pub index: usize,
-    /// The raw field value string, possibly containing component separators (`^`).
+    /// The raw field value exactly as received: repetitions, components,
+    /// sub-components and escape sequences included. This is the field's
+    /// **only** stored text (#180): its structure is derived on demand by the
+    /// accessors below (and, for the detail JSON, at serialization time —
+    /// #185), so a multi-MB ED payload (`^application^pdf^Base64^…`) is never
+    /// held twice.
     pub value: String,
-    /// Components of `value`, split on the component delimiter — **only when
-    /// there are at least two**. A single-component field (the common case,
-    /// including multi-MB Base64 OBX-5 payloads) leaves this empty instead of
-    /// holding a second copy of `value` (#180). Omitted from JSON when empty;
-    /// use [`Hl7Field::component`] to read components uniformly.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub components: Vec<String>,
     /// Human-readable field name, borrowed from the embedded HL7 dictionary
     /// (`Cow::Borrowed`, no per-field allocation — #180).
     pub description: Option<Cow<'static, str>>,
 }
 
+/// A field's decoded structure: repetitions → components → sub-components,
+/// each leaf escape-decoded (`Cow::Borrowed` unless it contained an escape).
+pub type FieldStructure<'a> = Vec<Vec<Vec<Cow<'a, str>>>>;
+
 impl Hl7Field {
-    /// Component `i` (0-based) of this field: from `components` when the
-    /// field has several, otherwise the whole `value` for `i == 0`.
-    pub fn component(&self, i: usize) -> Option<&str> {
-        if self.components.is_empty() {
-            (i == 0).then_some(self.value.as_str())
-        } else {
-            self.components.get(i).map(String::as_str)
-        }
+    /// The raw repetitions of this field (always at least one, possibly empty).
+    pub fn repetitions(&self, d: Delimiters) -> impl Iterator<Item = &str> {
+        self.value.split(d.repetition)
+    }
+
+    /// Leaf `rep`/`comp`/`sub` (all 0-based), escape-decoded. `None` if the
+    /// field has no such position. `leaf(d, 0, 0, 0)` of a plain value is the
+    /// whole value.
+    pub fn leaf(&self, d: Delimiters, rep: usize, comp: usize, sub: usize) -> Option<Cow<'_, str>> {
+        let raw = self
+            .repetitions(d)
+            .nth(rep)?
+            .split(d.component)
+            .nth(comp)?
+            .split(d.subcomponent)
+            .nth(sub)?;
+        Some(super::escape::decode(raw, d))
+    }
+
+    /// Whether the field has any structure worth showing: a repetition,
+    /// component or sub-component separator, or an escape sequence.
+    /// Plain values (and Base64 payloads) don't.
+    pub fn is_structured(&self, d: Delimiters) -> bool {
+        self.value
+            .contains([d.repetition, d.component, d.subcomponent, d.escape])
+    }
+
+    /// The full decoded structure (see [`FieldStructure`]).
+    pub fn structure(&self, d: Delimiters) -> FieldStructure<'_> {
+        self.repetitions(d)
+            .map(|rep| {
+                rep.split(d.component)
+                    .map(|comp| {
+                        comp.split(d.subcomponent)
+                            .map(|leaf| super::escape::decode(leaf, d))
+                            .collect()
+                    })
+                    .collect()
+            })
+            .collect()
     }
 }
 
-/// One field within an HL7 segment.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// One segment within an HL7 message (e.g. `MSH`, `PID`, `OBR`).
+#[derive(Debug, Clone)]
 pub struct Hl7Segment {
     /// Segment identifier, e.g. `"MSH"`, `"PID"`, `"OBX"`.
     pub name: String,
@@ -106,6 +147,48 @@ pub struct Hl7Segment {
     /// Human-readable description from the HL7 dictionary (e.g. "Patient
     /// Identification"), borrowed from the embedded dictionary.
     pub description: Option<Cow<'static, str>>,
+    /// The message's delimiters (a copy per segment, 20 bytes), so the
+    /// segment can serialize its fields' structure on its own.
+    pub delimiters: Delimiters,
+}
+
+/// Detail-JSON shape of a segment: `{name, fields, description}`, where each
+/// field is `{index, value, description}` plus `repetitions`
+/// (a [`FieldStructure`]) when [`Hl7Field::is_structured`]. Computed here,
+/// at serialization time, instead of being stored (#185).
+impl Serialize for Hl7Segment {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeStruct;
+        let fields: Vec<FieldJson<'_>> = self
+            .fields
+            .iter()
+            .map(|f| {
+                // MSH-1/MSH-2 *are* the delimiters, not structured content.
+                let is_msh_header = self.name == "MSH" && f.index <= 2;
+                FieldJson {
+                    index: f.index,
+                    value: &f.value,
+                    repetitions: (!is_msh_header && f.is_structured(self.delimiters))
+                        .then(|| f.structure(self.delimiters)),
+                    description: f.description.as_deref(),
+                }
+            })
+            .collect();
+        let mut st = serializer.serialize_struct("Hl7Segment", 3)?;
+        st.serialize_field("name", &self.name)?;
+        st.serialize_field("fields", &fields)?;
+        st.serialize_field("description", &self.description)?;
+        st.end()
+    }
+}
+
+#[derive(Serialize)]
+struct FieldJson<'a> {
+    index: usize,
+    value: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    repetitions: Option<FieldStructure<'a>>,
+    description: Option<&'a str>,
 }
 
 /// Heap bytes owned by an optional dictionary text: zero when it is borrowed
@@ -118,19 +201,41 @@ fn owned_len(s: &Option<Cow<'static, str>>) -> usize {
 }
 
 /// Separators / encoding characters extracted from MSH-1 (field separator) and MSH-2.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Delimiters {
     /// MSH-1: separates fields within a segment (standard: `|`).
     pub field: char,
     /// MSH-2 first char: separates components within a field (standard: `^`).
     pub component: char,
-    // Not yet applied in field splitting (#185); used when writing ACKs.
     /// MSH-2 second char: separates repetitions of a field (standard: `~`).
     pub repetition: char,
     /// MSH-2 third char: introduces escape sequences (standard: `\`).
     pub escape: char,
     /// MSH-2 fourth char: separates sub-components (standard: `&`).
     pub subcomponent: char,
+}
+
+impl Delimiters {
+    /// The MSH header form: field separator followed by the four encoding
+    /// characters, e.g. `"|^~\\&"`.
+    pub fn as_msh_prefix(&self) -> String {
+        [
+            self.field,
+            self.component,
+            self.repetition,
+            self.escape,
+            self.subcomponent,
+        ]
+        .iter()
+        .collect()
+    }
+}
+
+/// Serialized as the 5-char MSH header form (`"|^~\\&"`).
+impl Serialize for Delimiters {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(&self.as_msh_prefix())
+    }
 }
 
 impl Default for Delimiters {
@@ -187,7 +292,6 @@ impl Hl7Message {
             for field in &seg.fields {
                 total += field.value.len();
                 total += owned_len(&field.description);
-                total += field.components.iter().map(String::len).sum::<usize>();
             }
         }
         total
@@ -208,6 +312,7 @@ impl Hl7Message {
             receiving_facility: String::new(),
             version: String::new(),
             segments: Vec::new(),
+            delimiters: Delimiters::default(),
             patient_name: None,
             patient_id: None,
             parse_error: None,
