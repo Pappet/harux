@@ -20,7 +20,7 @@ async fn main() -> anyhow::Result<()> {
     // Load configuration (file → env vars → defaults) before tracing init
     // A broken configuration stops the start (#233): running on other
     // ports or limits than configured is worse than not running.
-    let config = Config::load().map_err(|e| anyhow::anyhow!(e))?;
+    let mut config = Config::load().map_err(|e| anyhow::anyhow!(e))?;
 
     // Initialize logging — use config level as fallback when RUST_LOG is not set
     let env_filter =
@@ -67,6 +67,7 @@ async fn main() -> anyhow::Result<()> {
         .init();
     if let Some(problem) = &file_log_problem {
         warn!("{problem}");
+        config.logging.file_unusable = true;
     }
     // Keep the last `logging.max_files` daily files (#240): once now, then
     // hourly, so a long-running service prunes after every rollover.
@@ -94,7 +95,9 @@ async fn main() -> anyhow::Result<()> {
         let mllp_line = format!("  MLLP Server:  {mllp_addr}  ");
         // An address a browser can open: localhost when the UI listens on
         // every interface or on loopback.
-        let web_url = if web_addr.ip().is_unspecified() || web_addr.ip().is_loopback() {
+        let web_url = if web_addr.ip() == std::net::Ipv6Addr::LOCALHOST {
+            format!("http://{web_addr}")
+        } else if web_addr.ip().is_unspecified() || web_addr.ip().is_loopback() {
             format!("http://localhost:{}", web_addr.port())
         } else {
             format!("http://{web_addr}")

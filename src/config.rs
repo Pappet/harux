@@ -49,6 +49,10 @@ pub struct LoggingConfig {
     /// How many daily log files (`<file>.YYYY-MM-DD`, today's included) to
     /// keep; older ones are deleted. `0` keeps all (#240).
     pub max_files: usize,
+    /// Set at startup when `file` could not be opened and Harux logs to
+    /// stdout only (#234), so the effective configuration says so.
+    #[serde(skip)]
+    pub file_unusable: bool,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -99,6 +103,7 @@ impl Default for LoggingConfig {
             level: "info".to_string(),
             file: None,
             max_files: 14,
+            file_unusable: false,
         }
     }
 }
@@ -243,11 +248,31 @@ impl Config {
         at_least_1("mllp.read_timeout_secs", self.mllp.read_timeout_secs);
         at_least_1("mllp.write_timeout_secs", self.mllp.write_timeout_secs);
         at_least_1("mllp.max_connections", self.mllp.max_connections as u64);
-        if self.server.mllp_port == self.server.web_port {
+        // Two listeners can share a port only on different addresses; an
+        // unspecified address (0.0.0.0, ::) overlaps every other one.
+        let (m, w) = (self.server.mllp_addr(), self.server.web_addr());
+        if m.port() == w.port()
+            && (m.ip() == w.ip() || m.ip().is_unspecified() || w.ip().is_unspecified())
+        {
             problems.push(format!(
-                "server.mllp_port and server.web_port are both {}",
-                self.server.mllp_port
+                "server.mllp_port and server.web_port are both {} on overlapping \
+                 addresses ({} and {})",
+                m.port(),
+                m.ip(),
+                w.ip()
             ));
+        }
+        if let Some(file) = self.logging.file.as_deref().filter(|f| !f.is_empty()) {
+            // "logs/" would log to ./logs.YYYY-MM-DD next to the directory.
+            let names_a_file = !file.ends_with(['/', '\\'])
+                && std::path::Path::new(file)
+                    .file_name()
+                    .is_some_and(|n| n != "." && n != "..");
+            if !names_a_file {
+                problems.push(format!(
+                    "logging.file {file:?} must name a file, e.g. \"logs/harux.log\""
+                ));
+            }
         }
         if self.store.max_memory_mb != 0 && self.store.max_memory_mb < self.mllp.max_message_size_mb
         {
@@ -356,7 +381,17 @@ impl std::fmt::Display for Config {
                 .collect::<String>()
         )?;
         writeln!(f, "  Log level:          {}", self.logging.level)?;
-        if let Some(file) = &self.logging.file {
+        if let Some(file) = self
+            .logging
+            .file
+            .as_deref()
+            .filter(|_| self.logging.file_unusable)
+        {
+            writeln!(
+                f,
+                "  File log:           {file} (unusable, logging to stdout only)"
+            )?;
+        } else if let Some(file) = &self.logging.file {
             let keep = match self.logging.max_files {
                 0 => "all kept".to_string(),
                 n => format!("last {n} kept"),
@@ -558,6 +593,40 @@ mllp_port = 4000
         }
         let err = load("[server]\nmllp_port = 9000\nweb_port = 9000\n", &[]).unwrap_err();
         assert!(err.contains("both 9000"), "{err}");
+        // Same port on two different addresses is fine (#255 review); an
+        // unspecified address overlaps every other one.
+        let two = "[server]\nmllp_port = 9000\nweb_port = 9000\nmllp_bind = \"127.0.0.1\"\n";
+        assert!(load(&format!("{two}web_bind = \"127.0.0.2\"\n"), &[]).is_ok());
+        assert!(load(&format!("{two}web_bind = \"::1\"\n"), &[]).is_ok());
+        for overlapping in ["127.0.0.1", "0.0.0.0", "::"] {
+            let err = load(&format!("{two}web_bind = \"{overlapping}\"\n"), &[]).unwrap_err();
+            assert!(err.contains("both 9000"), "{overlapping}: {err}");
+        }
+        for dir in ["logs/", "logs\\\\", ".", "logs/.."] {
+            let err = load(&format!("[logging]\nfile = \"{dir}\"\n"), &[]).unwrap_err();
+            assert!(err.contains("must name a file"), "{dir}: {err}");
+        }
+        assert!(
+            load("[logging]\nfile = \"\"\n", &[]).is_ok(),
+            "empty = no file log"
+        );
+        assert!(load("[logging]\nfile = \"harux.log\"\n", &[]).is_ok());
+    }
+
+    /// #255 review: the effective configuration must not claim a file log
+    /// that could not be opened.
+    #[test]
+    fn effective_configuration_shows_an_unusable_log_file() {
+        let mut cfg = load("[logging]\nfile = \"logs/harux.log\"\nmax_files = 3\n", &[]).unwrap();
+        assert!(cfg
+            .to_string()
+            .contains("logs/harux.log.YYYY-MM-DD, last 3 kept"));
+        cfg.logging.file_unusable = true;
+        let shown = cfg.to_string();
+        assert!(
+            shown.contains("logs/harux.log (unusable, logging to stdout only)"),
+            "{shown}"
+        );
         let err = load("[store]\nmax_memory_mb = 5\n", &[]).unwrap_err();
         assert!(
             err.contains("smaller than mllp.max_message_size_mb"),
