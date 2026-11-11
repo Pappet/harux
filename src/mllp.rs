@@ -450,7 +450,10 @@ async fn reject_oversize(
         peer, config.max_message_size_mb
     );
     let mut msg = oversize_message(frame, config.max_message_size_mb, peer);
+    // In the sender's delimiters when its MSH header was readable
+    // (`oversize_message` copies them), so the sender can parse the reject.
     let reject = build_reject(
+        msg.delimiters,
         &msg.message_control_id,
         &format!(
             "Message exceeds the maximum size of {} MB",

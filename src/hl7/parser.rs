@@ -373,12 +373,13 @@ pub fn build_nack(reason: &str) -> String {
 }
 
 /// Build a reject (`AR`, Application Reject) for a frame Harux refuses
-/// outright, e.g. one above `mllp.max_message_size_mb` (#223). Default
-/// delimiters like the NACK; MSA-2 echoes `control_id` when it could be read
-/// (empty → `UNKNOWN`), `reason` goes into MSA-3.
-pub fn build_reject(control_id: &str, reason: &str) -> String {
+/// outright, e.g. one above `mllp.max_message_size_mb` (#223). Written in
+/// `delimiters` — the sender's own when its MSH header could be read, like
+/// the ACK, so the sender can parse the reject; default delimiters otherwise.
+/// MSA-2 echoes `control_id` (empty → `UNKNOWN`), `reason` goes into MSA-3.
+pub fn build_reject(delimiters: Delimiters, control_id: &str, reason: &str) -> String {
     render_ack(&AckSpec {
-        delimiters: Delimiters::default(),
+        delimiters,
         receiving_application: "",
         receiving_facility: "",
         trigger_event: "",
@@ -708,6 +709,24 @@ mod tests {
         let msg = parse_message("MSH|^~\\&|APP|FAC|||20240101||ADT^A01", "test").unwrap();
         let parsed = parse_message(&build_ack(&msg, "AA"), "test").unwrap();
         assert_eq!(field(&parsed, "MSA", 2), "UNKNOWN");
+    }
+
+    /// #223 review: the reject uses the sender's delimiters, like the ACK.
+    #[test]
+    fn test_build_reject_uses_given_delimiters() {
+        let d = parse_message("MSH#*~\\&#APP#FAC###20240101##ADT*A01#C9", "t")
+            .unwrap()
+            .delimiters;
+        let reject = build_reject(d, "C9", "too big");
+        assert!(reject.starts_with("MSH#*~\\&#Harux#Harux#"), "{reject}");
+        assert!(!reject.contains('|'), "{reject}");
+        let parsed = parse_message(&reject, "t").unwrap();
+        assert_eq!(field(&parsed, "MSA", 1), "AR");
+        assert_eq!(field(&parsed, "MSA", 2), "C9");
+        assert_eq!(field(&parsed, "MSA", 3), "too big");
+
+        let default = build_reject(Delimiters::default(), "", "x");
+        assert!(default.contains("MSA|AR|UNKNOWN|x"), "{default}");
     }
 
     #[test]

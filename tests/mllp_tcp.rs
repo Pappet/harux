@@ -282,6 +282,26 @@ async fn oversize_frame_is_rejected_visibly_and_connection_survives() {
     assert_eq!(srv.stats.parse_errors.load(Ordering::SeqCst), 2);
 }
 
+/// #223 review: the AR for an over-limit frame is written in the sender's
+/// delimiters when its MSH header is readable.
+#[tokio::test]
+async fn oversize_reject_uses_sender_delimiters() {
+    let srv = start(MllpConfig {
+        max_message_size_mb: 1,
+        ..config()
+    })
+    .await;
+    let mut s = TcpStream::connect(srv.addr).await.unwrap();
+    let mut payload =
+        b"MSH#*~\\&#DMS#KLINIK#RCV#RZ#20240101##MDM*T02#HASH1#P#2.5\rOBX#1#ED#PDF##".to_vec();
+    payload.extend(std::iter::repeat_n(b'Q', 2 * 1024 * 1024));
+    s.write_all(&frame(&payload)).await.unwrap();
+    let reply = read_reply(&mut s).await.expect("AR");
+    assert!(reply.starts_with("MSH#*~\\&#Harux#"), "{reply}");
+    assert!(reply.contains("MSA#AR#HASH1#"), "{reply}");
+    assert!(!reply.contains('|'), "{reply}");
+}
+
 #[tokio::test]
 async fn connection_limit_rejects_and_counts() {
     let srv = start(MllpConfig {
