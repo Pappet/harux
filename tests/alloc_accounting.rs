@@ -6,7 +6,7 @@
 //! (per thread, so the test harness can't interfere). For every live
 //! allocation it adds what `heap_bytes` — the allocator model the store
 //! uses — says that allocation costs. For a corpus of messages, filled in
-//! the way the MLLP path stores them (charset, ACK), the test then requires
+//! the way the MLLP path stores them (charset, ACK, a kept original payload), the test then requires
 //! `Hl7Message::estimated_bytes()` to be
 //!
 //! - **never below** that modeled heap: if someone adds a heap-owning field
@@ -19,7 +19,7 @@
 //! question (see `heap_bytes`).
 
 use harux::hl7::parser::{build_ack, parse_message};
-use harux::hl7::types::heap_bytes;
+use harux::hl7::types::{heap_bytes, WireForm};
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::cell::Cell;
 
@@ -142,6 +142,8 @@ fn estimated_bytes_tracks_the_real_heap() {
             msg.charset = Some("8859/1".to_string());
             msg.ack_response = Some(build_ack(&msg, "AA"));
             msg.ack_code = Some("AA".to_string());
+            // A payload no encoding reproduces keeps its bytes (#230).
+            msg.wire = WireForm::Original(raw.as_bytes().into());
             msg
         });
         let (h1, a1, m1) = snapshot();

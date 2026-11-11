@@ -402,3 +402,92 @@ async fn latin1_payload_decoded_per_msh18() {
         .iter()
         .all(|w| w.code != "CHARSET_FALLBACK"));
 }
+
+/// #230: the export gives back exactly the bytes that arrived — whatever the
+/// charset, including the final segment terminator — and keeps a second copy
+/// only when re-encoding can't reproduce them.
+#[tokio::test]
+async fn export_is_byte_identical_to_what_was_received() {
+    use axum::body::Body;
+    use harux::hl7::types::WireForm;
+    use tower::ServiceExt;
+
+    let srv = start(config()).await;
+    let mut latin1_declared =
+        b"MSH|^~\\&|KIS|KLINIK|RCV|RZ|20240101120000||ADT^A01|L1|P|2.5||||||8859/1\rPID|||1||M"
+            .to_vec();
+    latin1_declared.extend_from_slice(b"\xFCller^J\xF6rg\r");
+    let mut latin1_undeclared =
+        b"MSH|^~\\&|KIS|KLINIK|RCV|RZ|20240101120000||ADT^A01|W1|P|2.5\rPID|||1||Stra\xDFe\r"
+            .to_vec();
+    latin1_undeclared.extend_from_slice(b"NTE|1||\x80 \x9E\r"); // Windows-1252 only bytes
+    let big5_invalid =
+        b"MSH|^~\\&|KIS|KLINIK|RCV|RZ|20240101120000||ADT^A01|B1|P|2.5||||||BIG-5\rPID|||1||\x81\x20\r"
+            .to_vec();
+    let utf8 = "MSH|^~\\&|KIS|KLINIK|RCV|RZ|20240101120000||ADT^A01|U1|P|2.5\rPID|||1||Müller\r\n"
+        .as_bytes()
+        .to_vec();
+    let sent = [utf8, latin1_declared, latin1_undeclared, big5_invalid];
+
+    let mut s = TcpStream::connect(srv.addr).await.unwrap();
+    for payload in &sent {
+        s.write_all(&frame(payload)).await.unwrap();
+        assert!(read_reply(&mut s).await.is_some());
+    }
+
+    // Only the payload that no encoding reproduces is stored twice.
+    let stored = summaries(&srv.store).await;
+    let mut forms = Vec::new();
+    for m in &stored {
+        let detail = srv.store.get_by_id(&m.id).await.unwrap();
+        forms.push(match &detail.message.wire {
+            WireForm::Utf8 => "utf8".to_string(),
+            WireForm::Encoded(e) => format!("encoded {}", e.name()),
+            WireForm::Original(_) => "original".to_string(),
+        });
+    }
+    assert_eq!(
+        forms,
+        [
+            "utf8",
+            "encoded windows-1252",
+            "encoded windows-1252",
+            "original"
+        ]
+    );
+
+    let app = harux::web::create_router(harux::web::AppState {
+        store: srv.store.clone(),
+        stats: srv.stats.clone(),
+        mllp_port: 0,
+        max_connections: 1,
+        allowed_hosts: std::sync::Arc::new(Vec::new()),
+    });
+    let res = app
+        .oneshot(
+            axum::http::Request::builder()
+                .uri("/api/export")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let declared_len: usize = res.headers()["content-length"]
+        .to_str()
+        .unwrap()
+        .parse()
+        .unwrap();
+    let body = axum::body::to_bytes(res.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    assert_eq!(body.len(), declared_len, "Content-Length matches the body");
+
+    let mut expected = Vec::new();
+    for payload in &sent {
+        expected.extend(frame(payload));
+    }
+    assert!(
+        body.as_ref() == expected.as_slice(),
+        "export differs from the received bytes"
+    );
+}

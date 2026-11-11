@@ -27,6 +27,10 @@ pub struct DecodedPayload {
     /// Set when the bytes did not fit the declared (or default) charset and
     /// another encoding was used.
     pub warning: Option<ValidationWarning>,
+    /// The encoding `text` was decoded with (`UTF_8` for ASCII and UTF-8
+    /// payloads). Encoding `text` with it gives back the received bytes
+    /// unless the decode replaced invalid bytes (#230).
+    pub encoding: &'static Encoding,
 }
 
 /// Decode an MLLP payload, honouring its MSH-18 charset where it fits.
@@ -52,6 +56,7 @@ pub fn decode_payload(bytes: &[u8]) -> DecodedPayload {
             text: String::from_utf8_lossy(bytes).into_owned(),
             declared,
             warning: None,
+            encoding: UTF_8,
         };
     }
 
@@ -63,11 +68,12 @@ pub fn decode_payload(bytes: &[u8]) -> DecodedPayload {
         Some(None) => false,         // unsupported, handled below
     };
 
-    let (text, problem) = match (declared.as_deref().unwrap_or_default(), encoding) {
+    let (text, used, problem) = match (declared.as_deref().unwrap_or_default(), encoding) {
         _ if utf8_expected => match as_utf8 {
-            Some(text) => (text.to_owned(), None),
+            Some(text) => (text.to_owned(), UTF_8, None),
             None => (
                 windows_1252(bytes),
+                WINDOWS_1252,
                 Some(match declared.as_deref() {
                     None => "No MSH-18 charset is declared and the payload is not valid UTF-8; decoded as Windows-1252 (Latin-1)".to_owned(),
                     Some(cs) => format!("MSH-18 declares {cs:?}, but the payload is not valid UTF-8; decoded as Windows-1252 (Latin-1)"),
@@ -78,6 +84,7 @@ pub fn decode_payload(bytes: &[u8]) -> DecodedPayload {
         (cs, Some(Some(encoding))) => match as_utf8 {
             Some(text) if encoding.is_single_byte() => (
                 text.to_owned(),
+                UTF_8,
                 Some(format!(
                     "MSH-18 declares {cs:?}, but the payload is valid UTF-8; decoded as UTF-8"
                 )),
@@ -87,19 +94,21 @@ pub fn decode_payload(bytes: &[u8]) -> DecodedPayload {
                 let problem = had_errors.then(|| {
                     format!("The payload contains bytes that are invalid in the declared MSH-18 charset {cs:?}; they were replaced")
                 });
-                (text.into_owned(), problem)
+                (text.into_owned(), encoding, problem)
             }
         },
         // Declared, but not a charset we can decode with.
         (cs, _) => match as_utf8 {
             Some(text) => (
                 text.to_owned(),
+                UTF_8,
                 Some(format!(
                     "MSH-18 charset {cs:?} is not supported; the payload is valid UTF-8 and was decoded as UTF-8"
                 )),
             ),
             None => (
                 windows_1252(bytes),
+                WINDOWS_1252,
                 Some(format!(
                     "MSH-18 charset {cs:?} is not supported; decoded as Windows-1252 (Latin-1)"
                 )),
@@ -110,6 +119,7 @@ pub fn decode_payload(bytes: &[u8]) -> DecodedPayload {
     DecodedPayload {
         text,
         declared,
+        encoding: used,
         warning: problem.map(|message| ValidationWarning {
             code: "CHARSET_FALLBACK".to_owned(),
             message,

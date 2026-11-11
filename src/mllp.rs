@@ -1,7 +1,7 @@
 use crate::config::MllpConfig;
 use crate::hl7::charset::{decode_payload, DecodedPayload};
 use crate::hl7::parser::{build_ack, build_nack, build_reject, parse_message};
-use crate::hl7::types::Hl7Message;
+use crate::hl7::types::{Hl7Message, WireForm};
 use crate::store::MessageStore;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
@@ -399,6 +399,7 @@ fn ingest_with(
             text: String::from_utf8_lossy(payload).into_owned(),
             declared: None,
             warning: None,
+            encoding: encoding_rs::UTF_8,
         }
     });
     if let Some(w) = &decoded.warning {
@@ -418,9 +419,26 @@ fn ingest_with(
             failed
         }
     };
+    msg.wire = wire_form(payload, &msg.raw, decoded.encoding);
     msg.charset = decoded.declared;
     msg.validation_warnings.extend(decoded.warning);
     msg
+}
+
+/// How to give back the received `payload` from the stored `raw` text
+/// (#230). Only when re-encoding can't reproduce the bytes exactly (the
+/// decode replaced something) is a second copy kept.
+fn wire_form(payload: &[u8], raw: &str, encoding: &'static encoding_rs::Encoding) -> WireForm {
+    if raw.as_bytes() == payload {
+        return WireForm::Utf8;
+    }
+    if encoding != encoding_rs::UTF_8 {
+        let (bytes, _, unmappable) = encoding.encode(raw);
+        if !unmappable && bytes.as_ref() == payload {
+            return WireForm::Encoded(encoding);
+        }
+    }
+    WireForm::Original(payload.into())
 }
 
 /// Run `f`, turning a panic into its message.
