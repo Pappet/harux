@@ -194,9 +194,15 @@ struct FieldJson<'a> {
 }
 
 /// Approximate heap footprint of one allocation of `size` bytes, including
-/// the allocator's bookkeeping: an 8-byte header, 16-byte granularity and a
-/// 32-byte minimum chunk (glibc malloc; the Windows heap is similar). No
-/// allocation → 0. The basis of all store accounting (#226).
+/// the allocator's bookkeeping. No allocation → 0. The basis of all store
+/// accounting (#226).
+///
+/// The model is **glibc malloc** (Linux): an 8-byte header, 16-byte
+/// granularity and a 32-byte minimum chunk; `tests/alloc_accounting.rs`
+/// checks it there. Other allocators differ — the Windows heap, the primary
+/// deployment, has no 32-byte minimum, so short strings are over-counted
+/// there. That errs on the safe side: the store evicts somewhat earlier, it
+/// never holds more than `store.max_memory_mb`.
 pub fn heap_bytes(size: usize) -> usize {
     if size == 0 {
         0

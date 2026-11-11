@@ -62,6 +62,35 @@ mod guard_tests {
     }
 
     #[test]
+    fn trailing_root_dot_is_ignored() {
+        let allowed = vec!["harux.klinik.local".to_string()];
+        assert!(host_allowed("harux.klinik.local.:8080", &allowed));
+        assert!(host_allowed("localhost.:8080", &allowed));
+        assert!(host_allowed("x.local", &["x.local.".to_string()]));
+        assert!(origin_allowed(
+            "http://harux.klinik.local.:8080",
+            Some("10.0.0.1"),
+            &allowed
+        ));
+    }
+
+    #[test]
+    fn allowed_hosts_are_validated() {
+        let cfg = [
+            "ok.local",
+            "harux.klinik.local:8080",
+            "http://x.local",
+            "",
+            "a b",
+        ]
+        .map(String::from);
+        let problems = allowed_hosts_problems(&cfg);
+        assert_eq!(problems.len(), 4, "{problems:?}");
+        assert!(problems[0].contains("harux.klinik.local:8080"));
+        assert!(allowed_hosts_problems(&["harux.klinik.local".to_string()]).is_empty());
+    }
+
+    #[test]
     fn origin_rules() {
         let allowed = vec!["harux.klinik.local".to_string()];
         let host = Some("10.1.2.3:8080");
@@ -181,11 +210,46 @@ fn host_part(authority: &str) -> &str {
     }
 }
 
+/// A host name without one trailing dot: `harux.klinik.local.` (the fully
+/// qualified form browsers and Windows accept) equals `harux.klinik.local`.
+fn without_root_dot(host: &str) -> &str {
+    host.strip_suffix('.').unwrap_or(host)
+}
+
+fn name_listed(host: &str, allowed: &[String]) -> bool {
+    let host = without_root_dot(host);
+    allowed
+        .iter()
+        .any(|a| without_root_dot(a.trim()).eq_ignore_ascii_case(host))
+}
+
 fn host_allowed(authority: &str, allowed: &[String]) -> bool {
     let host = host_part(authority.trim());
     host.parse::<std::net::IpAddr>().is_ok()
-        || host.eq_ignore_ascii_case("localhost")
-        || allowed.iter().any(|a| a.eq_ignore_ascii_case(host))
+        || without_root_dot(host).eq_ignore_ascii_case("localhost")
+        || name_listed(host, allowed)
+}
+
+/// Problems with `server.allowed_hosts` entries that would make them never
+/// match, logged once at startup — otherwise the only symptom is a 403.
+pub fn allowed_hosts_problems(allowed: &[String]) -> Vec<String> {
+    allowed
+        .iter()
+        .filter_map(|h| {
+            let h = h.trim();
+            if h.is_empty() {
+                Some("an empty entry".to_string())
+            } else if h.contains(['/', ':']) || h.contains("://") {
+                Some(format!(
+                    "{h:?} — list host names only, without scheme, port or path"
+                ))
+            } else if h.contains(char::is_whitespace) {
+                Some(format!("{h:?} — contains whitespace"))
+            } else {
+                None
+            }
+        })
+        .collect()
 }
 
 /// `Origin` is `scheme://host[:port]`. It is accepted when its authority is
@@ -203,11 +267,12 @@ fn origin_allowed(origin: &str, host: Option<&str>, allowed: &[String]) -> bool 
         return false;
     }
     host.is_some_and(|h| h.trim().eq_ignore_ascii_case(authority))
-        || allowed
-            .iter()
-            .any(|a| a.eq_ignore_ascii_case(host_part(authority)))
+        || name_listed(host_part(authority), allowed)
 }
 
+/// Every route that changes state must use a non-GET method:
+/// `guard_cross_site` checks `Origin` only on non-GET requests (and `/ws`),
+/// so a mutating `GET` would be callable from any website (#227).
 pub fn create_router(state: AppState) -> Router {
     Router::new()
         // API routes
