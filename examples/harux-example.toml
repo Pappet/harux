@@ -6,15 +6,16 @@
 # [server]
 # mllp_port = 2575
 # web_port = 8080
+# mllp_bind = "0.0.0.0"   # 127.0.0.1 = this machine only, :: = IPv6 too
+# web_bind = "0.0.0.0"
 # DNS names the web UI is opened under (IP addresses and localhost always work).
 # Other Host headers are refused to block DNS rebinding.
 # allowed_hosts = ["harux.klinik.local"]
 
 # [logging]
 # level = "info"
-# file = "logs/harux.log" # omit or empty = no file logging
-# max_size_mb = 50            # rotate when file exceeds this size
-# max_files = 5               # keep at most N rotated files
+# file = "logs/harux.log" # omit or empty = no file logging; daily files harux.log.YYYY-MM-DD
+# max_files = 14          # daily files to keep (today's included), 0 = keep all
 
 # [store]
 # max_messages = 10000

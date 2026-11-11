@@ -6,13 +6,21 @@
 [server]
 mllp_port = 2575
 web_port = 8080
+# Addresses the listeners bind to: 0.0.0.0 = every IPv4 interface,
+# :: = every interface incl. IPv6, 127.0.0.1 = this machine only
+# (e.g. the web UI behind a reverse proxy with TLS and login).
+mllp_bind = "0.0.0.0"
+web_bind = "0.0.0.0"
 # DNS names the web UI is opened under (IP addresses and localhost always work).
 # Other Host headers are refused to block DNS rebinding.
 # allowed_hosts = ["harux.klinik.local"]
 
 [logging]
 level = "info"
-# file = "logs/harux.log"  # uncomment to enable file logging (daily rotation)
+# file = "logs/harux.log"  # uncomment to enable file logging: one file per day,
+#                            # logs/harux.log.YYYY-MM-DD
+# Daily files to keep, today's included; older ones are deleted. 0 = keep all.
+max_files = 14
 
 [store]
 max_messages = 10000

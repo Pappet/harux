@@ -39,7 +39,7 @@ Instead, report security issues privately via one of these methods:
 
 Harux is an **inspection and debugging tool** — not a production message broker. Please keep the following in mind when deploying:
 
-- **Network placement**: Run Harux only within trusted network segments. The Web UI and API have no authentication by default.
+- **Network placement**: Run Harux only within trusted network segments. The Web UI and API have no authentication by default. `server.mllp_bind` and `server.web_bind` restrict each listener to one address — e.g. `web_bind = "127.0.0.1"` behind a reverse proxy that adds TLS and login.
 - **No TLS**: MLLP connections and the Web UI are unencrypted. Use network-level controls (VPN, firewall rules) to restrict access.
 - **PHI exposure**: Messages displayed in the Web UI may contain patient data. Limit browser access to authorized personnel.
 - **No persistent storage** (currently): Messages are held in memory only and are lost on restart. This limits exposure but does not eliminate it while the service is running.
