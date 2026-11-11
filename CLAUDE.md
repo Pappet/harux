@@ -79,7 +79,7 @@ Limits are **config-driven** via `StoreConfig` (`src/config.rs`), not hardcoded 
 - `escape.rs` — HL7 escape sequences in both directions: `encode` (ACK MSA-3 text) and `decode` (display/analysis only; `value` and `raw` always stay as received).
 - `types.rs` — Data structures: `Hl7Message`, `Hl7MessageSummary`, `Hl7Segment`, `Hl7Field`, `Delimiters`.
 - `charset.rs` — `decode_payload` turns an MLLP payload's bytes into text before parsing. It reads MSH-18 from the bytes with the parser's own `parse_delimiters` (byte-based) and `msh_split_index`, so there is only one definition of the MSH layout; don't add a second MSH scanner (#188). If the declared charset doesn't fit the bytes, it falls back (Latin-1 declared + UTF-8 bytes → UTF-8; invalid UTF-8 → Windows-1252) and adds a `CHARSET_FALLBACK` validation warning to the message instead of producing silent mojibake.
-- **No duplicate payload copies (#180):** a message's text lives in `Hl7Message::raw` and, per field, in `Hl7Field::value` — nothing else. Segments carry no text of their own (the UI derives segment lines from `raw`, split on `\r`/`\n` skipping blank lines — `segmentLines()` in `static/app.js`, guarded by `test_segments_match_nonblank_raw_lines`); `Hl7Field` stores only `value` — its structure is derived on demand (#185), so even an ED attachment (`^application^pdf^Base64^…`) isn't held twice; dictionary descriptions are `Cow::Borrowed` from the static dictionary, and `typical_segments` / `typical_segment_descriptions` borrow from the static registry. Don't reintroduce per-field/per-segment copies — for MDM payloads each copy is another full Base64 attachment in RAM.
+- **No duplicate payload copies (#180):** a message's text lives in `Hl7Message::raw` and, per field, in `Hl7Field::value` — nothing else. Segments carry no text of their own (the UI derives segment lines from `raw`, split on `\r`/`\n` skipping blank lines — `segmentLines()` in `static/app.js`, guarded by `test_segments_match_nonblank_raw_lines`); `Hl7Field` stores only `value` — its structure is derived on demand (#185), so even an ED attachment (`^application^pdf^Base64^…`) isn't held twice; dictionary descriptions are `Cow::Borrowed` from the static dictionary, and `typical_segments` / `typical_segment_descriptions` borrow from the static registry. Don't reintroduce per-field/per-segment copies — for MDM payloads each copy is another full Base64 attachment in RAM. The received bytes (#230) are not stored again either: `WireForm` records how to reproduce them from `raw` (UTF-8 as is, other charsets re-encoded); only a payload no encoding reproduces keeps `WireForm::Original`. `raw` is the decoded text untrimmed, including the final segment terminator.
 
 **⚠ MSH field indexing quirk:** MSH-1 is the field separator character itself (`|`). The parser inserts a synthetic `Hl7Field { index: 1, value: "|" }` and shifts all other fields up by 1, so that `get_field_value(msh, 3)` correctly returns Sending Application (HL7 standard). Do not change this logic without understanding it — it will silently break all MSH field extractions. The coupling is guarded by `test_msh_shift_dictionary_alignment` (`src/hl7/parser.rs`) and `test_msh_dictionary_numbering_contract` (`src/dictionary.rs`); if either fails, fix the shift/dictionary mismatch rather than the test.
 
@@ -106,7 +106,7 @@ Limits are **config-driven** via `StoreConfig` (`src/config.rs`), not hardcoded 
 - `DELETE /api/messages/{id}/tags/{tag}` — Remove a tag
 - `POST /api/messages/{id}/bookmark` — Toggle bookmark
 - `POST /api/clear` — Clear all messages
-- `GET /api/export` — Download every stored message as one MLLP-framed `.hl7` file (raw payloads, oldest first, directly replayable). **Streamed** (`MllpExportStream` in `src/web.rs`): the store lock is held only to snapshot payload `Arc`s (`payload_snapshot`), large payloads go out zero-copy, small ones are coalesced into ~64 KiB chunks — never build the whole export in memory
+- `GET /api/export` — Download every stored message as one MLLP-framed `.hl7` file (the bytes **as received**, oldest first, directly replayable — via `Hl7Message::wire_bytes()`, #230). Exception: an over-limit frame (#223) is stored with only its first 4 KB, so the export contains that truncated frame (it carries a parse error in the UI). **Streamed** (`MllpExportStream` in `src/web.rs`): the store lock is held only to snapshot payload `Arc`s (`payload_snapshot`), large payloads go out zero-copy, small ones are coalesced into ~64 KiB chunks — never build the whole export in memory
 - `WS /ws` — Real-time updates (`init`, `new_message`, `tags_updated`, `bookmark_toggled`, `evicted`, `cleared`, `lagged` events). `evicted` carries the array of IDs removed by an eviction pass; the UI drops those rows and warns when bookmarks were among them
 
 ### Frontend (`static/`)
@@ -157,7 +157,7 @@ Do not implement features from later milestones speculatively.
 src/
 ├── main.rs          # Entry point, tokio::select! over MLLP + Web tasks
 ├── lib.rs           # Library crate root (re-exports modules for integration tests)
-├── config.rs        # TOML → env → defaults config loading (Config + typed sections)
+├── config.rs        # TOML → env → defaults config loading; fails closed: unknown keys, bad values, bad port env → startup error (#233)
 ├── mllp.rs          # TCP listener, MLLP framing, ACK/NACK dispatch
 ├── store.rs         # In-memory store with broadcast channel, dual eviction
 ├── web.rs           # Axum router, REST handlers, WebSocket handler
@@ -184,6 +184,7 @@ static/
 tests/
 ├── parser_fixtures.rs            # Parser tests against tests/messages/*.hl7 fixtures
 ├── mllp_tcp.rs                   # MLLP over real TCP: framing, ACK/NACK, limits, shutdown
+├── config_startup.rs             # Real binary refuses to start on a broken harux.toml / port variable
 ├── web_api.rs                    # Axum REST/handler integration tests
 ├── js/                           # node:test tests for static/*.js (node --test 'tests/js/*.test.mjs')
 ├── benchmark_concurrent_insert.rs # Concurrent store insert benchmark

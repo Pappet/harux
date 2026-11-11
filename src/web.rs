@@ -1,4 +1,4 @@
-use crate::hl7::types::Hl7Message;
+use crate::hl7::types::{Hl7Message, WireForm};
 use crate::mllp::{MllpStats, MLLP_END_1, MLLP_END_2, MLLP_START};
 use crate::store::{MessageStore, StoreEvent};
 use axum::body::{Body, Bytes};
@@ -379,7 +379,7 @@ async fn clear_messages(State(state): State<AppState>) -> impl IntoResponse {
 /// two full copies of the store.
 async fn export_raw_hl7(State(state): State<AppState>) -> impl IntoResponse {
     let messages = state.store.payload_snapshot().await;
-    let content_length: usize = messages.iter().map(|m| m.raw.len() + 3).sum();
+    let content_length: usize = messages.iter().map(|m| m.wire_len() + 3).sum();
 
     (
         [
@@ -407,13 +407,22 @@ const EXPORT_COALESCE_BYTES: usize = 64 * 1024;
 static MLLP_START_BYTE: [u8; 1] = [MLLP_START];
 static MLLP_END_FRAME: [u8; 2] = [MLLP_END_1, MLLP_END_2];
 
-/// Lets `Bytes::from_owner` borrow a stored message's raw payload without
-/// copying it; the `Arc` keeps the message alive until the chunk is written.
+/// Lets `Bytes::from_owner` borrow a stored message's received bytes
+/// without copying them; the `Arc` keeps the message alive until the chunk
+/// is written. Only for messages whose bytes are stored as such (UTF-8, or
+/// a kept original) — re-encoded ones are built per chunk (#230).
 struct RawPayload(Arc<Hl7Message>);
 
 impl AsRef<[u8]> for RawPayload {
     fn as_ref(&self) -> &[u8] {
-        self.0.raw.as_bytes()
+        debug_assert!(
+            !matches!(self.0.wire, WireForm::Encoded(_)),
+            "RawPayload used for a re-encoded message: its raw text is not its bytes"
+        );
+        match &self.0.wire {
+            WireForm::Original(bytes) => bytes,
+            _ => self.0.raw.as_bytes(),
+        }
     }
 }
 
@@ -458,17 +467,22 @@ impl futures_core::Stream for MllpExportStream {
                 self.flush_buf();
                 return Poll::Ready(self.ready.pop_front().map(Ok));
             };
-            if msg.raw.len() >= EXPORT_COALESCE_BYTES {
+            // The bytes the message arrived as (#230), not its decoded text.
+            if msg.wire_len() >= EXPORT_COALESCE_BYTES {
                 self.flush_buf();
                 self.ready.push_back(Bytes::from_static(&MLLP_START_BYTE));
-                self.ready.push_back(Bytes::from_owner(RawPayload(msg)));
+                let payload = match msg.wire {
+                    WireForm::Encoded(_) => Bytes::from(msg.wire_bytes().into_owned()),
+                    _ => Bytes::from_owner(RawPayload(msg)),
+                };
+                self.ready.push_back(payload);
                 self.ready.push_back(Bytes::from_static(&MLLP_END_FRAME));
             } else {
                 if self.buf.capacity() == 0 {
                     self.buf.reserve(EXPORT_COALESCE_BYTES + 3);
                 }
                 self.buf.push(MLLP_START);
-                self.buf.extend_from_slice(msg.raw.as_bytes());
+                self.buf.extend_from_slice(&msg.wire_bytes());
                 self.buf.extend_from_slice(&MLLP_END_FRAME);
                 if self.buf.len() >= EXPORT_COALESCE_BYTES {
                     self.flush_buf();

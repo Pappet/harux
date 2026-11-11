@@ -62,6 +62,11 @@ pub struct Hl7Message {
     pub typical_segment_descriptions: HashMap<&'static str, &'static str>,
     /// Character set declared in MSH-18, e.g. `"UTF-8"` or `"8859/1"`; `None` if absent.
     pub charset: Option<String>,
+    /// How to give back the exact bytes that were received (#230). `raw` is
+    /// text; for a non-UTF-8 payload these are not its bytes. Not part of the
+    /// JSON.
+    #[serde(skip)]
+    pub wire: WireForm,
     /// MSH-9.3 message structure identifier, e.g. `"ADT_A01"` or `"ORU_R01"`.
     /// Exposed through the REST API / WebSocket JSON (visible in the UI's JSON
     /// tab). Validation does **not** use it yet — `validate_message` dispatches
@@ -69,6 +74,21 @@ pub struct Hl7Message {
     /// sub-component parsing (#185) and is tracked in #186.
     /// `None` when MSH-9 has fewer than three components (common in HL7 v2.3 senders).
     pub message_structure: Option<String>,
+}
+
+/// How the bytes a message arrived as relate to its `raw` text (#230).
+#[derive(Debug, Clone, Default)]
+pub enum WireForm {
+    /// The payload was UTF-8 (or ASCII): the bytes are `raw` itself.
+    #[default]
+    Utf8,
+    /// The payload was in this single- or multi-byte charset, and encoding
+    /// `raw` with it gives back exactly the received bytes — so they are not
+    /// stored a second time.
+    Encoded(&'static encoding_rs::Encoding),
+    /// The received bytes, kept because no encoding reproduces them from
+    /// `raw` (the decode replaced invalid bytes).
+    Original(Box<[u8]>),
 }
 
 /// One field within an HL7 segment.
@@ -322,6 +342,10 @@ impl Hl7Message {
             + opt_string(&self.charset)
             + opt_string(&self.message_structure)
             + map_heap(&self.typical_segment_descriptions)
+            + match &self.wire {
+                WireForm::Original(bytes) => heap_bytes(bytes.len()),
+                _ => 0,
+            }
             + vec_heap(&self.validation_warnings)
             + vec_heap(&self.segments);
 
@@ -363,7 +387,32 @@ impl Hl7Message {
             typical_segments: &[],
             typical_segment_descriptions: HashMap::new(),
             charset: None,
+            wire: WireForm::Utf8,
             message_structure: None,
+        }
+    }
+
+    /// The bytes this message arrived as (#230): `raw` for UTF-8, `raw`
+    /// re-encoded for other charsets, or the stored original.
+    pub fn wire_bytes(&self) -> std::borrow::Cow<'_, [u8]> {
+        match &self.wire {
+            WireForm::Utf8 => std::borrow::Cow::Borrowed(self.raw.as_bytes()),
+            WireForm::Original(bytes) => std::borrow::Cow::Borrowed(bytes),
+            WireForm::Encoded(enc) => match enc.encode(&self.raw).0 {
+                std::borrow::Cow::Borrowed(b) => std::borrow::Cow::Owned(b.to_vec()),
+                std::borrow::Cow::Owned(v) => std::borrow::Cow::Owned(v),
+            },
+        }
+    }
+
+    /// `wire_bytes().len()` without re-encoding where the length is known:
+    /// a single-byte charset writes one byte per character.
+    pub fn wire_len(&self) -> usize {
+        match &self.wire {
+            WireForm::Utf8 => self.raw.len(),
+            WireForm::Original(bytes) => bytes.len(),
+            WireForm::Encoded(enc) if enc.is_single_byte() => self.raw.chars().count(),
+            WireForm::Encoded(_) => self.wire_bytes().len(),
         }
     }
 }

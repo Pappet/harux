@@ -22,6 +22,9 @@ pub fn parse_message(raw: &str, source_addr: &str) -> Result<Hl7Message, String>
 }
 
 fn parse_structure(raw: &str, source_addr: &str) -> Result<(Hl7Message, Delimiters), String> {
+    // `Hl7Message::raw` keeps the text exactly as received, including the
+    // final segment terminator (#230); parsing works on the trimmed view.
+    let received = raw;
     let raw = raw.trim();
     if raw.is_empty() {
         return Err("Empty message".into());
@@ -50,7 +53,7 @@ fn parse_structure(raw: &str, source_addr: &str) -> Result<(Hl7Message, Delimite
              parses; it is kept unparsed (see the Raw tab)"
         ));
     }
-    let mut msg = Hl7Message::new_empty(raw.to_string(), source_addr.to_string());
+    let mut msg = Hl7Message::new_empty(received.to_string(), source_addr.to_string());
     msg.delimiters = delimiters;
 
     // Split into segments (HL7 uses \r as segment terminator, but be lenient)
