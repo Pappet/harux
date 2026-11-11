@@ -354,6 +354,31 @@ impl MessageStore {
             .collect()
     }
 
+    /// Like [`Self::list_summaries`], plus every bookmarked message beyond
+    /// that page, in the same newest-first order (#231). A reload otherwise
+    /// only sees the newest page, and a bookmark older than that can't be
+    /// found in the UI although the store protects it. Bookmarks are bounded
+    /// by `store.bookmark_budget_percent`, so the extra rows are too.
+    pub async fn list_summaries_with_bookmarks(
+        &self,
+        offset: usize,
+        limit: usize,
+    ) -> Vec<Hl7MessageSummary> {
+        let inner = self.inner.read().await;
+        inner
+            .order
+            .iter()
+            .rev() // newest first
+            .enumerate()
+            .filter_map(|(pos, id)| {
+                let e = inner.messages.get(id)?;
+                let in_page = pos >= offset && pos - offset < limit;
+                (in_page || (pos >= offset && e.meta.bookmarked))
+                    .then(|| Hl7MessageSummary::new(&e.message, &e.meta))
+            })
+            .collect()
+    }
+
     /// Get a full message by ID: an `Arc` snapshot of the payload (no deep
     /// clone) plus a copy of its small metadata.
     pub async fn get_by_id(&self, id: &str) -> Option<MessageSnapshot> {
@@ -1020,6 +1045,32 @@ mod tests {
         assert!(store.current_bytes().await >= floor);
         assert_eq!(store.memory_usage().await.0, store.current_bytes().await);
         store.assert_bytes_in_sync().await;
+    }
+
+    /// #231: older bookmarks come with the newest page, in store order.
+    #[tokio::test]
+    async fn test_list_with_bookmarks_adds_older_bookmarks() {
+        let store = manual_store(100, 512);
+        for i in 0..10 {
+            store.insert(make_msg(&format!("m{i}"))).await;
+        }
+        store.toggle_bookmark("m1").await;
+        store.toggle_bookmark("m8").await; // inside the page
+        let ids = |v: Vec<Hl7MessageSummary>| v.into_iter().map(|s| s.id).collect::<Vec<_>>();
+        assert_eq!(
+            ids(store.list_summaries_with_bookmarks(0, 3).await),
+            ["m9", "m8", "m7", "m1"]
+        );
+        // Without bookmarks beyond the page it is the plain page.
+        assert_eq!(
+            ids(store.list_summaries_with_bookmarks(0, 3).await)[..3],
+            ids(store.list_summaries(0, 3).await)[..]
+        );
+        // An offset skips newer bookmarks too.
+        assert_eq!(
+            ids(store.list_summaries_with_bookmarks(5, 2).await),
+            ["m4", "m3", "m1"]
+        );
     }
 
     #[test]

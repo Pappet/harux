@@ -708,3 +708,36 @@ async fn security_headers_are_set() {
     assert!(csp.contains("frame-ancestors 'none'"), "{csp}");
     assert_eq!(res.headers()["x-content-type-options"], "nosniff");
 }
+
+/// #231: `include_bookmarks=true` adds bookmarks older than the page.
+#[tokio::test]
+async fn list_messages_can_include_older_bookmarks() {
+    let state = make_state();
+    for i in 0..5 {
+        let mut msg = Hl7Message::new_empty(simple_raw(), "127.0.0.1".to_string());
+        msg.id = format!("m{i}");
+        state.store.insert(msg).await;
+    }
+    state.store.toggle_bookmark("m0").await;
+    let ids = |uri: &'static str| {
+        let app = create_router(state.clone());
+        async move {
+            let res = app
+                .oneshot(Request::builder().uri(uri).body(Body::empty()).unwrap())
+                .await
+                .unwrap();
+            let json: serde_json::Value =
+                serde_json::from_slice(&collect_body(res.into_body()).await).unwrap();
+            json.as_array()
+                .unwrap()
+                .iter()
+                .map(|m| m["id"].as_str().unwrap().to_string())
+                .collect::<Vec<_>>()
+        }
+    };
+    assert_eq!(ids("/api/messages?limit=2").await, ["m4", "m3"]);
+    assert_eq!(
+        ids("/api/messages?limit=2&include_bookmarks=true").await,
+        ["m4", "m3", "m0"]
+    );
+}

@@ -53,6 +53,14 @@ const state = {
     // labelling changes (toggleColorByPort) or the buffer is replaced.
     sourceCounts: new Map(),
 
+    // List (re)load (#239): while `loadMessages` waits for the server's list,
+    // WebSocket events are queued in `loadQueue` and replayed after the
+    // snapshot is applied, so nothing that arrives meanwhile is lost.
+    // `loadSeq` lets a newer load supersede an older one.
+    loadInProgress: false,
+    loadQueue: [],
+    loadSeq: 0,
+
     // Async request sequencing (#183): each selectMessage / toggleDiffPin
     // call takes a new number; a response is applied only if no newer call
     // started meanwhile, so a slow response can't overwrite a newer choice.

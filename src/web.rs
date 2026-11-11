@@ -306,6 +306,8 @@ pub fn create_router(state: AppState) -> Router {
 struct ListParams {
     offset: Option<usize>,
     limit: Option<usize>,
+    /// Also return every bookmarked message older than the page (#231).
+    include_bookmarks: Option<bool>,
 }
 
 async fn list_messages(
@@ -314,7 +316,14 @@ async fn list_messages(
 ) -> impl IntoResponse {
     let offset = params.offset.unwrap_or(0);
     let limit = params.limit.unwrap_or(100).min(1000);
-    let summaries = state.store.list_summaries(offset, limit).await;
+    let summaries = if params.include_bookmarks.unwrap_or(false) {
+        state
+            .store
+            .list_summaries_with_bookmarks(offset, limit)
+            .await
+    } else {
+        state.store.list_summaries(offset, limit).await
+    };
     Json(summaries)
 }
 
