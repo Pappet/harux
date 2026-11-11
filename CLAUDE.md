@@ -98,7 +98,7 @@ Limits are **config-driven** via `StoreConfig` (`src/config.rs`), not hardcoded 
 
 **Cross-site guard (#227):** every request passes `guard_cross_site` (`src/web.rs`): `Host` must be an IP literal, `localhost` or a name in `server.allowed_hosts`; on `/ws` and all non-GET routes an `Origin` header, if present, must name this server. `allowed_hosts` entries are names only (no port/scheme; a trailing dot is ignored) — bad entries are warned about at startup. Keep new state-changing routes non-GET so they stay covered. Tests that build requests with a `Host` header must use an allowed one.
 
-- `GET /api/messages?offset=&limit=` — Paginated message list (newest first; `limit` capped at 1000)
+- `GET /api/messages?offset=&limit=&include_bookmarks=` — Paginated message list (newest first; `limit` capped at 1000). `include_bookmarks=true` (also `1` / `yes`) adds every bookmarked message older than the page, in the same order — the UI loads with it so bookmarks survive a reload (#231)
 - `GET /api/messages/{id}` — Full message with segments
 - `GET /api/search?q=&limit=` — Search messages server-side. **Note:** the UI currently filters client-side (`matchesSearch()`); this endpoint exists but is not yet wired into the frontend.
 - `GET /api/stats` — Server statistics
@@ -122,6 +122,7 @@ Key frontend behaviors:
 - When no client-side filters are active, new messages are **prepended** to the list (`prependMessagesToList`); when a filter/search/bookmark filter is active, the list is fully rebuilt (`renderMessageList`)
 - ⏸ Pause/▶ Live button buffers incoming messages without displaying them
 - **Client buffer cap:** `state.messages` (and the paused `pendingMessages` buffer) holds at most `CLIENT_MESSAGE_CAP` (2000, `util.js`) messages **plus** bookmarked and selected ones, which are exempt (bookmarks are bounded server-side by `store.bookmark_budget_percent`). Excess oldest messages are dropped via `trimClientBuffer()` (O(1) early exit when only exempt entries are over the cap) and their rows removed bottom-up via `removeRowsFromList()` — no full rebuild. Dropped messages stay on the server; `updateTruncationNote()` keeps a note at the bottom of the list whenever the server holds more than the view, because filters/search only cover loaded messages (server-side search: #197/#198). The header `total` shows the server total (`state.totalMessagesCount`, from WS `init` / `addMessage` / `pollStats` every 3 s — so it can lag by one poll while paused), not the buffer length
+- **List (re)load (#239):** WS events go through `handleServerEvent()`. While `loadMessages()` waits for the list (on `init` / `lagged`), events are queued in `state.loadQueue` and replayed in order after the snapshot is applied (`new_message` for IDs already loaded is skipped); a newer load supersedes an older one via `state.loadSeq`. Never apply WS events directly to `state.messages` around a load. Covered by `tests/js/load.test.mjs`
 - Search is client-side (filters `messages[]` array via `matchesSearch()`), debounced 300ms
 - Parse errors are shown with `⚠ PARSE ERROR` in red (`var(--error)`) in the message list
 

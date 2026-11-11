@@ -37,43 +37,70 @@ function connectWs() {
     };
 
     state.ws.onmessage = (event) => {
-        const data = JSON.parse(event.data);
-        if (data.type === 'init') {
-            state.totalMessagesCount = data.total;
-            loadMessages();
-        } else if (data.type === 'new_message') {
-            addMessage(data.data);
-        } else if (data.type === 'tags_updated') {
-            updateMessageTags(data.data);
-        } else if (data.type === 'bookmark_toggled') {
-            updateMessageBookmark(data.data);
-        } else if (data.type === 'evicted') {
-            removeEvictedMessages(data.data);
-        } else if (data.type === 'lagged') {
-            console.warn(`Missed ${data.missed} messages, reloading...`);
-            loadMessages();
-        } else if (data.type === 'cleared') {
-            console.info("Server cleared messages via Web UI or API");
-            state.messages = [];
-            state.pendingMessages = [];
-            state.sourceCounts.clear();
-            state.seenSources.clear();
-            state.diffPinnedMessage = null;
-            state.totalMessagesCount = 0;
-            state.totalValidationCount = 0;
-            state.totalBookmarkCount = 0;
-            state.rateWindow.length = 0;
-            state.lastMessageReceivedAt = null;
-            state.selectedId = null;
-            state.selectedMessage = null;
-            renderMessageList();
-            renderSourceLegend();
-            renderHealthPills();
-            updateHeaderCounters();
-            resetDetailHeader();
-            document.getElementById('detail-content').innerHTML = DETAIL_EMPTY_HTML;
-        }
+        handleServerEvent(JSON.parse(event.data));
     };
+}
+
+// Apply one server event. While a list (re)load is in flight, everything but
+// `init` / `lagged` (which start a load themselves) is queued and replayed
+// after the snapshot lands (#239) — applied now, it would be overwritten by
+// the older snapshot. `known` (replay only) holds the IDs already present,
+// so a message that is both in the snapshot and in the queue isn't doubled.
+function handleServerEvent(data, known = null) {
+    if (data.type === 'init') {
+        state.totalMessagesCount = data.total;
+        loadMessages();
+        return;
+    }
+    if (data.type === 'lagged') {
+        console.warn(`Missed ${data.missed} messages, reloading...`);
+        loadMessages();
+        return;
+    }
+    if (state.loadInProgress && !known) {
+        state.loadQueue.push(data);
+        return;
+    }
+    if (data.type === 'new_message') {
+        if (known) {
+            if (known.has(data.data.id)) return;
+            known.add(data.data.id);
+        }
+        addMessage(data.data);
+    } else if (data.type === 'tags_updated') {
+        updateMessageTags(data.data);
+    } else if (data.type === 'bookmark_toggled') {
+        updateMessageBookmark(data.data);
+    } else if (data.type === 'evicted') {
+        removeEvictedMessages(data.data);
+    } else if (data.type === 'cleared') {
+        if (known) known.clear();
+        applyCleared();
+    } else {
+        console.debug('Ignoring unknown server event type', data.type);
+    }
+}
+
+function applyCleared() {
+    console.info("Server cleared messages via Web UI or API");
+    state.messages = [];
+    state.pendingMessages = [];
+    state.sourceCounts.clear();
+    state.seenSources.clear();
+    state.diffPinnedMessage = null;
+    state.totalMessagesCount = 0;
+    state.totalValidationCount = 0;
+    state.totalBookmarkCount = 0;
+    state.rateWindow.length = 0;
+    state.lastMessageReceivedAt = null;
+    state.selectedId = null;
+    state.selectedMessage = null;
+    renderMessageList();
+    renderSourceLegend();
+    renderHealthPills();
+    updateHeaderCounters();
+    resetDetailHeader();
+    document.getElementById('detail-content').innerHTML = DETAIL_EMPTY_HTML;
 }
 
 function updateMessageTags(summary) {
@@ -273,52 +300,81 @@ function flushAndRender() {
     updateHeaderCounters();
 }
 
+// Load the newest page plus every bookmarked message (#231: a bookmark older
+// than the page would otherwise be unreachable after a reload), then replay
+// the events that arrived while the request was in flight (#239).
 async function loadMessages() {
+    const seq = ++state.loadSeq;
+    state.loadInProgress = true;
+    let snapshot = null;
     try {
-        const resp = await fetch('/api/messages?limit=1000');
-        if (!resp.ok) return;
-        state.messages = await resp.json();
-        // The total normally comes from the WS `init` event / pollStats; make
-        // sure it is never below what is actually loaded (e.g. socket not up).
-        state.totalMessagesCount = Math.max(state.totalMessagesCount, state.messages.length);
-        state.pendingMessages = [];
-        // Recompute all incremental counters from the freshly-loaded batch.
-        // This is O(n) but only runs on init/lagged reload, never per-message.
-        state.totalValidationCount = 0;
-        state.totalBookmarkCount = 0;
-        state.seenSources.clear();
-        for (const m of state.messages) {
-            registerSource(m.source_addr);
-            state.totalValidationCount += (m.validation_warning_count || 0) + (m.has_segment_errors ? 1 : 0);
-            if (m.bookmarked) state.totalBookmarkCount++;
-        }
-        recomputeSourceCounts();
-        renderMessageList();
-        renderSourceLegend();
-        updateHeaderCounters();
-        if (state._pendingDiffPinnedId) {
-            const pinId = state._pendingDiffPinnedId;
-            delete state._pendingDiffPinnedId;
-            // Same sequencing as toggleDiffPin (#183): a pin/unpin the user
-            // makes while this restore is in flight wins. Checked after the
-            // fetch and after the body read, like the other two paths.
-            const seq = ++state.diffPinRequestSeq;
-            try {
-                const r = await fetch(`/api/messages/${pinId}`);
-                if (r.ok && seq === state.diffPinRequestSeq) {
-                    const msg = await r.json();
-                    if (seq === state.diffPinRequestSeq) {
-                        state.diffPinnedMessage = msg;
-                        renderMessageList();
-                    }
-                }
-            } catch (_) { /* pinned message gone — silently drop */ }
-        }
-        if (state.selectedId) {
-            selectMessage(state.selectedId);
-        }
+        const resp = await fetch('/api/messages?limit=1000&include_bookmarks=true');
+        if (resp.ok) snapshot = await resp.json();
     } catch (e) {
         console.error('Failed to load messages:', e);
+    }
+    // A newer load started meanwhile: it owns the queue and will replay it.
+    if (seq !== state.loadSeq) return;
+
+    state.loadInProgress = false;
+    const queued = state.loadQueue;
+    state.loadQueue = [];
+    if (snapshot) applySnapshot(snapshot);
+
+    const known = new Set(state.messages.map(m => m.id));
+    for (const m of state.pendingMessages) known.add(m.id);
+    for (const ev of queued) handleServerEvent(ev, known);
+    // A replayed `evicted` older than the snapshot lowers the total by IDs
+    // the snapshot no longer had; resync it now instead of on the next
+    // 3-second poll.
+    if (queued.length > 0) pollStats();
+
+    if (snapshot) await restoreAfterLoad();
+}
+
+function applySnapshot(messages) {
+    state.messages = messages;
+    // The total normally comes from the WS `init` event / pollStats; make
+    // sure it is never below what is actually loaded (e.g. socket not up).
+    state.totalMessagesCount = Math.max(state.totalMessagesCount, state.messages.length);
+    state.pendingMessages = [];
+    // Recompute all incremental counters from the freshly-loaded batch.
+    // This is O(n) but only runs on init/lagged reload, never per-message.
+    state.totalValidationCount = 0;
+    state.totalBookmarkCount = 0;
+    state.seenSources.clear();
+    for (const m of state.messages) {
+        registerSource(m.source_addr);
+        state.totalValidationCount += (m.validation_warning_count || 0) + (m.has_segment_errors ? 1 : 0);
+        if (m.bookmarked) state.totalBookmarkCount++;
+    }
+    recomputeSourceCounts();
+    renderMessageList();
+    renderSourceLegend();
+    updateHeaderCounters();
+}
+
+async function restoreAfterLoad() {
+    if (state._pendingDiffPinnedId) {
+        const pinId = state._pendingDiffPinnedId;
+        delete state._pendingDiffPinnedId;
+        // Same sequencing as toggleDiffPin (#183): a pin/unpin the user
+        // makes while this restore is in flight wins. Checked after the
+        // fetch and after the body read, like the other two paths.
+        const seq = ++state.diffPinRequestSeq;
+        try {
+            const r = await fetch(`/api/messages/${pinId}`);
+            if (r.ok && seq === state.diffPinRequestSeq) {
+                const msg = await r.json();
+                if (seq === state.diffPinRequestSeq) {
+                    state.diffPinnedMessage = msg;
+                    renderMessageList();
+                }
+            }
+        } catch (_) { /* pinned message gone — silently drop */ }
+    }
+    if (state.selectedId) {
+        selectMessage(state.selectedId);
     }
 }
 
