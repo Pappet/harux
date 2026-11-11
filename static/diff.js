@@ -103,9 +103,9 @@ function buildDiffSummary(totalDiffs, missingSegments, hiddenDynamic) {
         return `<div class="diff-summary same">&#10003; Messages are identical${hiddenNote}</div>`;
     }
     const parts = [];
-    if (totalDiffs > 0) parts.push(`${totalDiffs} field difference${totalDiffs > 1 ? 's' : ''}`);
+    if (totalDiffs > 0) parts.push(`${totalDiffs} field difference${totalDiffs > 1 ? 's' : ''} found`);
     if (missingSegments > 0) parts.push(`${missingSegments} segment${missingSegments > 1 ? 's' : ''} only in one message`);
-    return `<div class="diff-summary changed">&#9651; ${parts.join(', ')} found${hiddenNote}</div>`;
+    return `<div class="diff-summary changed">&#9651; ${parts.join(', ')}${hiddenNote}</div>`;
 }
 
 // Pair segments by name *and occurrence* (#228): the n-th OBX of the

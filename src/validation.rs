@@ -158,22 +158,23 @@ fn validate_adt(msg: &Hl7Message, warnings: &mut Vec<ValidationWarning>) {
         warn_missing_segment(warnings, "EVN", ctx);
     }
 
-    // ADT^A20 (bed status update: MSH, EVN, NPU) carries no patient.
-    if msg.message_type == "ADT^A20" {
-        if !has_segment(msg, "NPU") {
-            warn_missing_segment(warnings, "NPU", ctx);
-        }
-        return;
+    // ADT^A20 (bed status update: MSH, EVN, NPU) carries no patient, and
+    // ADT^A19 is a query whose PID sits in optional response groups: for
+    // these, PID is not required — but a PID that is present is still
+    // checked like any other (#229 review).
+    if msg.message_type == "ADT^A20" && !has_segment(msg, "NPU") {
+        warn_missing_segment(warnings, "NPU", ctx);
     }
-    // ADT^A19 is a query; its PID sits in optional response groups.
-    if msg.message_type == "ADT^A19" {
-        return;
-    }
+    let pid_required = !matches!(msg.message_type.as_str(), "ADT^A19" | "ADT^A20");
 
-    // PID is required for the other ADT events
-    let Some(pid) = find_segment(msg, "PID") else {
-        warn_missing_segment(warnings, "PID", ctx);
-        return; // Can't validate PID fields without the segment
+    let pid = match find_segment(msg, "PID") {
+        Some(pid) => pid,
+        None => {
+            if pid_required {
+                warn_missing_segment(warnings, "PID", ctx);
+            }
+            return; // Can't validate PID fields without the segment
+        }
     };
 
     // PID-3: Patient Identifier List
@@ -594,6 +595,22 @@ mod tests {
                 .filter(|w| w.code == "MISSING_SEGMENT" || w.code == "MISSING_FIELD")
                 .collect();
             assert!(w.is_empty(), "{raw:?}: {w:?}");
+        }
+    }
+
+    /// #229 review: A19/A20 don't require PID, but a PID they carry is
+    /// still checked.
+    #[test]
+    fn optional_pid_is_still_checked_when_present() {
+        for t in ["ADT^A19", "ADT^A20"] {
+            let raw =
+                format!("MSH|^~\\&|K|K|R|Z|20240101||{t}|X|P|2.5\rEVN||2024\rNPU|W1|C\rPID|||||\r");
+            let w = warnings_for(&raw);
+            assert!(
+                w.iter().any(|w| w.segment == "PID" && w.field == Some(3)),
+                "{t}: {w:?}"
+            );
+            assert!(!w.iter().any(|w| w.code == "MISSING_SEGMENT"), "{t}: {w:?}");
         }
     }
 

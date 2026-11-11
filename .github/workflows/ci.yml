@@ -44,3 +44,12 @@ jobs:
 
       - name: Run tests
         run: cargo test
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      # Frontend logic, loaded into node:vm — no npm, no dependencies.
+      - name: JS tests
+        run: node --test 'tests/js/*.test.mjs'

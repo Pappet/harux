@@ -35,6 +35,7 @@ Before a PR can be merged, the automated CI workflow will run the following chec
 2. `cargo clippy -- -D warnings`
 3. `cargo build`
 4. `cargo test`
+5. `node --test 'tests/js/*.test.mjs'` — frontend logic (e.g. the diff pairing) loaded into `node:vm` with stubbed globals; no npm, no dependencies
 
 You must ensure your code satisfies these requirements locally before pushing.
 
@@ -184,6 +185,7 @@ tests/
 ├── parser_fixtures.rs            # Parser tests against tests/messages/*.hl7 fixtures
 ├── mllp_tcp.rs                   # MLLP over real TCP: framing, ACK/NACK, limits, shutdown
 ├── web_api.rs                    # Axum REST/handler integration tests
+├── js/                           # node:test tests for static/*.js (node --test 'tests/js/*.test.mjs')
 ├── benchmark_concurrent_insert.rs # Concurrent store insert benchmark
 ├── messages/                     # .hl7 fixtures (valid / errors / unknown_types)
 ├── test.sh                       # Linux/macOS functional + load test (netcat)
