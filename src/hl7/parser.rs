@@ -1,6 +1,12 @@
 use super::types::*;
 use std::borrow::Cow;
 
+/// Upper bound on fields per message (all segments). A larger frame is
+/// stored unparsed with a parse error, so building its tree can never cost
+/// more than about 250,000 × (56 + 32) bytes ≈ 22 MB (#226). Realistic
+/// messages stay far below: a large ORU with 10,000 OBX has about 150,000.
+pub const MAX_FIELDS_PER_MESSAGE: usize = 250_000;
+
 /// Parse a raw HL7 v2.x message string into a structured Hl7Message.
 /// Handles standard and custom delimiters from MSH segment.
 pub fn parse_message(raw: &str, source_addr: &str) -> Result<Hl7Message, String> {
@@ -31,6 +37,19 @@ fn parse_structure(raw: &str, source_addr: &str) -> Result<(Hl7Message, Delimite
 
     // Extract delimiters from MSH-1 (field sep) and MSH-2 (encoding chars)
     let delimiters = parse_delimiters(raw.as_bytes())?;
+
+    // Every field costs a fixed-size `Hl7Field` (56 bytes) even when empty,
+    // so a frame of nothing but separators would otherwise build a tree
+    // many times its own size before the store can account for it (#226).
+    // The field separator is printable ASCII (checked above), so a byte
+    // count is exact.
+    let field_count = raw.bytes().filter(|&b| b == delimiters.field as u8).count();
+    if field_count > MAX_FIELDS_PER_MESSAGE {
+        return Err(format!(
+            "Message has {field_count} fields, more than the {MAX_FIELDS_PER_MESSAGE} Harux \
+             parses; it is kept unparsed (see the Raw tab)"
+        ));
+    }
     let mut msg = Hl7Message::new_empty(raw.to_string(), source_addr.to_string());
     msg.delimiters = delimiters;
 
@@ -39,6 +58,8 @@ fn parse_structure(raw: &str, source_addr: &str) -> Result<(Hl7Message, Delimite
         let segment = parse_segment(seg_str, delimiters);
         msg.segments.push(segment);
     }
+    // Drop the growth slack: the tree is immutable from here on (#226).
+    msg.segments.shrink_to_fit();
 
     Ok((msg, delimiters))
 }
@@ -116,17 +137,13 @@ fn annotate_message_type(mut msg: Hl7Message) -> Hl7Message {
     // Third pass: look up message type description and typical segments
     if let Some(info) = super::message_types::get_message_type_info(&msg.message_type) {
         msg.message_type_description = Some(info.description.to_string());
-        msg.typical_segments = info
-            .typical_segments
-            .iter()
-            .map(|s| s.to_string())
-            .collect();
+        // Borrowed from the static registry and dictionary — no per-message
+        // copies of the segment lists (#226).
+        msg.typical_segments = &info.typical_segments;
         msg.typical_segment_descriptions = info
             .typical_segments
             .iter()
-            .filter_map(|s| {
-                crate::dictionary::get_segment_description(s).map(|d| (s.to_string(), d))
-            })
+            .filter_map(|s| crate::dictionary::get_segment_description(s).map(|d| (s.as_str(), d)))
             .collect();
     }
     msg
@@ -243,6 +260,8 @@ fn parse_segment(raw: &str, delimiters: Delimiters) -> Hl7Segment {
             },
         );
     }
+
+    fields.shrink_to_fit(); // no growth slack in stored segments (#226)
 
     Hl7Segment {
         name,
@@ -788,6 +807,42 @@ mod tests {
     fn test_non_msh_error_quotes_by_chars() {
         let err = parse_message("Sehr geehrte Damen ä und Herren", "t").unwrap_err();
         assert!(err.contains("Sehr geehrte Damen ä"), "{err}");
+    }
+
+    /// #226: a frame with more fields than the cap is refused before the
+    /// tree is built; a frame at the cap still parses.
+    #[test]
+    fn test_field_cap() {
+        let at_cap = format!(
+            "MSH|^~\\&|A|B|C|D|20240101||ZZZ^Z01|P|P|2.5\rZZZ{}",
+            "|".repeat(MAX_FIELDS_PER_MESSAGE - 11)
+        );
+        assert!(parse_message(&at_cap, "t").is_ok());
+        let over = format!("{at_cap}|");
+        let err = parse_message(&over, "t").unwrap_err();
+        assert!(err.contains("more than the 250000"), "{err}");
+    }
+
+    /// #226: the estimate covers the fixed-size structures, not just text.
+    #[test]
+    fn test_estimate_covers_field_structs() {
+        let raw = format!(
+            "MSH|^~\\&|A|B|C|D|20240101||ZZZ^Z01|P|P|2.5\rZZZ{}",
+            "|".repeat(10_000)
+        );
+        let msg = parse_message(&raw, "t").unwrap();
+        let fields: usize = msg.segments.iter().map(|s| s.fields.len()).sum();
+        assert!(fields > 10_000);
+        assert!(
+            msg.estimated_bytes() >= fields * std::mem::size_of::<Hl7Field>(),
+            "estimate {} < {} field structs",
+            msg.estimated_bytes(),
+            fields
+        );
+        // No growth slack is kept.
+        for seg in &msg.segments {
+            assert_eq!(seg.fields.capacity(), seg.fields.len());
+        }
     }
 
     #[test]

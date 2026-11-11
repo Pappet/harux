@@ -1,5 +1,5 @@
 use crate::config::StoreConfig;
-use crate::hl7::types::{Hl7Message, Hl7MessageSummary, MessageMeta, MessageSnapshot};
+use crate::hl7::types::{heap_bytes, Hl7Message, Hl7MessageSummary, MessageMeta, MessageSnapshot};
 use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 use tokio::sync::{broadcast, RwLock};
@@ -83,6 +83,23 @@ struct StoreInner {
     bookmark_count: usize,
     /// Sum of entry bytes over bookmarked messages (incremental).
     bookmark_bytes: usize,
+}
+
+/// Bytes the store spends on one entry besides what the payload and the
+/// metadata hold themselves (#226): the `Arc` allocation that contains the
+/// `Hl7Message` struct, the two extra copies of the ID (in `order` and as map
+/// key), the `order` slot and the hash-table slot at maximum load.
+fn entry_overhead(id: &str) -> usize {
+    heap_bytes(2 * std::mem::size_of::<usize>() + std::mem::size_of::<Hl7Message>())
+        + 2 * heap_bytes(id.len())
+        + std::mem::size_of::<String>()
+        + (std::mem::size_of::<(String, StoredEntry)>() + 1) * 8 / 7
+}
+
+/// Everything one stored message is accounted for — the value cached in
+/// `StoredEntry::bytes` and summed in `current_bytes`.
+fn entry_bytes(msg: &Hl7Message, meta: &MessageMeta) -> usize {
+    msg.estimated_bytes() + meta.estimated_bytes() + entry_overhead(&msg.id)
 }
 
 /// Result of a single eviction pass (see [`StoreInner::evict`]).
@@ -285,7 +302,7 @@ impl MessageStore {
         let meta = MessageMeta::default();
         let summary = Hl7MessageSummary::new(&msg, &meta);
         // Walk the parsed message once, outside the lock.
-        let bytes = msg.estimated_bytes() + meta.estimated_bytes();
+        let bytes = entry_bytes(&msg, &meta);
         let id = msg.id.clone();
         let entry = StoredEntry {
             message: Arc::new(msg),
@@ -402,6 +419,13 @@ impl MessageStore {
     /// Total message count
     pub async fn count(&self) -> usize {
         self.inner.read().await.order.len()
+    }
+
+    /// `(accounted bytes, byte limit)` — what `store.max_memory_mb` is
+    /// compared against, exposed in `/api/stats`.
+    pub async fn memory_usage(&self) -> (usize, usize) {
+        let inner = self.inner.read().await;
+        (inner.current_bytes, inner.max_bytes)
     }
 
     /// Apply a mutation to a message's metadata (tags, bookmark).
@@ -630,7 +654,7 @@ mod tests {
             inner
                 .messages
                 .values()
-                .map(|e| e.message.estimated_bytes() + e.meta.estimated_bytes())
+                .map(|e| entry_bytes(&e.message, &e.meta))
                 .sum()
         }
 
@@ -644,7 +668,7 @@ mod tests {
             for (id, e) in &inner.messages {
                 assert_eq!(
                     e.bytes,
-                    e.message.estimated_bytes() + e.meta.estimated_bytes(),
+                    entry_bytes(&e.message, &e.meta),
                     "cached entry bytes drifted for {id}"
                 );
             }
@@ -778,22 +802,26 @@ mod tests {
         assert!(store.add_tag("a", "Bug #1234".into()).await);
         assert!(store.add_tag("a", "Test scenario A".into()).await);
         store.assert_bytes_in_sync().await;
-        assert_eq!(
-            store.current_bytes().await,
-            before + "Bug #1234".len() + "Test scenario A".len()
+        // Two tag strings plus the tag list's buffer.
+        assert!(
+            store.current_bytes().await >= before + "Bug #1234".len() + "Test scenario A".len()
         );
 
         assert!(store.remove_tag("a", "Bug #1234").await);
         store.assert_bytes_in_sync().await;
 
-        // Bookmark toggles and no-op mutations leave the accounting untouched.
+        // Bookmark toggles leave the accounting untouched.
         let before = store.current_bytes().await;
         store.toggle_bookmark("a").await;
         store.assert_bytes_in_sync().await;
+        assert_eq!(store.current_bytes().await, before);
         // Tagging a bookmarked message must move its bookmark bytes too.
         assert!(store.add_tag("a", "while-bookmarked".into()).await);
         store.assert_bytes_in_sync().await;
         assert!(store.remove_tag("a", "while-bookmarked").await);
+        store.assert_bytes_in_sync().await;
+        // No-op mutations leave it untouched.
+        let before = store.current_bytes().await;
         assert!(!store.add_tag("a", "Test scenario A".into()).await);
         assert!(!store.remove_tag("a", "missing").await);
         assert_eq!(store.current_bytes().await, before);
@@ -972,6 +1000,26 @@ mod tests {
         for i in 3..8 {
             assert!(store.get_by_id(&format!("msg-{i}")).await.is_some());
         }
+    }
+
+    /// #226: an entry is accounted for at least its payload, its field
+    /// structs and the store's own per-entry structures.
+    #[tokio::test]
+    async fn test_entry_accounting_covers_structs_and_overhead() {
+        let store = manual_store(100, 512);
+        let msg = crate::hl7::parser::parse_message(
+            "MSH|^~\\&|APP|FAC|APP|FAC|20240101||ADT^A01|MSG001|P|2.5\rPID|||12345||Smith^John||1980|M",
+            "127.0.0.1:5000",
+        )
+        .unwrap();
+        let fields: usize = msg.segments.iter().map(|s| s.fields.len()).sum();
+        let floor = msg.raw.len()
+            + fields * std::mem::size_of::<crate::hl7::types::Hl7Field>()
+            + std::mem::size_of::<Hl7Message>();
+        store.insert(msg).await;
+        assert!(store.current_bytes().await >= floor);
+        assert_eq!(store.memory_usage().await.0, store.current_bytes().await);
+        store.assert_bytes_in_sync().await;
     }
 
     #[test]

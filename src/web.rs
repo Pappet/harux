@@ -21,6 +21,10 @@ use std::task::{Context, Poll};
 #[derive(serde::Serialize)]
 struct StatsResponse {
     total_messages: usize,
+    /// Bytes the store accounts for its messages (#226) …
+    store_bytes: usize,
+    /// … and the limit they are evicted against (`store.max_memory_mb`).
+    store_max_bytes: usize,
     received: u64,
     parsed_ok: u64,
     parse_errors: u64,
@@ -274,8 +278,11 @@ async fn search_messages(
 }
 
 async fn get_stats(State(state): State<AppState>) -> impl IntoResponse {
+    let (store_bytes, store_max_bytes) = state.store.memory_usage().await;
     Json(StatsResponse {
         total_messages: state.store.count().await,
+        store_bytes,
+        store_max_bytes,
         received: state.stats.received.load(Ordering::Relaxed),
         parsed_ok: state.stats.parsed_ok.load(Ordering::Relaxed),
         parse_errors: state.stats.parse_errors.load(Ordering::Relaxed),

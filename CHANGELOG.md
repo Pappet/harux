@@ -12,7 +12,16 @@ and this project follows [Semantic Versioning](https://semver.org/lang/en/).
 ### Security
 - **Cross-site requests are refused** — the web server did not check where a browser request came from, so any page open in a user's browser could read the live feed over the WebSocket (`Origin` was never checked), empty the store with a cross-site `POST /api/clear`, and — via DNS rebinding — read the REST API. A new middleware (`guard_cross_site`, `src/web.rs`) now refuses with `403`: requests whose `Host` is not an IP literal, `localhost` or a name in the new `server.allowed_hosts`; and, on `/ws` and every state-changing method, an `Origin` that is not this server. Requests without `Origin` (curl, scripts) are unaffected. The CSP gains `frame-ancestors 'none'`, and `X-Content-Type-Options: nosniff` is sent. (#227)
 
+### Fixed
+- **`store.max_memory_mb` now bounds real memory** — the store accounted string lengths only and ignored the structures around them: 56 bytes per `Hl7Field` (also for empty fields), the segment and field vectors, allocator overhead, and its own per-entry bookkeeping. Real memory was about 10× the accounted bytes for ordinary ADT traffic and up to 75× for frames made mostly of separators — two 10 MB `|||…` frames took the process from 42 MB to 1.2 GB with 20 MB accounted and no eviction. (#226)
+  - `Hl7Message::estimated_bytes` now counts every buffer by capacity plus allocator overhead (`heap_bytes` in `src/hl7/types.rs`), and the store adds its per-entry cost (`entry_overhead` in `src/store.rs`). Checked with a counting allocator: within 0–10 % of the real heap, never below it.
+  - Less real memory per message: field and segment vectors are shrunk after parsing, and `typical_segments` / `typical_segment_descriptions` borrow from the static registry instead of being copied into every message. A 731-byte ADT now holds about 13 KB instead of 18 KB.
+  - Frames with more than 250,000 fields are stored unparsed with a parse error (`MAX_FIELDS_PER_MESSAGE`), which bounds the parse-time spike before accounting can see it.
+  - `/api/stats` gains `store_bytes` and `store_max_bytes`.
+  - Measured with a 64 MB limit: 2,000 ADT messages are accounted at 27.7 MB and grow the process by 28.6 MB; 32,000 ADT messages leave the store at 59 MB and the process at 72 MB.
+
 ### Upgrade Notes
+- **The store now holds fewer messages for the same `store.max_memory_mb`**, because it counts what they really cost. With ordinary ADT traffic the 512 MB default fits roughly 37,000 messages, so the 10,000-message count limit still applies first; deployments that raised `store.max_messages` and relied on the byte limit now get the memory they configured. (#226)
 - If users open the UI by DNS name (e.g. `http://harux.klinik.local:8080`), add that name to `server.allowed_hosts` in `harux.toml`; otherwise the browser gets `403 Host not allowed`. IP addresses and `localhost` always work. (#227)
 
 > Hardens the MLLP receive path: no frame is lost silently any more. Every frame Harux receives now ends up in the list and gets an answer, and shutdown waits for frames in flight.
