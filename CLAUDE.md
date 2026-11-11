@@ -157,7 +157,7 @@ Do not implement features from later milestones speculatively.
 src/
 ├── main.rs          # Entry point, tokio::select! over MLLP + Web tasks
 ├── lib.rs           # Library crate root (re-exports modules for integration tests)
-├── config.rs        # TOML → env → defaults config loading (Config + typed sections)
+├── config.rs        # TOML → env → defaults config loading; fails closed: unknown keys, bad values, bad port env → startup error (#233)
 ├── mllp.rs          # TCP listener, MLLP framing, ACK/NACK dispatch
 ├── store.rs         # In-memory store with broadcast channel, dual eviction
 ├── web.rs           # Axum router, REST handlers, WebSocket handler
@@ -184,6 +184,7 @@ static/
 tests/
 ├── parser_fixtures.rs            # Parser tests against tests/messages/*.hl7 fixtures
 ├── mllp_tcp.rs                   # MLLP over real TCP: framing, ACK/NACK, limits, shutdown
+├── config_startup.rs             # Real binary refuses to start on a broken harux.toml / port variable
 ├── web_api.rs                    # Axum REST/handler integration tests
 ├── js/                           # node:test tests for static/*.js (node --test 'tests/js/*.test.mjs')
 ├── benchmark_concurrent_insert.rs # Concurrent store insert benchmark

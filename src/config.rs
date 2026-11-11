@@ -1,22 +1,27 @@
 use serde::Deserialize;
 use std::path::PathBuf;
 use std::time::Duration;
-use tracing::info;
 
 /// Top-level configuration for Harux.
 ///
 /// Load priority: `harux.toml` (next to binary, then CWD) → env vars → built-in defaults.
+/// Unknown keys are an error (`deny_unknown_fields` on every section), so a
+/// typo such as `max_mesages` stops the start instead of silently leaving
+/// the default in place (#233).
 #[derive(Debug, Default, Deserialize)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub struct Config {
     pub server: ServerConfig,
     pub logging: LoggingConfig,
     pub store: StoreConfig,
     pub mllp: MllpConfig,
+    /// The file the configuration was read from, if any — logged at startup.
+    #[serde(skip)]
+    pub source: Option<PathBuf>,
 }
 
 #[derive(Debug, Deserialize)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub struct ServerConfig {
     pub mllp_port: u16,
     pub web_port: u16,
@@ -29,14 +34,14 @@ pub struct ServerConfig {
 }
 
 #[derive(Debug, Deserialize)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub struct LoggingConfig {
     pub level: String,
     pub file: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub struct StoreConfig {
     pub max_messages: usize,
     pub max_memory_mb: usize,
@@ -54,7 +59,7 @@ pub struct StoreConfig {
 pub const MAX_BOOKMARK_BUDGET_PERCENT: usize = 80;
 
 #[derive(Debug, Clone, Deserialize)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub struct MllpConfig {
     pub max_message_size_mb: usize,
     pub read_timeout_secs: u64,
@@ -137,52 +142,107 @@ impl MllpConfig {
 // --- Loading ---
 
 impl Config {
-    /// Load configuration with priority: file → env vars → defaults.
-    pub fn load() -> Self {
-        let mut config = match find_config_path() {
+    /// Load configuration with priority: env vars → `harux.toml` → defaults.
+    ///
+    /// Fails closed (#233): a config file that can't be read or parsed, an
+    /// unknown key, an invalid `MLLP_PORT` / `WEB_PORT`, or a value out of
+    /// range is an error naming the file, key and reason — the caller stops
+    /// the start. Running on other ports or limits than configured is worse
+    /// than not running: the feed goes nowhere, and under a service manager
+    /// nobody reads a warning on stderr.
+    pub fn load() -> Result<Self, String> {
+        let file = match find_config_path() {
             Some(path) => {
-                info!("Loading config from {}", path.display());
-                match std::fs::read_to_string(&path) {
-                    Ok(contents) => match toml::from_str::<Config>(&contents) {
-                        Ok(cfg) => cfg,
-                        Err(e) => {
-                            eprintln!(
-                                "WARNING: Failed to parse {}: {}. Using defaults.",
-                                path.display(),
-                                e
-                            );
-                            Config::default()
-                        }
-                    },
-                    Err(e) => {
-                        eprintln!(
-                            "WARNING: Failed to read {}: {}. Using defaults.",
-                            path.display(),
-                            e
-                        );
-                        Config::default()
-                    }
-                }
+                let contents = std::fs::read_to_string(&path)
+                    .map_err(|e| format!("cannot read {}: {e}", path.display()))?;
+                Some((path, contents))
+            }
+            None => None,
+        };
+        Self::from_sources(file, |key| std::env::var(key).ok())
+    }
+
+    /// [`Config::load`] without touching the file system or the process
+    /// environment — `file` is `(path, contents)`, `env` looks up variables.
+    pub fn from_sources(
+        file: Option<(PathBuf, String)>,
+        env: impl Fn(&str) -> Option<String>,
+    ) -> Result<Self, String> {
+        let mut config = match file {
+            Some((path, contents)) => {
+                let mut cfg: Config = toml::from_str(&contents)
+                    .map_err(|e| format!("invalid configuration in {}: {e}", path.display()))?;
+                cfg.source = Some(path);
+                cfg
             }
             None => Config::default(),
         };
 
         // Env-var overrides (highest priority)
-        if let Ok(val) = std::env::var("MLLP_PORT") {
-            if let Ok(port) = val.parse::<u16>() {
-                config.server.mllp_port = port;
+        for (key, target) in [
+            ("MLLP_PORT", &mut config.server.mllp_port),
+            ("WEB_PORT", &mut config.server.web_port),
+        ] {
+            if let Some(val) = env(key) {
+                *target = val.trim().parse::<u16>().map_err(|_| {
+                    format!("environment variable {key}={val:?} is not a port number (1-65535)")
+                })?;
             }
         }
-        if let Ok(val) = std::env::var("WEB_PORT") {
-            if let Ok(port) = val.parse::<u16>() {
-                config.server.web_port = port;
-            }
-        }
-        if let Ok(val) = std::env::var("RUST_LOG") {
+        if let Some(val) = env("RUST_LOG") {
             config.logging.level = val;
         }
 
-        config
+        config.validate()?;
+        Ok(config)
+    }
+
+    /// Range checks for values that parse but can't work. All problems are
+    /// reported at once.
+    fn validate(&self) -> Result<(), String> {
+        let mut problems = Vec::new();
+        let mut at_least_1 = |name: &str, value: u64| {
+            if value == 0 {
+                problems.push(format!("{name} must be at least 1"));
+            }
+        };
+        at_least_1("server.mllp_port", self.server.mllp_port.into());
+        at_least_1("server.web_port", self.server.web_port.into());
+        at_least_1("store.max_messages", self.store.max_messages as u64);
+        at_least_1("store.max_memory_mb", self.store.max_memory_mb as u64);
+        at_least_1(
+            "mllp.max_message_size_mb",
+            self.mllp.max_message_size_mb as u64,
+        );
+        at_least_1("mllp.read_timeout_secs", self.mllp.read_timeout_secs);
+        at_least_1("mllp.write_timeout_secs", self.mllp.write_timeout_secs);
+        at_least_1("mllp.max_connections", self.mllp.max_connections as u64);
+        if self.server.mllp_port != 0 && self.server.mllp_port == self.server.web_port {
+            problems.push(format!(
+                "server.mllp_port and server.web_port are both {}",
+                self.server.mllp_port
+            ));
+        }
+        if self.store.max_memory_mb != 0 && self.store.max_memory_mb < self.mllp.max_message_size_mb
+        {
+            problems.push(format!(
+                "store.max_memory_mb ({}) is smaller than mllp.max_message_size_mb ({}) — \
+                 a message of the allowed size could never be kept",
+                self.store.max_memory_mb, self.mllp.max_message_size_mb
+            ));
+        }
+        if problems.is_empty() {
+            Ok(())
+        } else {
+            let source = self.source.as_ref().map_or_else(
+                || "defaults/environment".to_string(),
+                |p| p.display().to_string(),
+            );
+            Err(format!(
+                "invalid configuration ({source}): {}",
+                problems.join("; ")
+            ))
+        }
     }
 }
 
@@ -355,18 +415,85 @@ mllp_port = 4000
         assert_eq!(config.server.web_port, 8080);
     }
 
-    #[test]
-    fn test_unknown_fields_ignored() {
-        let toml_str = r#"
-[server]
-mllp_port = 2575
-unknown_field = "should be ignored"
+    fn load(toml: &str, env: &[(&str, &str)]) -> Result<Config, String> {
+        let env: Vec<(String, String)> = env
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect();
+        Config::from_sources(
+            Some((PathBuf::from("harux.toml"), toml.to_string())),
+            |key| env.iter().find(|(k, _)| k == key).map(|(_, v)| v.clone()),
+        )
+    }
 
-[unknown_section]
-foo = "bar"
-"#;
-        // serde(default) with deny_unknown_fields not set → unknown fields are ignored
-        let result = toml::from_str::<Config>(toml_str);
-        assert!(result.is_ok());
+    /// #233: one bad value used to discard the whole file silently.
+    #[test]
+    fn wrong_type_is_an_error_naming_the_key() {
+        let err = load(
+            "[server]\nmllp_port = 12578\n[store]\nmax_messages = \"500\"\n",
+            &[],
+        )
+        .unwrap_err();
+        assert!(
+            err.contains("harux.toml") && err.contains("max_messages"),
+            "{err}"
+        );
+    }
+
+    /// #233: typos used to be ignored.
+    #[test]
+    fn unknown_keys_and_sections_are_errors() {
+        let err = load("[store]\nmax_mesages = 500\n", &[]).unwrap_err();
+        assert!(err.contains("max_mesages"), "{err}");
+        let err = load("[unknown_section]\nfoo = 1\n", &[]).unwrap_err();
+        assert!(err.contains("unknown_section"), "{err}");
+    }
+
+    #[test]
+    fn invalid_env_override_is_an_error() {
+        for (key, val) in [("MLLP_PORT", "abc"), ("WEB_PORT", "99999")] {
+            let err = load("", &[(key, val)]).unwrap_err();
+            assert!(err.contains(key) && err.contains(val), "{err}");
+        }
+        let cfg = load("", &[("MLLP_PORT", " 3000 "), ("RUST_LOG", "debug")]).unwrap();
+        assert_eq!(cfg.server.mllp_port, 3000);
+        assert_eq!(cfg.logging.level, "debug");
+    }
+
+    #[test]
+    fn nonsense_values_are_rejected_together() {
+        let err = load(
+            "[store]\nmax_messages = 0\nmax_memory_mb = 0\n[mllp]\nmax_connections = 0\n",
+            &[],
+        )
+        .unwrap_err();
+        for key in [
+            "store.max_messages",
+            "store.max_memory_mb",
+            "mllp.max_connections",
+        ] {
+            assert!(err.contains(key), "{key} missing in: {err}");
+        }
+        let err = load("[server]\nmllp_port = 9000\nweb_port = 9000\n", &[]).unwrap_err();
+        assert!(err.contains("both 9000"), "{err}");
+        let err = load("[store]\nmax_memory_mb = 5\n", &[]).unwrap_err();
+        assert!(
+            err.contains("smaller than mllp.max_message_size_mb"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn shipped_config_files_load() {
+        for path in ["harux.toml", "examples/harux-example.toml"] {
+            let contents = std::fs::read_to_string(path).unwrap();
+            let cfg = Config::from_sources(Some((PathBuf::from(path), contents)), |_| None)
+                .unwrap_or_else(|e| panic!("{path}: {e}"));
+            assert_eq!(cfg.source.as_deref(), Some(std::path::Path::new(path)));
+        }
+        assert!(Config::from_sources(None, |_| None)
+            .unwrap()
+            .source
+            .is_none());
     }
 }

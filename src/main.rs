@@ -17,7 +17,9 @@ use web::{create_router, AppState};
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     // Load configuration (file → env vars → defaults) before tracing init
-    let config = Config::load();
+    // A broken configuration stops the start (#233): running on other
+    // ports or limits than configured is worse than not running.
+    let config = Config::load().map_err(|e| anyhow::anyhow!(e))?;
 
     // Initialize logging — use config level as fallback when RUST_LOG is not set
     let env_filter =
@@ -70,6 +72,10 @@ async fn main() -> anyhow::Result<()> {
         info!("║{:w$}║", mllp_line, w = w);
         info!("║{:w$}║", web_line, w = w);
         info!("╚{}╝", bar);
+    }
+    match &config.source {
+        Some(path) => info!("Configuration loaded from {}", path.display()),
+        None => info!("No harux.toml found — using defaults and environment variables"),
     }
     info!("Effective configuration:\n{}", config);
     for problem in web::allowed_hosts_problems(&config.server.allowed_hosts) {
