@@ -415,6 +415,10 @@ struct RawPayload(Arc<Hl7Message>);
 
 impl AsRef<[u8]> for RawPayload {
     fn as_ref(&self) -> &[u8] {
+        debug_assert!(
+            !matches!(self.0.wire, WireForm::Encoded(_)),
+            "RawPayload used for a re-encoded message: its raw text is not its bytes"
+        );
         match &self.0.wire {
             WireForm::Original(bytes) => bytes,
             _ => self.0.raw.as_bytes(),

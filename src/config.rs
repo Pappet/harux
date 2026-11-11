@@ -142,7 +142,9 @@ impl MllpConfig {
 // --- Loading ---
 
 impl Config {
-    /// Load configuration with priority: env vars → `harux.toml` → defaults.
+    /// Load configuration: built-in defaults, overridden by `harux.toml`,
+    /// overridden by environment variables (`MLLP_PORT`, `WEB_PORT`,
+    /// `RUST_LOG`).
     ///
     /// Fails closed (#233): a config file that can't be read or parsed, an
     /// unknown key, an invalid `MLLP_PORT` / `WEB_PORT`, or a value out of
@@ -217,7 +219,7 @@ impl Config {
         at_least_1("mllp.read_timeout_secs", self.mllp.read_timeout_secs);
         at_least_1("mllp.write_timeout_secs", self.mllp.write_timeout_secs);
         at_least_1("mllp.max_connections", self.mllp.max_connections as u64);
-        if self.server.mllp_port != 0 && self.server.mllp_port == self.server.web_port {
+        if self.server.mllp_port == self.server.web_port {
             problems.push(format!(
                 "server.mllp_port and server.web_port are both {}",
                 self.server.mllp_port
@@ -230,6 +232,9 @@ impl Config {
                  a message of the allowed size could never be kept",
                 self.store.max_memory_mb, self.mllp.max_message_size_mb
             ));
+        }
+        if let Err(e) = check_log_level(&self.logging.level) {
+            problems.push(e);
         }
         if problems.is_empty() {
             Ok(())
@@ -244,6 +249,43 @@ impl Config {
             ))
         }
     }
+}
+
+/// Levels a log directive may name.
+const LOG_LEVELS: [&str; 6] = ["trace", "debug", "info", "warn", "error", "off"];
+
+/// `logging.level` (or `RUST_LOG`, which overrides it) must be a level or a
+/// list of `target=level` directives. `tracing`'s own parser accepts a bare
+/// word as a *target* name, so a typo like `warm` would silently switch all
+/// logging off — checked here instead (#233 review).
+fn check_log_level(spec: &str) -> Result<(), String> {
+    let bad = |what: &str| {
+        format!(
+            "logging.level / RUST_LOG {spec:?}: {what} is not a log level \
+             (trace, debug, info, warn, error, off) or target=level directive"
+        )
+    };
+    let directives: Vec<&str> = spec
+        .split(',')
+        .map(str::trim)
+        .filter(|d| !d.is_empty())
+        .collect();
+    if directives.is_empty() {
+        return Err(bad("an empty value"));
+    }
+    for d in directives {
+        let level = match d.rsplit_once('=') {
+            Some((_, level)) => level.trim(),
+            // `target[span]` forms are left to tracing's parser.
+            None if d.contains('[') => continue,
+            None => d,
+        };
+        if !LOG_LEVELS.iter().any(|l| l.eq_ignore_ascii_case(level)) {
+            return Err(bad(&format!("{level:?}")));
+        }
+    }
+    tracing_subscriber::EnvFilter::try_new(spec).map_err(|e| bad(&e.to_string()))?;
+    Ok(())
 }
 
 /// Search for `harux.toml`: first next to the binary, then in the CWD.
@@ -481,6 +523,24 @@ mllp_port = 4000
             err.contains("smaller than mllp.max_message_size_mb"),
             "{err}"
         );
+    }
+
+    /// #233 review: a typo in the level used to switch logging off silently.
+    #[test]
+    fn log_level_is_validated() {
+        let err = load("[logging]\nlevel = \"warm\"\n", &[]).unwrap_err();
+        assert!(err.contains("\"warm\""), "{err}");
+        let err = load("", &[("RUST_LOG", "harux=verbose")]).unwrap_err();
+        assert!(err.contains("verbose"), "{err}");
+        for ok in [
+            "info",
+            "WARN",
+            "harux=debug,tower_http=info",
+            "off",
+            "warn,harux::mllp=trace",
+        ] {
+            assert!(load("", &[("RUST_LOG", ok)]).is_ok(), "{ok}");
+        }
     }
 
     #[test]

@@ -427,7 +427,37 @@ async fn export_is_byte_identical_to_what_was_received() {
     let utf8 = "MSH|^~\\&|KIS|KLINIK|RCV|RZ|20240101120000||ADT^A01|U1|P|2.5\rPID|||1||Müller\r\n"
         .as_bytes()
         .to_vec();
-    let sent = [utf8, latin1_declared, latin1_undeclared, big5_invalid];
+    // Above EXPORT_COALESCE_BYTES (64 KiB), so the export streams these as
+    // chunks of their own: zero-copy for UTF-8 and kept originals, a
+    // re-encoded buffer for `Encoded` (#251 review).
+    let big_utf8 = format!(
+        "MSH|^~\\&|DMS|KLINIK|RCV|RZ|20240101120000||MDM^T02|BU|P|2.5\rPID|||1||Müller\r\
+         OBX|1|ED|PDF||^application^pdf^Base64^{}||||||F\r",
+        "QUJD".repeat(25_000)
+    )
+    .into_bytes();
+    let mut big_latin1 =
+        b"MSH|^~\\&|KIS|KLINIK|RCV|RZ|20240101120000||ORU^R01|BL|P|2.5||||||8859/1\r".to_vec();
+    for i in 0..4_000 {
+        big_latin1.extend_from_slice(format!("OBX|{i}|ST|X||Gr").as_bytes());
+        big_latin1.extend_from_slice(b"\xFC\xDFe\r");
+    }
+    let mut big_original =
+        b"MSH|^~\\&|KIS|KLINIK|RCV|RZ|20240101120000||ADT^A01|BO|P|2.5||||||BIG-5\rPID|||1||\x81\x20\r"
+            .to_vec();
+    big_original.extend_from_slice(format!("NTE|1||{}\r", "x".repeat(100_000)).as_bytes());
+    for big in [&big_utf8, &big_latin1, &big_original] {
+        assert!(big.len() > 64 * 1024);
+    }
+    let sent = [
+        utf8,
+        latin1_declared,
+        latin1_undeclared,
+        big5_invalid,
+        big_utf8,
+        big_latin1,
+        big_original,
+    ];
 
     let mut s = TcpStream::connect(srv.addr).await.unwrap();
     for payload in &sent {
@@ -452,7 +482,10 @@ async fn export_is_byte_identical_to_what_was_received() {
             "utf8",
             "encoded windows-1252",
             "encoded windows-1252",
-            "original"
+            "original",
+            "utf8",
+            "encoded windows-1252",
+            "original",
         ]
     );
 
