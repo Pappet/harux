@@ -468,8 +468,15 @@ fn validate_ts(value: &str) -> Option<String> {
     };
     // Strip timezone offset (+HHMM / -HHMM) — only search after position 8
     // so a leading '-' in an unexpected value doesn't confuse the parser.
+    let not_a_timestamp =
+        || Some("expected a timestamp (TS) in YYYY[MM[DD[HH[MM[SS]]]]] format".to_string());
     let core = if without_frac.len() > 8 {
-        match without_frac[8..].find(['+', '-']) {
+        // `get`, not `[8..]`: byte 8 can sit inside a multi-byte character,
+        // which is not a timestamp anyway — and must not panic (#222).
+        let Some(rest) = without_frac.get(8..) else {
+            return not_a_timestamp();
+        };
+        match rest.find(['+', '-']) {
             Some(offset) => &without_frac[..8 + offset],
             None => without_frac,
         }
@@ -477,7 +484,7 @@ fn validate_ts(value: &str) -> Option<String> {
         without_frac
     };
     if core.len() < 4 || !core.chars().all(|c| c.is_ascii_digit()) {
-        return Some("expected a timestamp (TS) in YYYY[MM[DD[HH[MM[SS]]]]] format".to_string());
+        return not_a_timestamp();
     }
     // Validate however much of the date is present
     let date_len = core.len().min(8);
@@ -613,6 +620,16 @@ mod tests {
         assert!(validate_ts("20260308143000.000").is_none());
         assert!(validate_ts("20260308143000+0500").is_none());
         assert!(validate_ts("2026").is_none());
+    }
+
+    /// #222: a multi-byte character across byte 8 used to panic on `[8..]`.
+    #[test]
+    fn ts_multibyte_at_byte_8_is_invalid_not_a_panic() {
+        assert!(validate_ts("1980-05ä").is_some());
+        assert!(validate_ts("2024010ä1200").is_some());
+        assert!(datatype_warnings_for_pid7("1980-05ä")
+            .iter()
+            .any(|w| w.field == Some(7)));
     }
 
     #[test]

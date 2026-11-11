@@ -23,10 +23,10 @@ fn parse_structure(raw: &str, source_addr: &str) -> Result<(Hl7Message, Delimite
 
     // HL7 messages must start with MSH
     if !raw.starts_with("MSH") {
-        return Err(format!(
-            "Message does not start with MSH: {:?}",
-            &raw[..raw.len().min(20)]
-        ));
+        // Quote by characters, not bytes: a byte cut could split a
+        // multi-byte character and panic (#222).
+        let start: String = raw.chars().take(20).collect();
+        return Err(format!("Message does not start with MSH: {start:?}"));
     }
 
     // Extract delimiters from MSH-1 (field sep) and MSH-2 (encoding chars)
@@ -368,6 +368,24 @@ pub fn build_nack(reason: &str) -> String {
         version: "",
         ack_code: "AE",
         acknowledged_control_id: "UNKNOWN",
+        text: Some(reason),
+    })
+}
+
+/// Build a reject (`AR`, Application Reject) for a frame Harux refuses
+/// outright, e.g. one above `mllp.max_message_size_mb` (#223). Default
+/// delimiters like the NACK; MSA-2 echoes `control_id` when it could be read
+/// (empty → `UNKNOWN`), `reason` goes into MSA-3.
+pub fn build_reject(control_id: &str, reason: &str) -> String {
+    render_ack(&AckSpec {
+        delimiters: Delimiters::default(),
+        receiving_application: "",
+        receiving_facility: "",
+        trigger_event: "",
+        processing_id: "",
+        version: "",
+        ack_code: "AR",
+        acknowledged_control_id: control_id,
         text: Some(reason),
     })
 }
@@ -743,6 +761,14 @@ mod tests {
         let res = parse_message("NOT MSH", "127.0.0.1:9999");
         let err = res.unwrap_err();
         assert!(err.starts_with("Message does not start with MSH"));
+    }
+
+    /// #222: the error text quotes the start of the payload by characters;
+    /// a byte cut inside `ä` (bytes 19..21) used to panic.
+    #[test]
+    fn test_non_msh_error_quotes_by_chars() {
+        let err = parse_message("Sehr geehrte Damen ä und Herren", "t").unwrap_err();
+        assert!(err.contains("Sehr geehrte Damen ä"), "{err}");
     }
 
     #[test]

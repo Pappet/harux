@@ -8,6 +8,7 @@ mod web;
 
 use config::Config;
 use mllp::MllpStats;
+use std::sync::atomic::Ordering;
 use store::MessageStore;
 use tracing::{info, warn};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
@@ -112,41 +113,71 @@ async fn main() -> anyhow::Result<()> {
     });
 
     // Wait for a shutdown signal or an unexpected server exit
+    let mut unexpected_exit = false;
     tokio::select! {
         _ = mllp_handle => {
             warn!("MLLP server stopped unexpectedly, initiating shutdown");
+            unexpected_exit = true;
         }
         _ = web_handle => {
             warn!("Web server stopped unexpectedly, initiating shutdown");
+            unexpected_exit = true;
         }
         _ = tokio::signal::ctrl_c() => {
             info!("Received Ctrl+C, shutting down gracefully");
+        }
+        _ = terminate_signal() => {
+            info!("Received SIGTERM, shutting down gracefully");
         }
     }
 
     let _ = shutdown_tx.send(true);
 
-    // Wait for active MLLP connections to drain (event-driven, no polling).
+    // Wait for active MLLP connections to drain — for the count to reach
+    // zero, not for a single (possibly stale) notification (#241).
     let shutdown_timeout = std::time::Duration::from_secs(config.server.shutdown_timeout_secs);
-    let active = stats
-        .active_connections
-        .load(std::sync::atomic::Ordering::Relaxed);
+    let active = stats.active_connections.load(Ordering::SeqCst);
     if active > 0 {
         info!(
             "Waiting up to {} seconds for {} MLLP connection(s) to drain...",
             config.server.shutdown_timeout_secs, active
         );
-        match tokio::time::timeout(shutdown_timeout, stats.drain_notify.notified()).await {
-            Ok(()) => info!("All MLLP connections drained"),
-            Err(_) => warn!(
+        if mllp::wait_for_drain(&stats, shutdown_timeout).await {
+            info!("All MLLP connections drained");
+        } else {
+            warn!(
                 "Shutdown timeout reached. Forcing exit with {} active connection(s)",
-                stats
-                    .active_connections
-                    .load(std::sync::atomic::Ordering::Relaxed)
-            ),
+                stats.active_connections.load(Ordering::SeqCst)
+            );
         }
     }
 
     info!("Harux stopped.");
+    if unexpected_exit {
+        // Non-zero exit so a service manager that restarts on failure does
+        // restart it (#224).
+        anyhow::bail!("a server task stopped unexpectedly");
+    }
     Ok(())
+}
+
+/// Resolves on SIGTERM — what `systemctl stop`, `docker stop` and `kill`
+/// send (#225). Never resolves on non-Unix platforms, where Ctrl+C is the
+/// shutdown signal.
+async fn terminate_signal() {
+    #[cfg(unix)]
+    {
+        use tokio::signal::unix::{signal, SignalKind};
+        match signal(SignalKind::terminate()) {
+            Ok(mut sig) => {
+                sig.recv().await;
+            }
+            Err(e) => {
+                warn!("Could not install the SIGTERM handler: {e}");
+                std::future::pending::<()>().await;
+            }
+        }
+    }
+    #[cfg(not(unix))]
+    std::future::pending::<()>().await;
 }

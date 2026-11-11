@@ -85,7 +85,9 @@ Limits are **config-driven** via `StoreConfig` (`src/config.rs`), not hardcoded 
 
 - Start: `0x0B` (VT, Vertical Tab)
 - End: `0x1C 0x0D` (FS + CR)
-- Max payload: 10 MB — connection closed immediately if exceeded
+- Max payload: `mllp.max_message_size_mb` (10 MB) — an over-limit frame is answered with `AR` (`build_reject`), stored as a parse-error entry holding only its first 4 KB, and the rest of the frame is skipped; the connection stays open (#223)
+- **Never lose a frame silently:** decode/parse run under `catch_unwind` (`ingest` in `src/mllp.rs`) — a panic becomes a stored parse error + NACK (#235). Messages are stored *before* the ACK/NACK is written. `active_connections` is maintained by `ConnectionGuard` (drop guard); shutdown waits via `mllp::wait_for_drain` on the count, not on a single `Notify` wake-up (#241). An `accept()` error is logged and retried, never fatal (#224)
+- Covered end to end by `tests/mllp_tcp.rs` (real TCP, ephemeral port via `mllp::serve`)
 - Read timeout: 60s, Write timeout: 30s
 - **ACK/NACK:** `build_ack` / `build_nack` are thin wrappers around `render_ack` (`src/hl7/parser.rs`) — change the MSH/MSA layout there only. ACKs reuse the sender's delimiters (echoed values stay valid) and get a fresh MSH-10; NACKs (unparseable frames) use default delimiters, MSA-2 `UNKNOWN` and an escaped MSA-3 reason
 - **ACK storm prevention:** incoming messages with `message_type.starts_with("ACK")` are stored but never ACK'd back. Violating this rule creates an infinite ACK ping-pong with Orchestra.
@@ -177,6 +179,7 @@ static/
 └── fonts/           # Self-hosted woff2 (Inter, JetBrains Mono)
 tests/
 ├── parser_fixtures.rs            # Parser tests against tests/messages/*.hl7 fixtures
+├── mllp_tcp.rs                   # MLLP over real TCP: framing, ACK/NACK, limits, shutdown
 ├── web_api.rs                    # Axum REST/handler integration tests
 ├── benchmark_concurrent_insert.rs # Concurrent store insert benchmark
 ├── messages/                     # .hl7 fixtures (valid / errors / unknown_types)

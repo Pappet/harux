@@ -9,6 +9,23 @@ and this project follows [Semantic Versioning](https://semver.org/lang/en/).
 
 ## [Unreleased]
 
+> Hardens the MLLP receive path: no frame is lost silently any more. Every frame Harux receives now ends up in the list and gets an answer, and shutdown waits for frames in flight.
+
+### Fixed
+- **Parser/validator panics on multi-byte characters** — `parse_message` quoted the start of a non-MSH payload with a byte slice (`src/hl7/parser.rs`), and `validate_ts` sliced a timestamp at byte 8 (`src/validation.rs`). A character such as `ä` across that offset panicked the connection task: no ACK, nothing stored, not counted. Both now work on character boundaries; a garbled TS is an `INVALID_DATATYPE` warning. (#222)
+- **A panic while processing a frame no longer drops it** — decoding and parsing run under `catch_unwind` (`ingest` in `src/mllp.rs`): a parser bug becomes a stored parse error plus NACK `AE`, and the connection stays open. `active_connections` is un-counted by a drop guard on every exit path, so it can no longer leak (it showed `113 / 100` after 113 panics and held shutdown until the timeout). (#235)
+- **Over-limit frames are answered and visible** — a frame above `mllp.max_message_size_mb` used to close the connection without reply, entry or counter. It is now answered with a reject (`AR`, MSA-2 from MSH-10 when readable, reason in MSA-3), stored as a parse-error entry holding only its first 4 KB, counted under `received` / `parse_errors`, and the rest of the frame is skipped — the connection stays usable. Complete frames above the limit are rejected the same way. (#223)
+- **A failed `accept()` no longer stops Harux** — errors such as `EMFILE` used to end the MLLP task and with it the whole process (exit code 0). They are now logged (first of a streak, and the recovery), resource errors back off 100 ms, and the listener keeps running. If a server task does end unexpectedly, Harux exits with a non-zero code. (#224)
+- **Graceful shutdown waits for frames in flight** — the drain waited for one `Notify` wake-up, and the permit stored by any earlier connection close made it return at once ("All MLLP connections drained" while a frame was still arriving). `mllp::wait_for_drain` now waits until the connection count is zero. (#241)
+- **SIGTERM triggers the graceful shutdown** (Unix) — `systemctl stop`, `docker stop` and `kill` used to end the process immediately. (#225)
+
+### Changed
+- **ACK after store** — a message is now stored before its ACK/NACK is written, so an ACK means the message is in the store.
+- **`mllp::serve`** accepts an already bound `TcpListener`; `start_mllp_server` binds and calls it.
+
+### Added
+- **MLLP integration tests over real TCP** — `tests/mllp_tcp.rs` (10 tests): ACK and stats, frames split across reads and batched in one write, NACK for unparseable frames, no reply to incoming ACKs, the #222 inputs, over-limit frames, the connection limit, the idle timeout, shutdown draining after an earlier connection, Latin-1 per MSH-18. (#245)
+
 ---
 
 ## [0.8.0] – 2026-11-10 – HL7 Conformance
