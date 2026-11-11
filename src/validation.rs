@@ -213,25 +213,30 @@ fn validate_oru_r01(msg: &Hl7Message, warnings: &mut Vec<ValidationWarning>) {
         warn_missing_segment(warnings, "OBR", ctx);
         return;
     };
-    // OBR-1: Set ID
-    // OBR-3: Filler Order Number (required in R01)
-    if field_value(obr, 3).is_none() {
-        warn_missing_field(warnings, "OBR", 3, "Filler Order Number", ctx);
+    // OBR-2 / OBR-3 (placer / filler order number) are conditional: one of
+    // the two identifies the order (#250).
+    if field_value(obr, 2).is_none() && field_value(obr, 3).is_none() {
+        warnings.push(ValidationWarning {
+            code: "MISSING_FIELD".into(),
+            message: format!(
+                "OBR-2 (Placer Order Number) or OBR-3 (Filler Order Number) is required for {ctx}"
+            ),
+            segment: "OBR".into(),
+            field: Some(3),
+        });
     }
     // OBR-4: Universal Service Identifier
     if field_value(obr, 4).is_none() {
         warn_missing_field(warnings, "OBR", 4, "Universal Service Identifier", ctx);
     }
 
-    // OBX is required (at least one observation)
-    if !has_segment(msg, "OBX") {
-        warn_missing_segment(warnings, "OBX", ctx);
-    }
-    // Validate each OBX
+    // ORU_R01 (v2.5.1): the OBSERVATION group is optional — an order-level
+    // result (status update, result in OBR/NTE) has OBR but no OBX (#250).
+    // Each OBX that is present is checked.
     for seg in msg.segments.iter().filter(|s| s.name == "OBX") {
-        // OBX-2: Value Type (NM, ST, CWE, etc.)
-        if field_value(seg, 2).is_none() {
-            warn_missing_field(warnings, "OBX", 2, "Value Type", ctx);
+        // OBX-2: Value Type — conditional, required when OBX-5 is valued.
+        if field_value(seg, 2).is_none() && field_value(seg, 5).is_some() {
+            warn_missing_field(warnings, "OBX", 2, "Value Type (OBX-5 is valued)", ctx);
         }
         // OBX-3: Observation Identifier
         if field_value(seg, 3).is_none() {
@@ -408,6 +413,9 @@ fn validate_nm(value: &str) -> Option<&'static str> {
     if v.is_empty() {
         return Some("expected a number (NM) but value contains only a sign character");
     }
+    if !v.bytes().any(|b| b.is_ascii_digit()) {
+        return Some("expected a number (NM) but value contains no digit");
+    }
     let mut dot_seen = false;
     for c in v.chars() {
         if c == '.' {
@@ -422,83 +430,115 @@ fn validate_nm(value: &str) -> Option<&'static str> {
     None
 }
 
-/// DT — Date: YYYY, YYYYMM, or YYYYMMDD — all digits, valid month/day ranges.
+/// DT — Date: YYYY, YYYYMM or YYYYMMDD, and a date that exists
+/// (`20240230` is not one — #238).
 fn validate_dt(value: &str) -> Option<String> {
-    if !value.chars().all(|c| c.is_ascii_digit()) {
+    if !value.bytes().all(|b| b.is_ascii_digit()) {
         return Some("expected a date (DT) in YYYY[MM[DD]] format".to_string());
     }
-    match value.len() {
-        4 => None,
-        6 => {
-            let month: u32 = value[4..6].parse().unwrap_or(0);
-            if !(1..=12).contains(&month) {
-                Some(format!(
-                    "expected a date (DT) but month '{}' is out of range 01–12",
-                    &value[4..6]
-                ))
-            } else {
-                None
-            }
-        }
-        8 => {
-            let month: u32 = value[4..6].parse().unwrap_or(0);
-            if !(1..=12).contains(&month) {
-                return Some(format!(
-                    "expected a date (DT) but month '{}' is out of range 01–12",
-                    &value[4..6]
-                ));
-            }
-            let day: u32 = value[6..8].parse().unwrap_or(0);
-            if !(1..=31).contains(&day) {
-                return Some(format!(
-                    "expected a date (DT) but day '{}' is out of range 01–31",
-                    &value[6..8]
-                ));
-            }
-            None
-        }
-        _ => Some(
+    // All ASCII digits from here on, so byte slicing is safe.
+    if !matches!(value.len(), 4 | 6 | 8) {
+        return Some(
             "expected a date (DT): length must be 4 (YYYY), 6 (YYYYMM), or 8 (YYYYMMDD)"
                 .to_string(),
-        ),
+        );
     }
+    if value.len() >= 6 {
+        let month: u32 = value[4..6].parse().unwrap_or(0);
+        if !(1..=12).contains(&month) {
+            return Some(format!(
+                "expected a date (DT) but month '{}' is out of range 01–12",
+                &value[4..6]
+            ));
+        }
+    }
+    if value.len() == 8 {
+        let year: i32 = value[..4].parse().unwrap_or(0);
+        let month: u32 = value[4..6].parse().unwrap_or(0);
+        let day: u32 = value[6..8].parse().unwrap_or(0);
+        if chrono::NaiveDate::from_ymd_opt(year, month, day).is_none() {
+            return Some(format!(
+                "expected a date (DT) but {}-{}-{} does not exist",
+                &value[..4],
+                &value[4..6],
+                &value[6..8]
+            ));
+        }
+    }
+    None
 }
 
-/// TS — Timestamp: YYYY[MM[DD[HH[MM[SS[.S+]]]]]][+/-HHMM].
-/// Strips fractional seconds and timezone suffix, then validates date portion.
+/// TS — Timestamp: `YYYY[MM[DD[HH[MM[SS[.S[S[S[S]]]]]]]]][+/-ZZZZ]` (#238):
+/// the date must exist, hours 00–23, minutes and seconds 00–59, a fraction
+/// of 1–4 digits only after the seconds, and an offset of exactly 4 digits.
 fn validate_ts(value: &str) -> Option<String> {
-    // Strip fractional seconds (everything after the first '.')
-    let without_frac = match value.find('.') {
-        Some(pos) => &value[..pos],
-        None => value,
+    let bad = |why: &str| {
+        Some(format!(
+            "expected a timestamp (TS) YYYY[MM[DD[HH[MM[SS[.SSSS]]]]]][+/-ZZZZ]: {why}"
+        ))
     };
-    // Strip timezone offset (+HHMM / -HHMM) — only search after position 8
-    // so a leading '-' in an unexpected value doesn't confuse the parser.
-    let not_a_timestamp =
-        || Some("expected a timestamp (TS) in YYYY[MM[DD[HH[MM[SS]]]]] format".to_string());
-    let core = if without_frac.len() > 8 {
-        // `get`, not `[8..]`: byte 8 can sit inside a multi-byte character,
-        // which is not a timestamp anyway — and must not panic (#222).
-        let Some(rest) = without_frac.get(8..) else {
-            return not_a_timestamp();
-        };
-        match rest.find(['+', '-']) {
-            Some(offset) => &without_frac[..8 + offset],
-            None => without_frac,
+    // Non-ASCII can't be a timestamp; checking first also keeps every byte
+    // slice below on a character boundary (#222).
+    if !value.is_ascii() {
+        return bad("contains non-ASCII characters");
+    }
+    // A sign after the year starts the time-zone offset.
+    let (main, offset) = match value.get(4..).and_then(|rest| rest.find(['+', '-'])) {
+        Some(i) => (&value[..4 + i], Some(&value[4 + i + 1..])),
+        None => (value, None),
+    };
+    let (digits, fraction) = match main.split_once('.') {
+        Some((d, f)) => (d, Some(f)),
+        None => (main, None),
+    };
+    if !digits.bytes().all(|b| b.is_ascii_digit()) {
+        return bad("not all digits");
+    }
+    if !matches!(digits.len(), 4 | 6 | 8 | 10 | 12 | 14) {
+        return bad(&format!(
+            "{} digits before the fraction/offset",
+            digits.len()
+        ));
+    }
+    if let Some(f) = fraction {
+        if digits.len() != 14 {
+            return bad("a fraction is only allowed after the seconds");
         }
-    } else {
-        without_frac
-    };
-    if core.len() < 4 || !core.chars().all(|c| c.is_ascii_digit()) {
-        return not_a_timestamp();
+        if f.is_empty() || f.len() > 4 || !f.bytes().all(|b| b.is_ascii_digit()) {
+            return bad("the fraction must be 1–4 digits");
+        }
     }
-    // Validate however much of the date is present
-    let date_len = core.len().min(8);
-    if date_len >= 6 {
-        validate_dt(&core[..date_len])
-    } else {
-        None // YYYY only — valid
+    if digits.len() >= 6 {
+        if let Some(err) = validate_dt(&digits[..digits.len().min(8)]) {
+            return Some(err.replacen("(DT)", "(TS)", 1));
+        }
     }
+    let two = |at: usize| digits[at..at + 2].parse::<u32>().unwrap_or(99);
+    if digits.len() >= 10 && two(8) > 23 {
+        return bad(&format!("hour '{}' is out of range 00–23", &digits[8..10]));
+    }
+    if digits.len() >= 12 && two(10) > 59 {
+        return bad(&format!(
+            "minute '{}' is out of range 00–59",
+            &digits[10..12]
+        ));
+    }
+    if digits.len() >= 14 && two(12) > 59 {
+        return bad(&format!(
+            "second '{}' is out of range 00–59",
+            &digits[12..14]
+        ));
+    }
+    if let Some(o) = offset {
+        let valid = o.len() == 4
+            && o.bytes().all(|b| b.is_ascii_digit())
+            && o[..2].parse::<u32>().unwrap_or(99) <= 23
+            && o[2..].parse::<u32>().unwrap_or(99) <= 59;
+        if !valid {
+            return bad("the time-zone offset must be +/-HHMM");
+        }
+    }
+    None
 }
 
 /// SI — Sequence ID: non-negative integer (digits only).
@@ -705,6 +745,93 @@ mod tests {
         assert!(datatype_warnings_for_pid7("1980-05ä")
             .iter()
             .any(|w| w.field == Some(7)));
+    }
+
+    /// #238: impossible dates and times, malformed fractions and offsets.
+    #[test]
+    fn dt_ts_reject_impossible_values() {
+        for bad in ["20240230", "19800231", "20230229", "20240431"] {
+            assert!(validate_dt(bad).is_some(), "DT {bad}");
+            assert!(validate_ts(bad).is_some(), "TS {bad}");
+        }
+        assert!(validate_dt("20240229").is_none(), "leap day 2024");
+        for bad in [
+            "20240101256199", // 25:61:99
+            "202401012400",   // hour 24
+            "202401011260",   // minute 60
+            "20240101120060", // second 60
+            "202401011",      // odd length
+            "2024010112.5",   // fraction before seconds
+            "20240101120000.12345",
+            "20240101120000.",
+            "20240101120000+05",
+            "20240101120000+2500",
+        ] {
+            assert!(validate_ts(bad).is_some(), "TS {bad}");
+        }
+        for ok in [
+            "2024",
+            "202401",
+            "20240229",
+            "2024010112",
+            "20240101235959.1234",
+            "20240101120000-0130",
+        ] {
+            assert!(validate_ts(ok).is_none(), "TS {ok}");
+        }
+        assert!(validate_nm(".").is_some(), "NM without a digit");
+        assert!(validate_nm("-.5").is_none());
+    }
+
+    /// The message from #238: both impossible values are reported.
+    #[test]
+    fn impossible_dates_in_a_message_are_reported() {
+        let w = warnings_for(
+            "MSH|^~\\&|KIS|KLINIK|RCV|RZ|20240230256199||ADT^A08|TSBAD|P|2.5\rEVN||20240101120000\r\
+             PID|||4711^^^H||Muster^Max||19800231|M\rPV1||I|W1\r",
+        );
+        for (seg, field) in [("MSH", 7), ("PID", 7)] {
+            assert!(
+                w.iter().any(|w| w.code == "INVALID_DATATYPE"
+                    && w.segment == seg
+                    && w.field == Some(field)),
+                "{seg}-{field}: {w:?}"
+            );
+        }
+    }
+
+    /// #250: an order-level result without OBX is valid; conditional
+    /// OBR-2/OBR-3 and OBX-2 rules.
+    #[test]
+    fn oru_without_obx_and_conditional_fields() {
+        let structural = |raw: &str| {
+            warnings_for(raw)
+                .into_iter()
+                .filter(|w| w.code == "MISSING_SEGMENT" || w.code == "MISSING_FIELD")
+                .map(|w| w.message)
+                .collect::<Vec<_>>()
+        };
+        let base =
+            "MSH|^~\\&|LAB|KLINIK|RCV|RZ|20240101120000||ORU^R01|X|P|2.5\rPID|||4711^^^H||M^M\r";
+        // OBR with filler number, no OBX.
+        assert!(structural(&format!("{base}OBR|1||F123|GLU^Glucose\r")).is_empty());
+        // Placer number only is enough.
+        assert!(structural(&format!("{base}OBR|1|P123||GLU^Glucose\r")).is_empty());
+        // Neither: reported.
+        assert_eq!(structural(&format!("{base}OBR|1|||GLU^Glucose\r")).len(), 1);
+        // OBX-2 only when OBX-5 is valued.
+        let obx_no_value = format!("{base}OBR|1||F1|GLU\rOBX|1||GLU^Glucose||||||||F\r");
+        assert!(
+            structural(&obx_no_value).is_empty(),
+            "{:?}",
+            structural(&obx_no_value)
+        );
+        let obx_value = format!("{base}OBR|1||F1|GLU\rOBX|1||GLU^Glucose||5.4||||||F\r");
+        assert_eq!(structural(&obx_value).len(), 1);
+        // No OBR at all is still a missing segment.
+        assert!(warnings_for(base)
+            .iter()
+            .any(|w| w.code == "MISSING_SEGMENT" && w.segment == "OBR"));
     }
 
     #[test]
