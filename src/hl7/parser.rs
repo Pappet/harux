@@ -23,10 +23,10 @@ fn parse_structure(raw: &str, source_addr: &str) -> Result<(Hl7Message, Delimite
 
     // HL7 messages must start with MSH
     if !raw.starts_with("MSH") {
-        return Err(format!(
-            "Message does not start with MSH: {:?}",
-            &raw[..raw.len().min(20)]
-        ));
+        // Quote by characters, not bytes: a byte cut could split a
+        // multi-byte character and panic (#222).
+        let start: String = raw.chars().take(20).collect();
+        return Err(format!("Message does not start with MSH: {start:?}"));
     }
 
     // Extract delimiters from MSH-1 (field sep) and MSH-2 (encoding chars)
@@ -372,6 +372,25 @@ pub fn build_nack(reason: &str) -> String {
     })
 }
 
+/// Build a reject (`AR`, Application Reject) for a frame Harux refuses
+/// outright, e.g. one above `mllp.max_message_size_mb` (#223). Written in
+/// `delimiters` — the sender's own when its MSH header could be read, like
+/// the ACK, so the sender can parse the reject; default delimiters otherwise.
+/// MSA-2 echoes `control_id` (empty → `UNKNOWN`), `reason` goes into MSA-3.
+pub fn build_reject(delimiters: Delimiters, control_id: &str, reason: &str) -> String {
+    render_ack(&AckSpec {
+        delimiters,
+        receiving_application: "",
+        receiving_facility: "",
+        trigger_event: "",
+        processing_id: "",
+        version: "",
+        ack_code: "AR",
+        acknowledged_control_id: control_id,
+        text: Some(reason),
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -692,6 +711,24 @@ mod tests {
         assert_eq!(field(&parsed, "MSA", 2), "UNKNOWN");
     }
 
+    /// #223 review: the reject uses the sender's delimiters, like the ACK.
+    #[test]
+    fn test_build_reject_uses_given_delimiters() {
+        let d = parse_message("MSH#*~\\&#APP#FAC###20240101##ADT*A01#C9", "t")
+            .unwrap()
+            .delimiters;
+        let reject = build_reject(d, "C9", "too big");
+        assert!(reject.starts_with("MSH#*~\\&#Harux#Harux#"), "{reject}");
+        assert!(!reject.contains('|'), "{reject}");
+        let parsed = parse_message(&reject, "t").unwrap();
+        assert_eq!(field(&parsed, "MSA", 1), "AR");
+        assert_eq!(field(&parsed, "MSA", 2), "C9");
+        assert_eq!(field(&parsed, "MSA", 3), "too big");
+
+        let default = build_reject(Delimiters::default(), "", "x");
+        assert!(default.contains("MSA|AR|UNKNOWN|x"), "{default}");
+    }
+
     #[test]
     fn test_nack_text_is_escaped() {
         let nack = build_nack("a|b^c&d~e\\f\r\ng");
@@ -743,6 +780,14 @@ mod tests {
         let res = parse_message("NOT MSH", "127.0.0.1:9999");
         let err = res.unwrap_err();
         assert!(err.starts_with("Message does not start with MSH"));
+    }
+
+    /// #222: the error text quotes the start of the payload by characters;
+    /// a byte cut inside `ä` (bytes 19..21) used to panic.
+    #[test]
+    fn test_non_msh_error_quotes_by_chars() {
+        let err = parse_message("Sehr geehrte Damen ä und Herren", "t").unwrap_err();
+        assert!(err.contains("Sehr geehrte Damen ä"), "{err}");
     }
 
     #[test]
