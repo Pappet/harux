@@ -37,6 +37,8 @@ Before a PR can be merged, the automated CI workflow will run the following chec
 4. `cargo test`
 5. `node --test 'tests/js/*.test.mjs'` — frontend logic (e.g. the diff pairing) loaded into `node:vm` with stubbed globals; no npm, no dependencies
 
+A separate workflow (`.github/workflows/audit.yml`) runs `cargo audit` when dependencies change and daily; `.cargo/audit.toml` lists ignored advisories, each with a reason. Dependabot proposes weekly crate and Actions updates.
+
 You must ensure your code satisfies these requirements locally before pushing.
 
 ## Commit & Changelog Workflow
@@ -74,7 +76,7 @@ Limits are **config-driven** via `StoreConfig` (`src/config.rs`), not hardcoded 
 
 ### HL7 Parsing (`src/hl7/`)
 
-- `parser.rs` — Parses raw HL7 text by extracting delimiters from the MSH segment, splitting on `\r`/`\n` into segments and segments into fields. Also builds ACK responses.
+- `parser.rs` — Parses raw HL7 text by extracting delimiters from the MSH segment, splitting on `\r`/`\n` into segments and segments into fields. Also builds ACK responses. Delimiters must be printable, distinct and not letters/digits; only leading whitespace is skipped, so every non-blank line of `raw` rebuilds its segment exactly — `tests/fuzz_ingest.rs` checks this, the ACK echo and "no panic" on mutated fixtures (#243).
 - **Field structure (#185):** repetitions (`~`), components (`^`), sub-components (`&`) and escapes (`\F\`, `\.br\`, …) are **derived from `Hl7Field::value` on demand**, using the message's own `Delimiters` (`Hl7Message::delimiters`, also copied into each `Hl7Segment`): `field.repetitions(d)`, `field.leaf(d, rep, comp, sub)` (escape-decoded, `Cow::Borrowed` when nothing to decode), `field.structure(d)`. Nothing structural is stored. The detail JSON gets each structured field's `repetitions` (`[rep][comp][sub]`, decoded) from `Hl7Segment`'s hand-written `Serialize`, plus the message's `delimiters` (`"|^~\\&"`); MSH-1/MSH-2 are never structured. Server-side readers (patient ID/name, datatype validation) use the first repetition / each repetition via these accessors — never `value.split('^')`.
 - `escape.rs` — HL7 escape sequences in both directions: `encode` (ACK MSA-3 text) and `decode` (display/analysis only; `value` and `raw` always stay as received).
 - `types.rs` — Data structures: `Hl7Message`, `Hl7MessageSummary`, `Hl7Segment`, `Hl7Field`, `Delimiters`.
@@ -186,6 +188,7 @@ static/
 tests/
 ├── parser_fixtures.rs            # Parser tests against tests/messages/*.hl7 fixtures
 ├── mllp_tcp.rs                   # MLLP over real TCP: framing, ACK/NACK, limits, shutdown
+├── fuzz_ingest.rs                # Mutation fuzz of decode → parse → ACK → JSON, no panic + invariants (#243)
 ├── config_startup.rs             # Real binary refuses to start on a broken harux.toml / port variable
 ├── web_api.rs                    # Axum REST/handler integration tests
 ├── js/                           # node:test tests for static/*.js (node --test 'tests/js/*.test.mjs')

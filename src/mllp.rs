@@ -383,8 +383,8 @@ async fn process_frame(
 /// Turn a frame's bytes into the message to store: parsed, or — when parsing
 /// fails *or panics* — a failed message carrying `parse_error`. Never panics
 /// (#235): a parser bug becomes a visible parse error and a NACK instead of a
-/// silently dropped connection.
-fn ingest(payload: &[u8], peer: &str) -> Hl7Message {
+/// silently dropped connection. Public for `tests/fuzz_ingest.rs` (#243).
+pub fn ingest(payload: &[u8], peer: &str) -> Hl7Message {
     ingest_with(payload, peer, parse_message)
 }
 

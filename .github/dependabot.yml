@@ -1,0 +1,19 @@
+# Weekly update proposals for Rust crates and GitHub Actions (#244).
+# Each update arrives as a pull request and passes the normal CI.
+version: 2
+updates:
+  - package-ecosystem: cargo
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      # Semver-compatible updates in one PR instead of one per crate.
+      minor-and-patch:
+        update-types: [minor, patch]
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5

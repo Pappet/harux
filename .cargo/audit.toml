@@ -1,0 +1,17 @@
+# cargo-audit configuration (#244). Read by `cargo audit` from this
+# repository and by .github/workflows/audit.yml.
+
+[advisories]
+# Each ignored advisory needs a reason and is reviewed when its crate changes.
+ignore = [
+    # pin-utils 0.1.0 is unmaintained; it comes in through hyper 1.x (axum)
+    # and has no successor release. No security impact: it only provides
+    # pin-projection macros. Drop this entry once hyper stops using it.
+    "RUSTSEC-2026-0441",
+]
+
+[output]
+# Vulnerabilities always fail. Unsound and yanked crates fail too; other
+# warnings (unmaintained, notices) are reported without failing.
+deny = ["unsound", "yanked"]
+quiet = false
