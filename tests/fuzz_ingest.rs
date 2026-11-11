@@ -139,9 +139,26 @@ fn field<'a>(msg: &'a Hl7Message, segment: &str, index: usize) -> Option<&'a str
 /// `Err` describes a broken property; a panic propagates.
 fn check(payload: &[u8]) -> Result<(), String> {
     let decoded = decode_payload(payload);
+
+    // What is stored for every frame, parsed or not: `ingest` builds the
+    // parse-error entry for a failed frame (#235). Size accounting, the list
+    // summary, JSON and the export's bytes must work for both.
+    let stored = ingest(payload, "127.0.0.1:1");
+    let _ = stored.estimated_bytes();
+    let _ = Hl7MessageSummary::new(&stored, &MessageMeta::default());
+    serde_json::to_string(&stored).map_err(|e| format!("JSON of the stored entry: {e}"))?;
+    if stored.wire_bytes().as_ref() != payload {
+        return Err("wire_bytes() differs from the received payload".into());
+    }
+
     let msg = match parse_message(&decoded.text, "127.0.0.1:1") {
         Ok(msg) => msg,
         Err(reason) => {
+            if stored.parse_error.is_none() {
+                return Err(format!(
+                    "ingest stored a parsed message, parse_message failed: {reason}"
+                ));
+            }
             let nack = build_nack(&reason);
             parse_message(&nack, "127.0.0.1:1").map_err(|e| format!("NACK unparseable: {e}"))?;
             return Ok(());
@@ -192,13 +209,10 @@ fn check(payload: &[u8]) -> Result<(), String> {
         }
     }
 
-    let _ = msg.estimated_bytes();
-    let _ = Hl7MessageSummary::new(&msg, &MessageMeta::default());
-    serde_json::to_string(&msg).map_err(|e| format!("JSON: {e}"))?;
-
-    let stored = ingest(payload, "127.0.0.1:1");
-    if stored.wire_bytes().as_ref() != payload {
-        return Err("wire_bytes() differs from the received payload".into());
+    if let Some(e) = &stored.parse_error {
+        return Err(format!(
+            "parse_message succeeded, ingest stored a parse error: {e}"
+        ));
     }
     Ok(())
 }

@@ -566,9 +566,6 @@ mod tests {
         );
     }
 
-    /// Contract the UI's "copy segment" relies on now that segments carry no
-    /// text of their own (#180): segment `i` is the `i`-th non-blank line of
-    /// `raw` when split on `\r` / `\n` (see `segmentLines` in static/app.js).
     /// #243 (found by tests/fuzz_ingest.rs): a letter or digit where a
     /// delimiter belongs is a damaged header. Accepting it split `MSHARM|…`
     /// at every `A`, and the ACK — in those delimiters — lost `UNKNOWN`.
@@ -601,6 +598,10 @@ mod tests {
         assert_eq!(al1.fields.last().unwrap().value, "PENICILLIN ");
     }
 
+    /// Contract the UI's "copy segment" relies on now that segments carry no
+    /// text of their own (#180): segment `i` is the `i`-th non-blank line of
+    /// `raw` when split on `\r` / `\n` (see `segmentLines` in static/app.js).
+    /// `tests/fuzz_ingest.rs` checks the same on mutated input (#243).
     #[test]
     fn test_segments_match_nonblank_raw_lines() {
         let raw = "MSH|^~\\&|A|B|C|D|20240101||ADT^A01|1|P|2.5\r\nPID|||1\n\nPV1||I\r";
