@@ -251,8 +251,11 @@ impl Config {
         // Two listeners can share a port only on different addresses; an
         // unspecified address (0.0.0.0, ::) overlaps every other one.
         let (m, w) = (self.server.mllp_addr(), self.server.web_addr());
+        // `::ffff:127.0.0.1` is 127.0.0.1, hence the canonical form.
         if m.port() == w.port()
-            && (m.ip() == w.ip() || m.ip().is_unspecified() || w.ip().is_unspecified())
+            && (m.ip().to_canonical() == w.ip().to_canonical()
+                || m.ip().is_unspecified()
+                || w.ip().is_unspecified())
         {
             problems.push(format!(
                 "server.mllp_port and server.web_port are both {} on overlapping \
@@ -263,11 +266,11 @@ impl Config {
             ));
         }
         if let Some(file) = self.logging.file.as_deref().filter(|f| !f.is_empty()) {
-            // "logs/" would log to ./logs.YYYY-MM-DD next to the directory.
-            let names_a_file = !file.ends_with(['/', '\\'])
-                && std::path::Path::new(file)
-                    .file_name()
-                    .is_some_and(|n| n != "." && n != "..");
+            // "logs/" or "logs/." would log to ./logs.YYYY-MM-DD next to the
+            // directory: the text after the last separator must be a name.
+            // (`Path` normalizes a trailing "." away, so check the text.)
+            let last = file.rsplit(['/', '\\']).next().unwrap_or_default();
+            let names_a_file = !matches!(last, "" | "." | "..");
             if !names_a_file {
                 problems.push(format!(
                     "logging.file {file:?} must name a file, e.g. \"logs/harux.log\""
@@ -598,11 +601,16 @@ mllp_port = 4000
         let two = "[server]\nmllp_port = 9000\nweb_port = 9000\nmllp_bind = \"127.0.0.1\"\n";
         assert!(load(&format!("{two}web_bind = \"127.0.0.2\"\n"), &[]).is_ok());
         assert!(load(&format!("{two}web_bind = \"::1\"\n"), &[]).is_ok());
+        let mapped = load(&format!("{two}web_bind = \"::ffff:127.0.0.1\"\n"), &[]).unwrap_err();
+        assert!(
+            mapped.contains("both 9000"),
+            "IPv4-mapped is the same address: {mapped}"
+        );
         for overlapping in ["127.0.0.1", "0.0.0.0", "::"] {
             let err = load(&format!("{two}web_bind = \"{overlapping}\"\n"), &[]).unwrap_err();
             assert!(err.contains("both 9000"), "{overlapping}: {err}");
         }
-        for dir in ["logs/", "logs\\\\", ".", "logs/.."] {
+        for dir in ["logs/", "logs\\\\", ".", "logs/..", "logs/.", "logs\\\\."] {
             let err = load(&format!("[logging]\nfile = \"{dir}\"\n"), &[]).unwrap_err();
             assert!(err.contains("must name a file"), "{dir}: {err}");
         }

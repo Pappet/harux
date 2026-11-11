@@ -95,9 +95,10 @@ async fn main() -> anyhow::Result<()> {
         let mllp_line = format!("  MLLP Server:  {mllp_addr}  ");
         // An address a browser can open: localhost when the UI listens on
         // every interface or on loopback.
-        let web_url = if web_addr.ip() == std::net::Ipv6Addr::LOCALHOST {
-            format!("http://{web_addr}")
-        } else if web_addr.ip().is_unspecified() || web_addr.ip().is_loopback() {
+        // localhost only when the UI listens on every interface; a specific
+        // address (127.0.0.2, ::1, …) is shown as is, since localhost may
+        // not reach it.
+        let web_url = if web_addr.ip().is_unspecified() {
             format!("http://localhost:{}", web_addr.port())
         } else {
             format!("http://{web_addr}")
