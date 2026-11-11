@@ -9,7 +9,7 @@ and this project follows [Semantic Versioning](https://semver.org/lang/en/).
 
 ## [Unreleased]
 
-> Hardens Harux against what it receives and who talks to it: no MLLP frame is lost silently any more (every frame is stored and answered, shutdown waits for frames in flight), the web UI refuses requests made by other sites, and `store.max_memory_mb` now bounds real memory instead of an estimate a tenth of it.
+> Hardens Harux against what it receives and who talks to it: no MLLP frame is lost silently any more (every frame is stored and answered, shutdown waits for frames in flight), the web UI refuses requests made by other sites, `store.max_memory_mb` now bounds real memory instead of an estimate a tenth of it, and the diff and validation no longer report correct or different messages wrongly.
 
 ### Upgrade Notes
 - **The store now holds fewer messages for the same `store.max_memory_mb`**, because it counts what they really cost. With ordinary ADT traffic the 512 MB default fits roughly 37,000 messages, so the 10,000-message count limit still applies first; deployments that raised `store.max_messages` and relied on the byte limit now get the memory they configured. (#226)
@@ -19,6 +19,7 @@ and this project follows [Semantic Versioning](https://semver.org/lang/en/).
 - **Cross-site requests are refused** — the web server did not check where a browser request came from, so any page open in a user's browser could read the live feed over the WebSocket (`Origin` was never checked), empty the store with a cross-site `POST /api/clear`, and — via DNS rebinding — read the REST API. A new middleware (`guard_cross_site`, `src/web.rs`) now refuses with `403`: requests whose `Host` is not an IP literal, `localhost` or a name in the new `server.allowed_hosts`; and, on `/ws` and every state-changing method, an `Origin` that is not this server. Requests without `Origin` (curl, scripts) are unaffected. `server.allowed_hosts` entries with a port, scheme or path are warned about at startup, and a trailing dot (`harux.klinik.local.`) matches. The CSP gains `frame-ancestors 'none'`, and `X-Content-Type-Options: nosniff` is sent. (#227)
 
 ### Fixed
+- **Diff compares every occurrence of a segment** — the diff paired segments by name and compared only the first of each, so two ORU^R01 that differed only in their second OBX (potassium 4.1 vs. 7.9) were reported as "✓ Messages are identical". Segments are now paired by name *and* occurrence (`pairSegments` in `static/diff.js`): OBX[1] with OBX[1], OBX[2] with OBX[2]; repeating segments are labelled `OBX[2]`. An occurrence present on one side only counts as a difference ("1 segment only in one message"), so messages with a different number of OBX are never "identical". (#228)
 - **Validation no longer flags standard-conformant messages** — some rules were stricter than the HL7 v2.5.1 message definitions, and two of them raised `MISSING_SEGMENT` (the red badge) on correct messages (#229):
   - `ORM^O01` required PID and OBR. The patient group is optional and the order detail is a choice (OBR, RXO, RQD, …), so a pharmacy order with `ORC` + `RXO` was flagged red. Only `ORC` (with ORC-1) is required now; `OML^O21` likewise.
   - `ADT^A20` (bed status: MSH, EVN, NPU) required PID; it now requires NPU instead. `ADT^A19` (query) is no longer checked for PID.

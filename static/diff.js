@@ -1,5 +1,6 @@
 // Segment-by-segment diff view. Compares the currently selected message
-// against `state.diffPinnedMessage`. Split into focused builders so that
+// against `state.diffPinnedMessage`, pairing segments by name and
+// occurrence (OBX[1] with OBX[1], OBX[2] with OBX[2], … — #228). Split into focused builders so that
 // adding more diff capabilities (issue #139 / F4 follow-ups) stays cheap.
 
 function buildDiffHeader(msgA, msgB) {
@@ -20,8 +21,8 @@ function buildDiffHeader(msgA, msgB) {
 // Render one field comparison row. Returns either the HTML for the row or
 // `null` if the row should be skipped (dynamic field hidden). The `stats`
 // object is mutated in place to accumulate counts.
-function buildDiffFieldRow(segName, idx, fA, fB, ignoreDynamic, stats) {
-    const fieldKey = `${segName}-${idx}`;
+function buildDiffFieldRow(segName, label, idx, fA, fB, ignoreDynamic, stats) {
+    const fieldKey = `${segName}-${idx}`; // dynamic-field lookup ignores the occurrence
     const vA = fA ? fA.value : '';
     const vB = fB ? fB.value : '';
     const changed = vA !== vB;
@@ -40,13 +41,13 @@ function buildDiffFieldRow(segName, idx, fA, fB, ignoreDynamic, stats) {
     const descHtml = desc ? ' <span class="diff-desc">' + esc(desc) + '</span>' : '';
     return `
         <tr class="${rowClass}">
-            <td class="diff-field-name" title="${escAttr(desc)}">${esc(segName)}-${idx}${descHtml}</td>
+            <td class="diff-field-name" title="${escAttr(desc)}">${esc(label)}-${idx}${descHtml}</td>
             <td class="diff-val diff-val-a ${changed ? 'diff-changed' : ''}">${esc(vA) || '<span class="field-empty">empty</span>'}</td>
             <td class="diff-val diff-val-b ${changed ? 'diff-changed' : ''}">${esc(vB) || '<span class="field-empty">empty</span>'}</td>
         </tr>`;
 }
 
-function buildDiffSegmentBlock(segName, segA, segB, ignoreDynamic, stats) {
+function buildDiffSegmentBlock(segName, label, segA, segB, ignoreDynamic, stats) {
     // Collect all field indices (union)
     const allIdxs = new Set();
     (segA ? segA.fields : []).forEach(f => allIdxs.add(f.index));
@@ -65,12 +66,15 @@ function buildDiffSegmentBlock(segName, segA, segB, ignoreDynamic, stats) {
     for (const idx of sortedIdxs) {
         const fA = segA ? segA.fields.find(f => f.index === idx) : null;
         const fB = segB ? segB.fields.find(f => f.index === idx) : null;
-        const rowHtml = buildDiffFieldRow(segName, idx, fA, fB, ignoreDynamic, segStats);
+        const rowHtml = buildDiffFieldRow(segName, label, idx, fA, fB, ignoreDynamic, segStats);
         if (rowHtml !== null) rows += rowHtml;
     }
 
     stats.totalDiffs += segStats.totalDiffs;
     stats.hiddenDynamic += segStats.hiddenDynamic;
+    // A segment present on one side only is a difference in itself, even if
+    // all its fields are empty (#228).
+    if (missingA || missingB) stats.missingSegments++;
 
     const onlyInCurrent = missingA ? '<span class="diff-missing-badge">only in current</span>' : '';
     const onlyInRef = missingB ? '<span class="diff-missing-badge">only in reference</span>' : '';
@@ -78,7 +82,7 @@ function buildDiffSegmentBlock(segName, segA, segB, ignoreDynamic, stats) {
     return `
         <div class="diff-segment-block${segStats.segHasDiff ? ' has-diff' : ''}">
             <div class="diff-segment-name ${segClass}">
-                ${esc(segName)}
+                ${esc(label)}
                 ${onlyInCurrent}
                 ${onlyInRef}
             </div>
@@ -93,11 +97,60 @@ function buildDiffSegmentBlock(segName, segA, segB, ignoreDynamic, stats) {
         </div>`;
 }
 
-function buildDiffSummary(totalDiffs, hiddenDynamic) {
+function buildDiffSummary(totalDiffs, missingSegments, hiddenDynamic) {
     const hiddenNote = hiddenDynamic > 0 ? ` (${hiddenDynamic} dynamic hidden)` : '';
-    return totalDiffs === 0
-        ? `<div class="diff-summary same">&#10003; Messages are identical${hiddenNote}</div>`
-        : `<div class="diff-summary changed">&#9651; ${totalDiffs} field difference${totalDiffs > 1 ? 's' : ''} found${hiddenNote}</div>`;
+    if (totalDiffs === 0 && missingSegments === 0) {
+        return `<div class="diff-summary same">&#10003; Messages are identical${hiddenNote}</div>`;
+    }
+    const parts = [];
+    if (totalDiffs > 0) parts.push(`${totalDiffs} field difference${totalDiffs > 1 ? 's' : ''}`);
+    if (missingSegments > 0) parts.push(`${missingSegments} segment${missingSegments > 1 ? 's' : ''} only in one message`);
+    return `<div class="diff-summary changed">&#9651; ${parts.join(', ')} found${hiddenNote}</div>`;
+}
+
+// Pair segments by name *and occurrence* (#228): the n-th OBX of the
+// reference with the n-th OBX of the current message. Pairs keep the
+// reference's order; an occurrence only the current message has is placed
+// after the last pair of the same name (or at the end). Repeating names are
+// labelled `OBX[2]`, single ones keep their plain name.
+function pairSegments(segsA, segsB) {
+    const withOccurrence = (segs) => {
+        const seen = new Map();
+        return segs.map(seg => {
+            const n = (seen.get(seg.name) || 0) + 1;
+            seen.set(seg.name, n);
+            return { seg, n, key: `${seg.name}#${n}` };
+        });
+    };
+    const a = withOccurrence(segsA);
+    const b = withOccurrence(segsB);
+    const bByKey = new Map(b.map(x => [x.key, x]));
+    const maxCount = new Map();
+    for (const x of [...a, ...b]) {
+        maxCount.set(x.seg.name, Math.max(maxCount.get(x.seg.name) || 0, x.n));
+    }
+
+    const pairs = a.map(x => ({
+        name: x.seg.name,
+        n: x.n,
+        segA: x.seg,
+        segB: bByKey.has(x.key) ? bByKey.get(x.key).seg : null,
+    }));
+    const inA = new Set(a.map(x => x.key));
+    for (const y of b) {
+        if (inA.has(y.key)) continue;
+        const pair = { name: y.seg.name, n: y.n, segA: null, segB: y.seg };
+        let at = -1;
+        for (let i = pairs.length - 1; i >= 0; i--) {
+            if (pairs[i].name === y.seg.name) { at = i; break; }
+        }
+        if (at >= 0) pairs.splice(at + 1, 0, pair);
+        else pairs.push(pair);
+    }
+    for (const p of pairs) {
+        p.label = maxCount.get(p.name) > 1 ? `${p.name}[${p.n}]` : p.name;
+    }
+    return pairs;
 }
 
 function buildDiffOptionsBar() {
@@ -118,35 +171,15 @@ function renderDiffTab(container, msgB) {
         return;
     }
 
-    const segsA = msgA.segments || [];
-    const segsB = msgB.segments || [];
-
-    // Collect all segment names (union, preserving order: A first, then B-only).
-    // Diff is pairing-by-first-occurrence — multi-segment messages compare
-    // only the first instance of each name.
-    const allSegNames = [];
-    const seen = new Set();
-    [...segsA, ...segsB].forEach(s => {
-        if (!seen.has(s.name)) {
-            seen.add(s.name);
-            allSegNames.push(s.name);
-        }
-    });
-
-    const findFirstSeg = (segs, name) => segs.find(s => s.name === name);
-
-    const stats = { totalDiffs: 0, hiddenDynamic: 0 };
+    const stats = { totalDiffs: 0, missingSegments: 0, hiddenDynamic: 0 };
     let segmentsHtml = '';
-    for (const segName of allSegNames) {
-        const segA = findFirstSeg(segsA, segName);
-        const segB = findFirstSeg(segsB, segName);
-        if (!segA && !segB) continue;
-        segmentsHtml += buildDiffSegmentBlock(segName, segA, segB, state.diffIgnoreDynamic, stats);
+    for (const p of pairSegments(msgA.segments || [], msgB.segments || [])) {
+        segmentsHtml += buildDiffSegmentBlock(p.name, p.label, p.segA, p.segB, state.diffIgnoreDynamic, stats);
     }
 
     container.innerHTML =
         buildDiffHeader(msgA, msgB) +
-        buildDiffSummary(stats.totalDiffs, stats.hiddenDynamic) +
+        buildDiffSummary(stats.totalDiffs, stats.missingSegments, stats.hiddenDynamic) +
         buildDiffOptionsBar() +
         segmentsHtml;
 }
