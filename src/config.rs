@@ -21,6 +21,11 @@ pub struct ServerConfig {
     pub mllp_port: u16,
     pub web_port: u16,
     pub shutdown_timeout_secs: u64,
+    /// Host names (without port) the web UI may be reached under, in
+    /// addition to IP literals and `localhost`, which are always allowed.
+    /// Requests with any other `Host` are refused, which blocks DNS
+    /// rebinding (#227). Add the DNS name users type into the browser.
+    pub allowed_hosts: Vec<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -65,6 +70,7 @@ impl Default for ServerConfig {
             mllp_port: 2575,
             web_port: 8080,
             shutdown_timeout_secs: 10,
+            allowed_hosts: Vec::new(),
         }
     }
 }
@@ -214,6 +220,15 @@ impl std::fmt::Display for Config {
             "  Shutdown timeout:   {}s",
             self.server.shutdown_timeout_secs
         )?;
+        writeln!(
+            f,
+            "  Allowed web hosts:  IP addresses, localhost{}",
+            self.server
+                .allowed_hosts
+                .iter()
+                .map(|h| format!(", {h}"))
+                .collect::<String>()
+        )?;
         writeln!(f, "  Log level:          {}", self.logging.level)?;
         if let Some(file) = &self.logging.file {
             writeln!(f, "  File log:           {} (daily rotation)", file)?;
@@ -284,6 +299,7 @@ mod tests {
 mllp_port = 3000
 web_port = 9090
 shutdown_timeout_secs = 5
+allowed_hosts = ["harux.klinik.local"]
 
 [logging]
 level = "debug"
@@ -304,6 +320,7 @@ max_connections = 50
         assert_eq!(config.server.mllp_port, 3000);
         assert_eq!(config.server.web_port, 9090);
         assert_eq!(config.server.shutdown_timeout_secs, 5);
+        assert_eq!(config.server.allowed_hosts, ["harux.klinik.local"]);
         assert_eq!(config.logging.level, "debug");
         assert_eq!(config.logging.file.as_deref(), Some("logs/test.log"));
         assert_eq!(config.store.max_messages, 5000);

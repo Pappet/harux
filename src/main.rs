@@ -95,6 +95,7 @@ async fn main() -> anyhow::Result<()> {
         stats: stats.clone(),
         mllp_port,
         max_connections: config.mllp.max_connections,
+        allowed_hosts: std::sync::Arc::new(config.server.allowed_hosts.clone()),
     };
     let app = create_router(app_state);
     let web_addr = format!("0.0.0.0:{}", web_port);

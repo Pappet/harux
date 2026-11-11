@@ -17,6 +17,7 @@ fn make_state() -> AppState {
         stats: MllpStats::new(),
         mllp_port: 2575,
         max_connections: 10,
+        allowed_hosts: std::sync::Arc::new(vec!["harux.klinik.local".to_string()]),
     }
 }
 
@@ -582,4 +583,128 @@ async fn ws_endpoint_is_registered() {
         .unwrap();
     assert_ne!(res.status(), StatusCode::NOT_FOUND);
     assert_ne!(res.status(), StatusCode::METHOD_NOT_ALLOWED);
+}
+
+// ── Cross-site guard (#227) ───────────────────────────────────────────────────
+
+fn ws_upgrade(origin: Option<&str>) -> Request<Body> {
+    let mut b = Request::builder()
+        .uri("/ws")
+        .header("host", "10.1.2.3:8080")
+        .header("connection", "upgrade")
+        .header("upgrade", "websocket")
+        .header("sec-websocket-version", "13")
+        .header("sec-websocket-key", "dGhlIHNhbXBsZSBub25jZQ==");
+    if let Some(o) = origin {
+        b = b.header("origin", o);
+    }
+    b.body(Body::empty()).unwrap()
+}
+
+#[tokio::test]
+async fn ws_with_foreign_origin_is_refused() {
+    let res = create_router(make_state())
+        .oneshot(ws_upgrade(Some("https://evil.example")))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+async fn ws_same_origin_or_without_origin_passes_the_guard() {
+    for origin in [
+        Some("http://10.1.2.3:8080"),
+        Some("https://harux.klinik.local"),
+        None,
+    ] {
+        let res = create_router(make_state())
+            .oneshot(ws_upgrade(origin))
+            .await
+            .unwrap();
+        assert_ne!(res.status(), StatusCode::FORBIDDEN, "{origin:?}");
+        assert_ne!(res.status(), StatusCode::NOT_FOUND, "{origin:?}");
+    }
+}
+
+async fn clear_with(state: AppState, origin: Option<&str>) -> StatusCode {
+    let mut b = Request::builder()
+        .method(Method::POST)
+        .uri("/api/clear")
+        .header("host", "10.1.2.3:8080")
+        .header("content-type", "text/plain");
+    if let Some(o) = origin {
+        b = b.header("origin", o);
+    }
+    create_router(state)
+        .oneshot(b.body(Body::empty()).unwrap())
+        .await
+        .unwrap()
+        .status()
+}
+
+#[tokio::test]
+async fn cross_origin_clear_is_refused_and_store_kept() {
+    let state = make_state();
+    state
+        .store
+        .insert(Hl7Message::new_empty(simple_raw(), "127.0.0.1".into()))
+        .await;
+    for origin in ["https://evil.example", "null", "http://10.1.2.3:9999"] {
+        assert_eq!(
+            clear_with(state.clone(), Some(origin)).await,
+            StatusCode::FORBIDDEN,
+            "{origin}"
+        );
+    }
+    assert_eq!(state.store.count().await, 1, "store must not be cleared");
+
+    assert_eq!(
+        clear_with(state.clone(), Some("http://10.1.2.3:8080")).await,
+        StatusCode::OK
+    );
+    assert_eq!(
+        clear_with(state.clone(), None).await,
+        StatusCode::OK,
+        "curl/scripts"
+    );
+}
+
+#[tokio::test]
+async fn unknown_host_is_refused() {
+    for (host, expected) in [
+        ("attacker-controlled.example", StatusCode::FORBIDDEN),
+        ("attacker-controlled.example:8080", StatusCode::FORBIDDEN),
+        ("10.1.2.3:8080", StatusCode::OK),
+        ("localhost:8080", StatusCode::OK),
+        ("harux.klinik.local:8080", StatusCode::OK),
+    ] {
+        let res = create_router(make_state())
+            .oneshot(
+                Request::builder()
+                    .uri("/api/messages")
+                    .header("host", host)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(res.status(), expected, "{host}");
+    }
+}
+
+#[tokio::test]
+async fn security_headers_are_set() {
+    let res = create_router(make_state())
+        .oneshot(
+            Request::builder()
+                .uri("/")
+                .header("host", "127.0.0.1:8080")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let csp = res.headers()["content-security-policy"].to_str().unwrap();
+    assert!(csp.contains("frame-ancestors 'none'"), "{csp}");
+    assert_eq!(res.headers()["x-content-type-options"], "nosniff");
 }

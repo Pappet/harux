@@ -94,6 +94,8 @@ Limits are **config-driven** via `StoreConfig` (`src/config.rs`), not hardcoded 
 
 ### Web API Routes
 
+**Cross-site guard (#227):** every request passes `guard_cross_site` (`src/web.rs`): `Host` must be an IP literal, `localhost` or a name in `server.allowed_hosts`; on `/ws` and all non-GET routes an `Origin` header, if present, must name this server. Keep new state-changing routes non-GET so they stay covered. Tests that build requests with a `Host` header must use an allowed one.
+
 - `GET /api/messages?offset=&limit=` — Paginated message list (newest first; `limit` capped at 1000)
 - `GET /api/messages/{id}` — Full message with segments
 - `GET /api/search?q=&limit=` — Search messages server-side. **Note:** the UI currently filters client-side (`matchesSearch()`); this endpoint exists but is not yet wired into the frontend.

@@ -9,6 +9,12 @@ and this project follows [Semantic Versioning](https://semver.org/lang/en/).
 
 ## [Unreleased]
 
+### Security
+- **Cross-site requests are refused** — the web server did not check where a browser request came from, so any page open in a user's browser could read the live feed over the WebSocket (`Origin` was never checked), empty the store with a cross-site `POST /api/clear`, and — via DNS rebinding — read the REST API. A new middleware (`guard_cross_site`, `src/web.rs`) now refuses with `403`: requests whose `Host` is not an IP literal, `localhost` or a name in the new `server.allowed_hosts`; and, on `/ws` and every state-changing method, an `Origin` that is not this server. Requests without `Origin` (curl, scripts) are unaffected. The CSP gains `frame-ancestors 'none'`, and `X-Content-Type-Options: nosniff` is sent. (#227)
+
+### Upgrade Notes
+- If users open the UI by DNS name (e.g. `http://harux.klinik.local:8080`), add that name to `server.allowed_hosts` in `harux.toml`; otherwise the browser gets `403 Host not allowed`. IP addresses and `localhost` always work. (#227)
+
 > Hardens the MLLP receive path: no frame is lost silently any more. Every frame Harux receives now ends up in the list and gets an answer, and shutdown waits for frames in flight.
 
 ### Fixed
