@@ -98,7 +98,7 @@ Limits are **config-driven** via `StoreConfig` (`src/config.rs`), not hardcoded 
 
 **Cross-site guard (#227):** every request passes `guard_cross_site` (`src/web.rs`): `Host` must be an IP literal, `localhost` or a name in `server.allowed_hosts`; on `/ws` and all non-GET routes an `Origin` header, if present, must name this server. `allowed_hosts` entries are names only (no port/scheme; a trailing dot is ignored) — bad entries are warned about at startup. Keep new state-changing routes non-GET so they stay covered. Tests that build requests with a `Host` header must use an allowed one.
 
-- `GET /api/messages?offset=&limit=&include_bookmarks=` — Paginated message list (newest first; `limit` capped at 1000). `include_bookmarks=true` adds every bookmarked message older than the page, in the same order — the UI loads with it so bookmarks survive a reload (#231)
+- `GET /api/messages?offset=&limit=&include_bookmarks=` — Paginated message list (newest first; `limit` capped at 1000). `include_bookmarks=true` (also `1` / `yes`) adds every bookmarked message older than the page, in the same order — the UI loads with it so bookmarks survive a reload (#231)
 - `GET /api/messages/{id}` — Full message with segments
 - `GET /api/search?q=&limit=` — Search messages server-side. **Note:** the UI currently filters client-side (`matchesSearch()`); this endpoint exists but is not yet wired into the frontend.
 - `GET /api/stats` — Server statistics

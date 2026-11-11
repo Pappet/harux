@@ -76,6 +76,8 @@ function handleServerEvent(data, known = null) {
     } else if (data.type === 'cleared') {
         if (known) known.clear();
         applyCleared();
+    } else {
+        console.debug('Ignoring unknown server event type', data.type);
     }
 }
 
@@ -322,6 +324,10 @@ async function loadMessages() {
     const known = new Set(state.messages.map(m => m.id));
     for (const m of state.pendingMessages) known.add(m.id);
     for (const ev of queued) handleServerEvent(ev, known);
+    // A replayed `evicted` older than the snapshot lowers the total by IDs
+    // the snapshot no longer had; resync it now instead of on the next
+    // 3-second poll.
+    if (queued.length > 0) pollStats();
 
     if (snapshot) await restoreAfterLoad();
 }

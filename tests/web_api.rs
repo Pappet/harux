@@ -736,8 +736,13 @@ async fn list_messages_can_include_older_bookmarks() {
         }
     };
     assert_eq!(ids("/api/messages?limit=2").await, ["m4", "m3"]);
+    for flag in ["true", "1", "yes", "TRUE"] {
+        let uri: &'static str =
+            Box::leak(format!("/api/messages?limit=2&include_bookmarks={flag}").into_boxed_str());
+        assert_eq!(ids(uri).await, ["m4", "m3", "m0"], "{flag}");
+    }
     assert_eq!(
-        ids("/api/messages?limit=2&include_bookmarks=true").await,
-        ["m4", "m3", "m0"]
+        ids("/api/messages?limit=2&include_bookmarks=false").await,
+        ["m4", "m3"]
     );
 }
