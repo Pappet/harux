@@ -46,6 +46,8 @@ Harux is an **inspection and debugging tool** — not a production message broke
 
 ## Hardening Measures (Built-in)
 
+- Cross-site protection for the Web UI: requests with an unknown `Host` (DNS rebinding) and cross-origin WebSocket or state-changing requests are refused; names other than IP addresses and `localhost` must be listed in `server.allowed_hosts`
+- `frame-ancestors 'none'` (no embedding) and `X-Content-Type-Options: nosniff`
 - 10 MB maximum payload size per MLLP message
 - 60-second read timeout on MLLP connections
 - In-memory store with configurable capacity and automatic eviction

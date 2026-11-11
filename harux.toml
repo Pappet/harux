@@ -6,6 +6,9 @@
 [server]
 mllp_port = 2575
 web_port = 8080
+# DNS names the web UI is opened under (IP addresses and localhost always work).
+# Other Host headers are refused to block DNS rebinding.
+# allowed_hosts = ["harux.klinik.local"]
 
 [logging]
 level = "info"

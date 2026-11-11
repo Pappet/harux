@@ -72,6 +72,12 @@ async fn main() -> anyhow::Result<()> {
         info!("╚{}╝", bar);
     }
     info!("Effective configuration:\n{}", config);
+    for problem in web::allowed_hosts_problems(&config.server.allowed_hosts) {
+        warn!(
+            "server.allowed_hosts: {problem}; this entry never matches, and browsers \
+             opening Harux by that name get 403"
+        );
+    }
 
     let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
 
@@ -95,6 +101,7 @@ async fn main() -> anyhow::Result<()> {
         stats: stats.clone(),
         mllp_port,
         max_connections: config.mllp.max_connections,
+        allowed_hosts: std::sync::Arc::new(config.server.allowed_hosts.clone()),
     };
     let app = create_router(app_state);
     let web_addr = format!("0.0.0.0:{}", web_port);

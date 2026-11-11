@@ -21,6 +21,10 @@ use std::task::{Context, Poll};
 #[derive(serde::Serialize)]
 struct StatsResponse {
     total_messages: usize,
+    /// Bytes the store accounts for its messages (#226) …
+    store_bytes: usize,
+    /// … and the limit they are evicted against (`store.max_memory_mb`).
+    store_max_bytes: usize,
     received: u64,
     parsed_ok: u64,
     parse_errors: u64,
@@ -28,6 +32,79 @@ struct StatsResponse {
     rejected_connections: u64,
     max_connections: usize,
     mllp_port: u16,
+}
+
+#[cfg(test)]
+mod guard_tests {
+    use super::*;
+
+    #[test]
+    fn host_rules() {
+        let allowed = vec!["harux.klinik.local".to_string()];
+        for ok in [
+            "127.0.0.1:8080",
+            "10.1.2.3",
+            "[::1]:8080",
+            "localhost:8080",
+            "LOCALHOST",
+            "Harux.Klinik.Local:8080",
+        ] {
+            assert!(host_allowed(ok, &allowed), "{ok}");
+        }
+        for bad in [
+            "evil.example",
+            "evil.example:8080",
+            "harux.klinik.local.evil.example",
+            "localhost.evil.example",
+        ] {
+            assert!(!host_allowed(bad, &allowed), "{bad}");
+        }
+    }
+
+    #[test]
+    fn trailing_root_dot_is_ignored() {
+        let allowed = vec!["harux.klinik.local".to_string()];
+        assert!(host_allowed("harux.klinik.local.:8080", &allowed));
+        assert!(host_allowed("localhost.:8080", &allowed));
+        assert!(host_allowed("x.local", &["x.local.".to_string()]));
+        assert!(origin_allowed(
+            "http://harux.klinik.local.:8080",
+            Some("10.0.0.1"),
+            &allowed
+        ));
+    }
+
+    #[test]
+    fn allowed_hosts_are_validated() {
+        let cfg = [
+            "ok.local",
+            "harux.klinik.local:8080",
+            "http://x.local",
+            "",
+            "a b",
+        ]
+        .map(String::from);
+        let problems = allowed_hosts_problems(&cfg);
+        assert_eq!(problems.len(), 4, "{problems:?}");
+        assert!(problems[0].contains("harux.klinik.local:8080"));
+        assert!(allowed_hosts_problems(&["harux.klinik.local".to_string()]).is_empty());
+    }
+
+    #[test]
+    fn origin_rules() {
+        let allowed = vec!["harux.klinik.local".to_string()];
+        let host = Some("10.1.2.3:8080");
+        assert!(origin_allowed("http://10.1.2.3:8080", host, &allowed));
+        assert!(origin_allowed("https://harux.klinik.local", host, &allowed));
+        assert!(
+            !origin_allowed("http://10.1.2.3:9999", host, &allowed),
+            "other port"
+        );
+        assert!(!origin_allowed("https://evil.example", host, &allowed));
+        assert!(!origin_allowed("null", host, &allowed));
+        assert!(!origin_allowed("http://10.1.2.3:8080/x", host, &allowed));
+        assert!(!origin_allowed("http://10.1.2.3:8080", None, &[]));
+    }
 }
 
 #[derive(Embed)]
@@ -40,6 +117,9 @@ pub struct AppState {
     pub stats: MllpStats,
     pub mllp_port: u16,
     pub max_connections: usize,
+    /// `server.allowed_hosts`: names accepted in `Host` besides IP literals
+    /// and `localhost` (#227).
+    pub allowed_hosts: Arc<Vec<String>>,
 }
 
 async fn add_security_headers(req: axum::extract::Request, next: middleware::Next) -> Response {
@@ -52,15 +132,147 @@ async fn add_security_headers(req: axum::extract::Request, next: middleware::Nex
             // dynamic colors (source bar, source chips) are set via element.style in JS,
             // which is script execution — not governed by style-src.
             // Fonts are self-hosted under /fonts/ — no external font-src needed.
+            // frame-ancestors: no other page may embed the UI (clickjacking).
             "default-src 'self'; \
              style-src 'self'; \
              font-src 'self'; \
-             connect-src 'self' ws: wss:",
+             connect-src 'self' ws: wss:; \
+             frame-ancestors 'none'",
         ),
+    );
+    res.headers_mut().insert(
+        HeaderName::from_static("x-content-type-options"),
+        HeaderValue::from_static("nosniff"),
     );
     res
 }
 
+/// Refuse browser requests that another site makes on the user's behalf
+/// (#227). Harux has no authentication, so "only reachable from the trusted
+/// network" must also hold for pages a user in that network has open:
+///
+/// - **Host:** must be an IP literal, `localhost` or a name from
+///   `server.allowed_hosts`. Blocks DNS rebinding, where a foreign name
+///   resolves to the Harux server and the page reads the API as same-origin.
+/// - **Origin:** on `/ws` and on every method that changes state, an
+///   `Origin` header must name this server. Browsers don't apply the
+///   same-origin policy to WebSockets, and a body-less `POST /api/clear` is
+///   a "simple" request that needs no CORS preflight. Requests without
+///   `Origin` (curl, scripts) stay allowed, so the API remains scriptable.
+async fn guard_cross_site(
+    State(state): State<AppState>,
+    req: axum::extract::Request,
+    next: middleware::Next,
+) -> Response {
+    let host = req
+        .headers()
+        .get(axum::http::header::HOST)
+        .and_then(|v| v.to_str().ok())
+        .map(str::to_owned)
+        .or_else(|| req.uri().authority().map(|a| a.as_str().to_owned()));
+    if let Some(host) = &host {
+        if !host_allowed(host, &state.allowed_hosts) {
+            return (
+                StatusCode::FORBIDDEN,
+                "Host not allowed. Open Harux by IP address, localhost, or a name \
+                 listed in server.allowed_hosts.",
+            )
+                .into_response();
+        }
+    }
+
+    let changes_state = !matches!(
+        *req.method(),
+        axum::http::Method::GET | axum::http::Method::HEAD | axum::http::Method::OPTIONS
+    );
+    if changes_state || req.uri().path() == "/ws" {
+        if let Some(origin) = req.headers().get(axum::http::header::ORIGIN) {
+            let same = origin
+                .to_str()
+                .ok()
+                .is_some_and(|o| origin_allowed(o, host.as_deref(), &state.allowed_hosts));
+            if !same {
+                return (StatusCode::FORBIDDEN, "Cross-origin request refused").into_response();
+            }
+        }
+    }
+    next.run(req).await
+}
+
+/// The host part of a `Host` header value (`name[:port]`, `[v6]:port`).
+fn host_part(authority: &str) -> &str {
+    if let Some(rest) = authority.strip_prefix('[') {
+        return rest.split(']').next().unwrap_or(rest);
+    }
+    match authority.rsplit_once(':') {
+        Some((h, port)) if port.bytes().all(|b| b.is_ascii_digit()) => h,
+        _ => authority,
+    }
+}
+
+/// A host name without one trailing dot: `harux.klinik.local.` (the fully
+/// qualified form browsers and Windows accept) equals `harux.klinik.local`.
+fn without_root_dot(host: &str) -> &str {
+    host.strip_suffix('.').unwrap_or(host)
+}
+
+fn name_listed(host: &str, allowed: &[String]) -> bool {
+    let host = without_root_dot(host);
+    allowed
+        .iter()
+        .any(|a| without_root_dot(a.trim()).eq_ignore_ascii_case(host))
+}
+
+fn host_allowed(authority: &str, allowed: &[String]) -> bool {
+    let host = host_part(authority.trim());
+    host.parse::<std::net::IpAddr>().is_ok()
+        || without_root_dot(host).eq_ignore_ascii_case("localhost")
+        || name_listed(host, allowed)
+}
+
+/// Problems with `server.allowed_hosts` entries that would make them never
+/// match, logged once at startup — otherwise the only symptom is a 403.
+pub fn allowed_hosts_problems(allowed: &[String]) -> Vec<String> {
+    allowed
+        .iter()
+        .filter_map(|h| {
+            let h = h.trim();
+            if h.is_empty() {
+                Some("an empty entry".to_string())
+            } else if h.contains(['/', ':']) || h.contains("://") {
+                Some(format!(
+                    "{h:?} — list host names only, without scheme, port or path"
+                ))
+            } else if h.contains(char::is_whitespace) {
+                Some(format!("{h:?} — contains whitespace"))
+            } else {
+                None
+            }
+        })
+        .collect()
+}
+
+/// `Origin` is `scheme://host[:port]`. It is accepted when its authority is
+/// the request's own `Host` (the UI talking to its own server), or when its
+/// host is an allowed name (a reverse proxy that rewrites `Host`).
+/// `null` and anything unparsable are refused.
+fn origin_allowed(origin: &str, host: Option<&str>, allowed: &[String]) -> bool {
+    let Some(authority) = origin
+        .strip_prefix("http://")
+        .or_else(|| origin.strip_prefix("https://"))
+    else {
+        return false;
+    };
+    if authority.is_empty() || authority.contains('/') {
+        return false;
+    }
+    host.is_some_and(|h| h.trim().eq_ignore_ascii_case(authority))
+        || name_listed(host_part(authority), allowed)
+}
+
+/// Every route that changes state must use a non-GET method:
+/// `guard_cross_site` checks `Origin` only on non-GET requests (and `/ws`),
+/// so a mutating `GET` would be callable from any website (#227).
 pub fn create_router(state: AppState) -> Router {
     Router::new()
         // API routes
@@ -83,7 +295,8 @@ pub fn create_router(state: AppState) -> Router {
         .route("/ws", get(ws_handler))
         // Static files (SPA)
         .fallback(get(static_handler))
-        .with_state(state)
+        .with_state(state.clone())
+        .layer(middleware::from_fn_with_state(state, guard_cross_site))
         .layer(middleware::from_fn(add_security_headers))
 }
 
@@ -130,8 +343,11 @@ async fn search_messages(
 }
 
 async fn get_stats(State(state): State<AppState>) -> impl IntoResponse {
+    let (store_bytes, store_max_bytes) = state.store.memory_usage().await;
     Json(StatsResponse {
         total_messages: state.store.count().await,
+        store_bytes,
+        store_max_bytes,
         received: state.stats.received.load(Ordering::Relaxed),
         parsed_ok: state.stats.parsed_ok.load(Ordering::Relaxed),
         parse_errors: state.stats.parse_errors.load(Ordering::Relaxed),

@@ -54,10 +54,12 @@ pub struct Hl7Message {
     pub validation_warnings: Vec<crate::validation::ValidationWarning>,
     /// Human-readable description of the message type (e.g. "Admit / Visit Notification")
     pub message_type_description: Option<String>,
-    /// Segments typically present in this message type (from the HL7 spec)
-    pub typical_segments: Vec<String>,
-    /// Description for each typical segment name, from the embedded dictionary
-    pub typical_segment_descriptions: HashMap<String, String>,
+    /// Segments typically present in this message type (from the HL7 spec),
+    /// borrowed from the static message-type registry.
+    pub typical_segments: &'static [String],
+    /// Description for each typical segment name, borrowed from the embedded
+    /// dictionary.
+    pub typical_segment_descriptions: HashMap<&'static str, &'static str>,
     /// Character set declared in MSH-18, e.g. `"UTF-8"` or `"8859/1"`; `None` if absent.
     pub charset: Option<String>,
     /// MSH-9.3 message structure identifier, e.g. `"ADT_A01"` or `"ORU_R01"`.
@@ -191,13 +193,55 @@ struct FieldJson<'a> {
     description: Option<&'a str>,
 }
 
+/// Approximate heap footprint of one allocation of `size` bytes, including
+/// the allocator's bookkeeping. No allocation → 0. The basis of all store
+/// accounting (#226).
+///
+/// The model is **glibc malloc** (Linux): an 8-byte header, 16-byte
+/// granularity and a 32-byte minimum chunk; `tests/alloc_accounting.rs`
+/// checks it there. Other allocators differ — the Windows heap, the primary
+/// deployment, has no 32-byte minimum, so short strings are over-counted
+/// there. That errs on the safe side: the store evicts somewhat earlier, it
+/// never holds more than `store.max_memory_mb`.
+pub fn heap_bytes(size: usize) -> usize {
+    if size == 0 {
+        0
+    } else {
+        ((size + 8 + 15) & !15).max(32)
+    }
+}
+
+/// Heap held by a `String`: its capacity, not its length.
+fn owned_string(s: &String) -> usize {
+    heap_bytes(s.capacity())
+}
+
+fn opt_string(s: &Option<String>) -> usize {
+    s.as_ref().map_or(0, owned_string)
+}
+
 /// Heap bytes owned by an optional dictionary text: zero when it is borrowed
 /// from the static dictionary.
 fn owned_len(s: &Option<Cow<'static, str>>) -> usize {
     match s {
-        Some(Cow::Owned(o)) => o.len(),
+        Some(Cow::Owned(o)) => owned_string(o),
         _ => 0,
     }
+}
+
+/// Heap of a `Vec<T>`'s buffer (by capacity).
+fn vec_heap<T>(v: &Vec<T>) -> usize {
+    heap_bytes(v.capacity() * std::mem::size_of::<T>())
+}
+
+/// Heap of a hashbrown table: buckets of `size_of::<(K, V)>()` plus one
+/// control byte each (and a group of 16), at 7/8 maximum load.
+fn map_heap<K, V>(m: &HashMap<K, V>) -> usize {
+    if m.capacity() == 0 {
+        return 0;
+    }
+    let buckets = (m.capacity() * 8 / 7).next_power_of_two().max(4);
+    heap_bytes(buckets * (std::mem::size_of::<(K, V)>() + 1) + 16)
 }
 
 /// Separators / encoding characters extracted from MSH-1 (field separator) and MSH-2.
@@ -251,47 +295,43 @@ impl Default for Delimiters {
 }
 
 impl Hl7Message {
-    /// Estimate the heap bytes consumed by this message (raw + all parsed strings).
-    /// Used by the store to track memory more accurately than `raw.len()` alone.
+    /// Heap bytes held by this message: every buffer it owns, by capacity,
+    /// plus allocator overhead per allocation ([`heap_bytes`]). Includes the
+    /// fixed-size `Hl7Segment` / `Hl7Field` structs, which dominate for
+    /// ordinary messages — a 731-byte ADT holds about 18 KB, mostly in its
+    /// 149 fields (#226). Excludes the `Hl7Message` struct itself, which the
+    /// store accounts with the `Arc` that holds it.
     pub fn estimated_bytes(&self) -> usize {
-        let mut total = self.raw.len()
-            + self.id.len()
-            + self.source_addr.len()
-            + self.message_type.len()
-            + self.trigger_event.len()
-            + self.message_control_id.len()
-            + self.sending_application.len()
-            + self.sending_facility.len()
-            + self.receiving_application.len()
-            + self.receiving_facility.len()
-            + self.version.len();
+        let mut total = owned_string(&self.raw)
+            + owned_string(&self.id)
+            + owned_string(&self.source_addr)
+            + owned_string(&self.message_type)
+            + owned_string(&self.trigger_event)
+            + owned_string(&self.message_control_id)
+            + owned_string(&self.sending_application)
+            + owned_string(&self.sending_facility)
+            + owned_string(&self.receiving_application)
+            + owned_string(&self.receiving_facility)
+            + owned_string(&self.version)
+            + opt_string(&self.patient_name)
+            + opt_string(&self.patient_id)
+            + opt_string(&self.parse_error)
+            + opt_string(&self.ack_response)
+            + opt_string(&self.ack_code)
+            + opt_string(&self.message_type_description)
+            + opt_string(&self.charset)
+            + opt_string(&self.message_structure)
+            + map_heap(&self.typical_segment_descriptions)
+            + vec_heap(&self.validation_warnings)
+            + vec_heap(&self.segments);
 
-        total += self.patient_name.as_deref().map_or(0, str::len);
-        total += self.patient_id.as_deref().map_or(0, str::len);
-        total += self.parse_error.as_deref().map_or(0, str::len);
-        total += self.ack_response.as_deref().map_or(0, str::len);
-        total += self.ack_code.as_deref().map_or(0, str::len);
-        total += self.message_type_description.as_deref().map_or(0, str::len);
-        total += self.charset.as_deref().map_or(0, str::len);
-
-        total += self.typical_segments.iter().map(String::len).sum::<usize>();
-        total += self
-            .typical_segment_descriptions
-            .iter()
-            .map(|(k, v)| k.len() + v.len())
-            .sum::<usize>();
-        total += self
-            .validation_warnings
-            .iter()
-            .map(|w| w.code.len() + w.message.len() + w.segment.len())
-            .sum::<usize>();
-
+        for w in &self.validation_warnings {
+            total += owned_string(&w.code) + owned_string(&w.message) + owned_string(&w.segment);
+        }
         for seg in &self.segments {
-            total += seg.name.len();
-            total += owned_len(&seg.description);
+            total += owned_string(&seg.name) + owned_len(&seg.description) + vec_heap(&seg.fields);
             for field in &seg.fields {
-                total += field.value.len();
-                total += owned_len(&field.description);
+                total += owned_string(&field.value) + owned_len(&field.description);
             }
         }
         total
@@ -320,7 +360,7 @@ impl Hl7Message {
             ack_code: None,
             validation_warnings: Vec::new(),
             message_type_description: None,
-            typical_segments: Vec::new(),
+            typical_segments: &[],
             typical_segment_descriptions: HashMap::new(),
             charset: None,
             message_structure: None,
@@ -389,9 +429,10 @@ pub struct MessageMeta {
 }
 
 impl MessageMeta {
-    /// Heap bytes held by the metadata (tag strings), for store accounting.
+    /// Heap bytes held by the metadata (tag list and strings), for store
+    /// accounting — same model as [`Hl7Message::estimated_bytes`].
     pub fn estimated_bytes(&self) -> usize {
-        self.tags.iter().map(String::len).sum()
+        vec_heap(&self.tags) + self.tags.iter().map(owned_string).sum::<usize>()
     }
 }
 
