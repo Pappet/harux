@@ -443,13 +443,17 @@ fn validate_dt(value: &str) -> Option<String> {
                 .to_string(),
         );
     }
+    date_error(value).map(|why| format!("expected a date (DT) but {why}"))
+}
+
+/// Why the digits `YYYY[MM[DD]]` are not a real date, or `None`. Shared by
+/// DT and TS so each can phrase the message with its own type name.
+fn date_error(value: &str) -> Option<String> {
+    debug_assert!(value.bytes().all(|b| b.is_ascii_digit()) && value.len() <= 8);
     if value.len() >= 6 {
         let month: u32 = value[4..6].parse().unwrap_or(0);
         if !(1..=12).contains(&month) {
-            return Some(format!(
-                "expected a date (DT) but month '{}' is out of range 01–12",
-                &value[4..6]
-            ));
+            return Some(format!("month '{}' is out of range 01–12", &value[4..6]));
         }
     }
     if value.len() == 8 {
@@ -458,7 +462,7 @@ fn validate_dt(value: &str) -> Option<String> {
         let day: u32 = value[6..8].parse().unwrap_or(0);
         if chrono::NaiveDate::from_ymd_opt(year, month, day).is_none() {
             return Some(format!(
-                "expected a date (DT) but {}-{}-{} does not exist",
+                "{}-{}-{} does not exist",
                 &value[..4],
                 &value[4..6],
                 &value[6..8]
@@ -508,10 +512,8 @@ fn validate_ts(value: &str) -> Option<String> {
             return bad("the fraction must be 1–4 digits");
         }
     }
-    if digits.len() >= 6 {
-        if let Some(err) = validate_dt(&digits[..digits.len().min(8)]) {
-            return Some(err.replacen("(DT)", "(TS)", 1));
-        }
+    if let Some(why) = date_error(&digits[..digits.len().min(8)]) {
+        return bad(&why);
     }
     let two = |at: usize| digits[at..at + 2].parse::<u32>().unwrap_or(99);
     if digits.len() >= 10 && two(8) > 23 {
@@ -530,6 +532,11 @@ fn validate_ts(value: &str) -> Option<String> {
         ));
     }
     if let Some(o) = offset {
+        // An offset places a time of day; on a bare year or month it means
+        // nothing (`2024+0100`).
+        if digits.len() < 8 {
+            return bad("a time-zone offset needs at least a full date");
+        }
         let valid = o.len() == 4
             && o.bytes().all(|b| b.is_ascii_digit())
             && o[..2].parse::<u32>().unwrap_or(99) <= 23
@@ -766,6 +773,8 @@ mod tests {
             "20240101120000.",
             "20240101120000+05",
             "20240101120000+2500",
+            "2024+0100",   // offset on a bare year
+            "202401-0100", // offset on a bare month
         ] {
             assert!(validate_ts(bad).is_some(), "TS {bad}");
         }
@@ -776,9 +785,19 @@ mod tests {
             "2024010112",
             "20240101235959.1234",
             "20240101120000-0130",
+            "20240101+0100",
+            "2024010112+0100",
         ] {
             assert!(validate_ts(ok).is_none(), "TS {ok}");
         }
+        // The message names the type that was checked.
+        assert_eq!(
+            validate_dt("20240230").unwrap(),
+            "expected a date (DT) but 2024-02-30 does not exist"
+        );
+        let ts = validate_ts("20230229120000").unwrap();
+        assert!(ts.starts_with("expected a timestamp (TS)"), "{ts}");
+        assert!(ts.ends_with(": 2023-02-29 does not exist"), "{ts}");
         assert!(validate_nm(".").is_some(), "NM without a digit");
         assert!(validate_nm("-.5").is_none());
     }
