@@ -1,4 +1,5 @@
 use serde::Deserialize;
+use std::net::{IpAddr, Ipv4Addr};
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -25,6 +26,13 @@ pub struct Config {
 pub struct ServerConfig {
     pub mllp_port: u16,
     pub web_port: u16,
+    /// Address the MLLP listener binds to (#237). `0.0.0.0` = every IPv4
+    /// interface, `::` = every interface incl. IPv6, `127.0.0.1` = this
+    /// machine only.
+    pub mllp_bind: IpAddr,
+    /// Address the web UI binds to (#237). `127.0.0.1` keeps it on this
+    /// machine, e.g. behind a reverse proxy that adds TLS and login.
+    pub web_bind: IpAddr,
     pub shutdown_timeout_secs: u64,
     /// Host names (without port) the web UI may be reached under, in
     /// addition to IP literals and `localhost`, which are always allowed.
@@ -38,6 +46,13 @@ pub struct ServerConfig {
 pub struct LoggingConfig {
     pub level: String,
     pub file: Option<String>,
+    /// How many daily log files (`<file>.YYYY-MM-DD`, today's included) to
+    /// keep; older ones are deleted. `0` keeps all (#240).
+    pub max_files: usize,
+    /// Set at startup when `file` could not be opened and Harux logs to
+    /// stdout only (#234), so the effective configuration says so.
+    #[serde(skip)]
+    pub file_unusable: bool,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -74,6 +89,8 @@ impl Default for ServerConfig {
         Self {
             mllp_port: 2575,
             web_port: 8080,
+            mllp_bind: IpAddr::V4(Ipv4Addr::UNSPECIFIED),
+            web_bind: IpAddr::V4(Ipv4Addr::UNSPECIFIED),
             shutdown_timeout_secs: 10,
             allowed_hosts: Vec::new(),
         }
@@ -85,6 +102,8 @@ impl Default for LoggingConfig {
         Self {
             level: "info".to_string(),
             file: None,
+            max_files: 14,
+            file_unusable: false,
         }
     }
 }
@@ -122,6 +141,16 @@ impl StoreConfig {
     pub fn bookmark_budget_percent(&self) -> usize {
         self.bookmark_budget_percent
             .min(MAX_BOOKMARK_BUDGET_PERCENT)
+    }
+}
+
+impl ServerConfig {
+    pub fn mllp_addr(&self) -> std::net::SocketAddr {
+        std::net::SocketAddr::new(self.mllp_bind, self.mllp_port)
+    }
+
+    pub fn web_addr(&self) -> std::net::SocketAddr {
+        std::net::SocketAddr::new(self.web_bind, self.web_port)
     }
 }
 
@@ -219,11 +248,34 @@ impl Config {
         at_least_1("mllp.read_timeout_secs", self.mllp.read_timeout_secs);
         at_least_1("mllp.write_timeout_secs", self.mllp.write_timeout_secs);
         at_least_1("mllp.max_connections", self.mllp.max_connections as u64);
-        if self.server.mllp_port == self.server.web_port {
+        // Two listeners can share a port only on different addresses; an
+        // unspecified address (0.0.0.0, ::) overlaps every other one.
+        let (m, w) = (self.server.mllp_addr(), self.server.web_addr());
+        // `::ffff:127.0.0.1` is 127.0.0.1, hence the canonical form.
+        if m.port() == w.port()
+            && (m.ip().to_canonical() == w.ip().to_canonical()
+                || m.ip().is_unspecified()
+                || w.ip().is_unspecified())
+        {
             problems.push(format!(
-                "server.mllp_port and server.web_port are both {}",
-                self.server.mllp_port
+                "server.mllp_port and server.web_port are both {} on overlapping \
+                 addresses ({} and {})",
+                m.port(),
+                m.ip(),
+                w.ip()
             ));
+        }
+        if let Some(file) = self.logging.file.as_deref().filter(|f| !f.is_empty()) {
+            // "logs/" or "logs/." would log to ./logs.YYYY-MM-DD next to the
+            // directory: the text after the last separator must be a name.
+            // (`Path` normalizes a trailing "." away, so check the text.)
+            let last = file.rsplit(['/', '\\']).next().unwrap_or_default();
+            let names_a_file = !matches!(last, "" | "." | "..");
+            if !names_a_file {
+                problems.push(format!(
+                    "logging.file {file:?} must name a file, e.g. \"logs/harux.log\""
+                ));
+            }
         }
         if self.store.max_memory_mb != 0 && self.store.max_memory_mb < self.mllp.max_message_size_mb
         {
@@ -315,8 +367,8 @@ fn find_config_path() -> Option<PathBuf> {
 
 impl std::fmt::Display for Config {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        writeln!(f, "  MLLP port:          {}", self.server.mllp_port)?;
-        writeln!(f, "  Web port:           {}", self.server.web_port)?;
+        writeln!(f, "  MLLP listener:      {}", self.server.mllp_addr())?;
+        writeln!(f, "  Web listener:       {}", self.server.web_addr())?;
         writeln!(
             f,
             "  Shutdown timeout:   {}s",
@@ -332,8 +384,25 @@ impl std::fmt::Display for Config {
                 .collect::<String>()
         )?;
         writeln!(f, "  Log level:          {}", self.logging.level)?;
-        if let Some(file) = &self.logging.file {
-            writeln!(f, "  File log:           {} (daily rotation)", file)?;
+        if let Some(file) = self
+            .logging
+            .file
+            .as_deref()
+            .filter(|_| self.logging.file_unusable)
+        {
+            writeln!(
+                f,
+                "  File log:           {file} (unusable, logging to stdout only)"
+            )?;
+        } else if let Some(file) = &self.logging.file {
+            let keep = match self.logging.max_files {
+                0 => "all kept".to_string(),
+                n => format!("last {n} kept"),
+            };
+            writeln!(
+                f,
+                "  File log:           {file} (daily files {file}.YYYY-MM-DD, {keep})"
+            )?;
         } else {
             writeln!(f, "  File log:           disabled")?;
         }
@@ -367,6 +436,9 @@ mod tests {
         assert_eq!(config.server.shutdown_timeout_secs, 10);
         assert_eq!(config.logging.level, "info");
         assert_eq!(config.logging.file, None);
+        assert_eq!(config.logging.max_files, 14);
+        assert_eq!(config.server.mllp_addr().to_string(), "0.0.0.0:2575");
+        assert_eq!(config.server.web_addr().to_string(), "0.0.0.0:8080");
         assert_eq!(config.store.max_messages, 10_000);
         assert_eq!(config.store.max_memory_mb, 512);
         assert_eq!(config.store.bookmark_budget_percent, 50);
@@ -402,10 +474,13 @@ mllp_port = 3000
 web_port = 9090
 shutdown_timeout_secs = 5
 allowed_hosts = ["harux.klinik.local"]
+mllp_bind = "10.1.2.3"
+web_bind = "::1"
 
 [logging]
 level = "debug"
 file = "logs/test.log"
+max_files = 30
 
 [store]
 max_messages = 5000
@@ -425,6 +500,9 @@ max_connections = 50
         assert_eq!(config.server.allowed_hosts, ["harux.klinik.local"]);
         assert_eq!(config.logging.level, "debug");
         assert_eq!(config.logging.file.as_deref(), Some("logs/test.log"));
+        assert_eq!(config.logging.max_files, 30);
+        assert_eq!(config.server.mllp_addr().to_string(), "10.1.2.3:3000");
+        assert_eq!(config.server.web_addr().to_string(), "[::1]:9090");
         assert_eq!(config.store.max_messages, 5000);
         assert_eq!(config.store.max_memory_mb, 256);
         assert_eq!(config.store.bookmark_budget_percent, 30);
@@ -518,6 +596,45 @@ mllp_port = 4000
         }
         let err = load("[server]\nmllp_port = 9000\nweb_port = 9000\n", &[]).unwrap_err();
         assert!(err.contains("both 9000"), "{err}");
+        // Same port on two different addresses is fine (#255 review); an
+        // unspecified address overlaps every other one.
+        let two = "[server]\nmllp_port = 9000\nweb_port = 9000\nmllp_bind = \"127.0.0.1\"\n";
+        assert!(load(&format!("{two}web_bind = \"127.0.0.2\"\n"), &[]).is_ok());
+        assert!(load(&format!("{two}web_bind = \"::1\"\n"), &[]).is_ok());
+        let mapped = load(&format!("{two}web_bind = \"::ffff:127.0.0.1\"\n"), &[]).unwrap_err();
+        assert!(
+            mapped.contains("both 9000"),
+            "IPv4-mapped is the same address: {mapped}"
+        );
+        for overlapping in ["127.0.0.1", "0.0.0.0", "::"] {
+            let err = load(&format!("{two}web_bind = \"{overlapping}\"\n"), &[]).unwrap_err();
+            assert!(err.contains("both 9000"), "{overlapping}: {err}");
+        }
+        for dir in ["logs/", "logs\\\\", ".", "logs/..", "logs/.", "logs\\\\."] {
+            let err = load(&format!("[logging]\nfile = \"{dir}\"\n"), &[]).unwrap_err();
+            assert!(err.contains("must name a file"), "{dir}: {err}");
+        }
+        assert!(
+            load("[logging]\nfile = \"\"\n", &[]).is_ok(),
+            "empty = no file log"
+        );
+        assert!(load("[logging]\nfile = \"harux.log\"\n", &[]).is_ok());
+    }
+
+    /// #255 review: the effective configuration must not claim a file log
+    /// that could not be opened.
+    #[test]
+    fn effective_configuration_shows_an_unusable_log_file() {
+        let mut cfg = load("[logging]\nfile = \"logs/harux.log\"\nmax_files = 3\n", &[]).unwrap();
+        assert!(cfg
+            .to_string()
+            .contains("logs/harux.log.YYYY-MM-DD, last 3 kept"));
+        cfg.logging.file_unusable = true;
+        let shown = cfg.to_string();
+        assert!(
+            shown.contains("logs/harux.log (unusable, logging to stdout only)"),
+            "{shown}"
+        );
         let err = load("[store]\nmax_memory_mb = 5\n", &[]).unwrap_err();
         assert!(
             err.contains("smaller than mllp.max_message_size_mb"),
@@ -541,6 +658,18 @@ mllp_port = 4000
         ] {
             assert!(load("", &[("RUST_LOG", ok)]).is_ok(), "{ok}");
         }
+    }
+
+    /// #237: a bind address that is not an IP address stops the start and
+    /// names the key.
+    #[test]
+    fn invalid_bind_address_is_an_error() {
+        for bad in ["localhost", "0.0.0.0:8080", "300.1.1.1", ""] {
+            let err = load(&format!("[server]\nweb_bind = \"{bad}\"\n"), &[]).unwrap_err();
+            assert!(err.contains("web_bind"), "{bad}: {err}");
+        }
+        let cfg = load("[server]\nmllp_bind = \"::\"\n", &[]).unwrap();
+        assert_eq!(cfg.server.mllp_addr().to_string(), "[::]:2575");
     }
 
     #[test]

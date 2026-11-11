@@ -78,7 +78,9 @@ pub async fn start_mllp_server(
     shutdown: watch::Receiver<bool>,
     config: MllpConfig,
 ) -> anyhow::Result<()> {
-    let listener = TcpListener::bind(bind_addr).await?;
+    let listener = TcpListener::bind(bind_addr).await.map_err(|e| {
+        anyhow::anyhow!("cannot listen on {bind_addr} (server.mllp_bind / mllp_port): {e}")
+    })?;
     serve(listener, store, stats, shutdown, config).await;
     Ok(())
 }

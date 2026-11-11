@@ -24,7 +24,7 @@ cargo test <test_name>         # Run a single test
 cargo clippy -- -D warnings    # Must pass clean before every commit
 ```
 
-Environment variables: `MLLP_PORT` (default 2575), `WEB_PORT` (default 8080), `RUST_LOG` for tracing.
+Environment variables: `MLLP_PORT` (default 2575), `WEB_PORT` (default 8080), `RUST_LOG` for tracing. Bind addresses: `server.mllp_bind` / `server.web_bind` in `harux.toml` (default `0.0.0.0`).
 
 Manual MLLP testing: `./test.sh` (Linux/macOS) or `.\tests\test.ps1` (Windows) — sends ADT^A01, ORU^R01, SIU^S12 plus error cases and a load test.
 ## Branch Protection & CI
@@ -158,7 +158,8 @@ Do not implement features from later milestones speculatively.
 src/
 ├── main.rs          # Entry point, tokio::select! over MLLP + Web tasks
 ├── lib.rs           # Library crate root (re-exports modules for integration tests)
-├── config.rs        # TOML → env → defaults config loading; fails closed: unknown keys, bad values, bad port env → startup error (#233)
+├── config.rs        # TOML → env → defaults config loading; fails closed: unknown keys, bad values, bad port env → startup error (#233); bind addresses (#237)
+├── logging.rs       # Daily log file: fallible setup with stdout fallback (#234), pruning to logging.max_files by exact name (#240)
 ├── mllp.rs          # TCP listener, MLLP framing, ACK/NACK dispatch
 ├── store.rs         # In-memory store with broadcast channel, dual eviction
 ├── web.rs           # Axum router, REST handlers, WebSocket handler
