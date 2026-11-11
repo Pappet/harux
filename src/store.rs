@@ -316,6 +316,12 @@ impl MessageStore {
         inner.messages.insert(id, entry);
         let count = inner.order.len();
         let needs_eviction = inner.over_limit();
+        // Broadcast while the write lock is held (#232), like `evict_now`
+        // and `clear`: the order on the channel is then the order in which
+        // the store changed. Sent after the lock is released, an eviction of
+        // this very message could reach subscribers before `NewMessage`.
+        // `send` never blocks. No receivers is not an error.
+        let _ = self.tx.send(StoreEvent::NewMessage(Box::new(summary)));
         drop(inner);
 
         if needs_eviction
@@ -326,9 +332,6 @@ impl MessageStore {
         {
             self.eviction_notify.notify_one();
         }
-
-        // Broadcast to WebSocket subscribers (ignore if no receivers)
-        let _ = self.tx.send(StoreEvent::NewMessage(Box::new(summary)));
 
         if count % 1000 == 0 {
             info!("Store now holds {} messages", count);
@@ -460,10 +463,16 @@ impl MessageStore {
     /// never mutated, so there is no copy-on-write deep clone under the write
     /// lock even while readers hold snapshots (#192). The entry's byte count
     /// is adjusted by the metadata delta so accounting stays exact (#179).
+    ///
+    /// The resulting event (`event(summary)`) is broadcast while the write
+    /// lock is still held (#232), so two concurrent mutations reach
+    /// subscribers in the order they were applied and the last event always
+    /// matches the store.
     async fn mutate_meta(
         &self,
         id: &str,
         f: impl FnOnce(&mut MessageMeta) -> bool,
+        event: fn(Box<Hl7MessageSummary>) -> StoreEvent,
     ) -> Option<Hl7MessageSummary> {
         let mut guard = self.inner.write().await;
         // Reborrow once so `messages` and the counters can be borrowed disjointly.
@@ -489,61 +498,60 @@ impl MessageStore {
             inner.account_bookmark(after, true);
         }
 
+        let _ = self.tx.send(event(Box::new(summary.clone())));
         Some(summary)
     }
 
     /// Add a tag to a message and broadcast the update
     pub async fn add_tag(&self, id: &str, tag: String) -> bool {
         let tag_clone = tag.clone();
-        if let Some(summary) = self
-            .mutate_meta(id, |meta| {
+        self.mutate_meta(
+            id,
+            |meta| {
                 if meta.tags.contains(&tag_clone) {
                     return false;
                 }
                 meta.tags.push(tag_clone);
                 true
-            })
-            .await
-        {
-            let _ = self.tx.send(StoreEvent::TagsUpdated(Box::new(summary)));
-            true
-        } else {
-            false
-        }
+            },
+            StoreEvent::TagsUpdated,
+        )
+        .await
+        .is_some()
     }
 
     /// Remove a tag from a message and broadcast the update
     pub async fn remove_tag(&self, id: &str, tag: &str) -> bool {
         let tag = tag.to_string();
-        if let Some(summary) = self
-            .mutate_meta(id, |meta| {
+        self.mutate_meta(
+            id,
+            |meta| {
                 if let Some(pos) = meta.tags.iter().position(|t| *t == tag) {
                     meta.tags.remove(pos);
                     true
                 } else {
                     false
                 }
-            })
-            .await
-        {
-            let _ = self.tx.send(StoreEvent::TagsUpdated(Box::new(summary)));
-            true
-        } else {
-            false
-        }
+            },
+            StoreEvent::TagsUpdated,
+        )
+        .await
+        .is_some()
     }
 
     /// Toggle bookmark on a message, returns the new bookmark state or None if not found
     pub async fn toggle_bookmark(&self, id: &str) -> Option<bool> {
         let mut new_state = false;
-        let summary = self
-            .mutate_meta(id, |meta| {
+        self.mutate_meta(
+            id,
+            |meta| {
                 meta.bookmarked = !meta.bookmarked;
                 new_state = meta.bookmarked;
                 true
-            })
-            .await?;
-        let _ = self.tx.send(StoreEvent::BookmarkToggled(Box::new(summary)));
+            },
+            StoreEvent::BookmarkToggled,
+        )
+        .await?;
         Some(new_state)
     }
 
@@ -1071,6 +1079,61 @@ mod tests {
             ids(store.list_summaries_with_bookmarks(5, 2).await),
             ["m4", "m3", "m1"]
         );
+    }
+
+    /// #232: two users tag the same message at the same time. The last
+    /// `TagsUpdated` a subscriber sees must be the store's final state —
+    /// events used to be sent after the lock was released, so they could
+    /// overtake each other (49 of 5,000 rounds diverged).
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn test_concurrent_tagging_events_match_store() {
+        for round in 0..1000 {
+            let store = manual_store(100, 512);
+            store.insert(make_msg("m")).await;
+            let mut rx = store.subscribe();
+            let (s1, s2) = (store.clone(), store.clone());
+            let a = tokio::spawn(async move { s1.add_tag("m", "alpha".into()).await });
+            let b = tokio::spawn(async move { s2.add_tag("m", "beta".into()).await });
+            a.await.unwrap();
+            b.await.unwrap();
+            let mut last = None;
+            while let Ok(ev) = rx.try_recv() {
+                if let StoreEvent::TagsUpdated(s) = ev {
+                    last = Some(s.tags.clone());
+                }
+            }
+            let actual = store.get_by_id("m").await.unwrap().meta.tags;
+            assert_eq!(last.as_ref(), Some(&actual), "round {round}");
+        }
+    }
+
+    /// #232: a message larger than the whole store is inserted and evicted
+    /// by the background task. Subscribers must see `NewMessage` before
+    /// `Evicted` (18 of 2,000 rounds used to get them the other way round,
+    /// leaving a row for a message that no longer exists).
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn test_insert_event_precedes_its_eviction() {
+        for round in 0..2000 {
+            let store = MessageStore::new(StoreConfig {
+                max_messages: 10_000,
+                max_memory_mb: 1,
+                ..StoreConfig::default()
+            });
+            let mut rx = store.subscribe();
+            store
+                .insert(make_big_msg(&format!("big-{round}"), 2048))
+                .await;
+            store.wait_until_within_limits().await;
+            let mut order = Vec::new();
+            while let Ok(ev) = rx.try_recv() {
+                match ev {
+                    StoreEvent::NewMessage(_) => order.push('N'),
+                    StoreEvent::Evicted(_) => order.push('E'),
+                    _ => {}
+                }
+            }
+            assert_eq!(order, ['N', 'E'], "round {round}");
+        }
     }
 
     #[test]
