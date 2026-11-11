@@ -34,7 +34,20 @@ fn test_valid_fixtures() {
                 path.file_name(),
                 msg.parse_error
             );
-            // We do not assert that validation_warnings is empty, because real-world valid messages may be missing fields.
+            // Field-level warnings are allowed (real-world messages often miss
+            // optional-in-practice fields), but a structurally valid message
+            // must never get a MISSING_SEGMENT — the red badge (#229).
+            let missing: Vec<_> = msg
+                .validation_warnings
+                .iter()
+                .filter(|w| w.code == "MISSING_SEGMENT")
+                .map(|w| &w.message)
+                .collect();
+            assert!(
+                missing.is_empty(),
+                "Valid fixture {:?} reports missing segments: {missing:?}",
+                path.file_name()
+            );
         }
     }
     assert!(count > 0, "No valid fixtures found");

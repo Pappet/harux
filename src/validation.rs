@@ -158,7 +158,19 @@ fn validate_adt(msg: &Hl7Message, warnings: &mut Vec<ValidationWarning>) {
         warn_missing_segment(warnings, "EVN", ctx);
     }
 
-    // PID is required for all ADT messages
+    // ADT^A20 (bed status update: MSH, EVN, NPU) carries no patient.
+    if msg.message_type == "ADT^A20" {
+        if !has_segment(msg, "NPU") {
+            warn_missing_segment(warnings, "NPU", ctx);
+        }
+        return;
+    }
+    // ADT^A19 is a query; its PID sits in optional response groups.
+    if msg.message_type == "ADT^A19" {
+        return;
+    }
+
+    // PID is required for the other ADT events
     let Some(pid) = find_segment(msg, "PID") else {
         warn_missing_segment(warnings, "PID", ctx);
         return; // Can't validate PID fields without the segment
@@ -172,11 +184,9 @@ fn validate_adt(msg: &Hl7Message, warnings: &mut Vec<ValidationWarning>) {
     if field_value(pid, 5).is_none() {
         warn_missing_field(warnings, "PID", 5, "Patient Name", ctx);
     }
-    // PID-7: Date/Time of Birth (recommended)
-    // PID-8: Administrative Sex
-    if field_value(pid, 8).is_none() {
-        warn_missing_field(warnings, "PID", 8, "Administrative Sex", ctx);
-    }
+    // PID-7 (date of birth) and PID-8 (administrative sex) are optional in
+    // the base standard; a site that requires them needs a profile rule,
+    // not a "required for ADT" warning (#229).
 
     // PV1 is required for most ADT events (transfer/admit/discharge)
     let pv1_required = PV1_REQUIRED_ADT_EVENTS.contains(&msg.message_type.as_str());
@@ -234,13 +244,14 @@ fn validate_oru_r01(msg: &Hl7Message, warnings: &mut Vec<ValidationWarning>) {
 }
 
 // ─── ORM^O01 ─────────────────────────────────────────────────────────────────
+//
+// ORM_O01 (v2.5.1): MSH [NTE] [PATIENT: PID …] { ORDER: ORC [ORDER_DETAIL:
+// OBR | RQD | RQ1 | RXO | ODS | ODT …] … }. The patient group and the order
+// detail are optional, and the detail is not necessarily an OBR (a pharmacy
+// order carries RXO) — only ORC is required (#229).
 
 fn validate_orm_o01(msg: &Hl7Message, warnings: &mut Vec<ValidationWarning>) {
     let ctx = "ORM^O01";
-
-    if !has_segment(msg, "PID") {
-        warn_missing_segment(warnings, "PID", ctx);
-    }
 
     let Some(orc) = find_segment(msg, "ORC") else {
         warn_missing_segment(warnings, "ORC", ctx);
@@ -250,25 +261,19 @@ fn validate_orm_o01(msg: &Hl7Message, warnings: &mut Vec<ValidationWarning>) {
     if field_value(orc, 1).is_none() {
         warn_missing_field(warnings, "ORC", 1, "Order Control", ctx);
     }
-
-    if !has_segment(msg, "OBR") {
-        warn_missing_segment(warnings, "OBR", ctx);
-    }
 }
 
 // ─── OML^O21 ─────────────────────────────────────────────────────────────────
+//
+// OML_O21 (v2.5.1): MSH … [PATIENT: PID …] { ORDER: ORC … [OBSERVATION_REQUEST:
+// OBR …] … }. As with ORM, the patient group and the OBR group are optional;
+// ORC is required (#229).
 
 fn validate_oml_o21(msg: &Hl7Message, warnings: &mut Vec<ValidationWarning>) {
     let ctx = "OML^O21";
 
-    if !has_segment(msg, "PID") {
-        warn_missing_segment(warnings, "PID", ctx);
-    }
     if !has_segment(msg, "ORC") {
         warn_missing_segment(warnings, "ORC", ctx);
-    }
-    if !has_segment(msg, "OBR") {
-        warn_missing_segment(warnings, "OBR", ctx);
     }
 }
 
@@ -563,6 +568,59 @@ mod tests {
             "Expected PV1 MISSING_SEGMENT warning, got: {:?}",
             warnings
         );
+    }
+
+    fn warnings_for(raw: &str) -> Vec<ValidationWarning> {
+        validate_message(&parse_message(raw, "127.0.0.1:9999").unwrap())
+    }
+
+    /// #229: messages that are valid per the v2.5.1 base standard must not
+    /// get MISSING_SEGMENT / MISSING_FIELD warnings.
+    #[test]
+    fn standard_conformant_messages_have_no_structure_warnings() {
+        let cases = [
+            // Pharmacy order: ORC + RXO, no patient group, no OBR.
+            "MSH|^~\\&|PHARM|KLINIK|RCV|RZ|20240101120000||ORM^O01|ORMRX|P|2.5\rORC|NW|P1\rRXO|ASS100^Aspirin 100mg\r",
+            // Bed status update carries no PID.
+            "MSH|^~\\&|KIS|KLINIK|RCV|RZ|20240101120000||ADT^A20|A20|P|2.5\rEVN||20240101120000\rNPU|W1^101^1|C\r",
+            // PID-8 (sex) absent: optional.
+            "MSH|^~\\&|KIS|KLINIK|RCV|RZ|20240101120000||ADT^A01|NOSEX|P|2.5\rEVN||20240101120000\rPID|||4711^^^H||Muster^Max||19800515\rPV1||I|W1\r",
+            // Lab order without patient group and without OBR.
+            "MSH|^~\\&|LIS|KLINIK|RCV|RZ|20240101120000||OML^O21|OML1|P|2.5\rORC|NW|L1\r",
+        ];
+        for raw in cases {
+            let w: Vec<_> = warnings_for(raw)
+                .into_iter()
+                .filter(|w| w.code == "MISSING_SEGMENT" || w.code == "MISSING_FIELD")
+                .collect();
+            assert!(w.is_empty(), "{raw:?}: {w:?}");
+        }
+    }
+
+    /// The rules that remain still fire.
+    #[test]
+    fn required_parts_still_warn() {
+        let missing = |raw: &str, seg: &str| {
+            warnings_for(raw)
+                .iter()
+                .any(|w| w.code == "MISSING_SEGMENT" && w.segment == seg)
+        };
+        assert!(missing(
+            "MSH|^~\\&|P|K|R|Z|20240101||ORM^O01|X|P|2.5\rPID|||1\rOBR|1\r",
+            "ORC"
+        ));
+        assert!(missing(
+            "MSH|^~\\&|P|K|R|Z|20240101||OML^O21|X|P|2.5\rPID|||1\r",
+            "ORC"
+        ));
+        assert!(missing(
+            "MSH|^~\\&|K|K|R|Z|20240101||ADT^A20|X|P|2.5\rEVN||2024\r",
+            "NPU"
+        ));
+        assert!(missing(
+            "MSH|^~\\&|K|K|R|Z|20240101||ADT^A01|X|P|2.5\rEVN||2024\rPV1||I\r",
+            "PID"
+        ));
     }
 
     #[test]
