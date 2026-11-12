@@ -23,7 +23,7 @@ axum = { version = "0.8", features = ["ws"] }
 # Serialization
 serde = { version = "1", features = ["derive", "rc"] }
 serde_json = "1"
-toml = "0.8"
+toml = "1.2"
 
 # Streaming response bodies (`Stream` trait only — already in the dependency
 # tree via axum/tokio, so this adds no new crate to the build)
