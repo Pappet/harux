@@ -2,7 +2,7 @@
 
 This document tracks all milestones and planned features. Each milestone lists its tasks, completion status, and acceptance criteria. It is the one place for planning facts (current milestone, next work); `AGENTS.md` and the other guides link here instead of repeating them.
 
-**Current state:** Milestones 0–3 are complete. v0.9.0 shipped the hardening from the v0.8.0 review (#222–#250). **Next planned:** Milestone 4 (Workflow & Testing).
+**Current state:** Milestones 0–3 are complete. v0.9.0 shipped the hardening from the v0.8.0 review (#222–#250). **Next planned:** Milestone 4 (Workflow & Testing), which will be released as v1.0.0 — see its [implementation plan](MILESTONE_4_PLAN.md).
 
 ---
 
@@ -122,7 +122,7 @@ This document tracks all milestones and planned features. Each milestone lists i
 
 **Goal:** Rapid testing against Orchestra — send, edit, replay messages directly from the UI.
 
-**Status: Planned**
+**Status: Planned** — the [implementation plan](MILESTONE_4_PLAN.md) has the design, the API, the safety rules and the work packages M4-1 … M4-12. The owner's decisions of 2026-11-12 are in its section 11; one question is still open there.
 
 ### Requirements
 
@@ -130,16 +130,31 @@ This document tracks all milestones and planned features. Each milestone lists i
 
 ### Tasks
 
-- [ ] **Message replay** — resend stored messages to a configurable target address/port (MLLP client)
-- [ ] **Test message generator** — templates for common types (ADT^A01, ORM^O01, ORU^R01) with editable fields
+- [ ] **Message replay** — resend stored messages to a configurable target address/port (MLLP client, over TLS where the target needs it)
+  - [ ] M4-1 Send a stored message, unchanged: MLLP client, switch and limits in `harux.toml`, sent messages and their responses in the store and shown as sent
+  - [ ] M4-2 TLS for outgoing connections
+  - [ ] M4-3 Resend in the UI: a target list for every user, one-click resend, direction filter
+  - [ ] M4-4 Changes on resend: new control ID, current time, field overrides
 - [ ] **Message editor** — edit raw HL7 in the UI and send
+  - [ ] M4-5 Drafts on the server: preview, field write-back, building the bytes
+  - [ ] M4-6 Drafts in the UI: write or edit a message in the detail panel and send it, validated live
+  - [ ] M4-7 Edit a draft field by field
+- [ ] **Test message generator** — templates for common types (ADT^A01, ORM^O01, ORU^R01) with editable fields
+  - [ ] M4-8 Built-in templates and a template directory
+- [ ] **Several messages** — resend the filtered messages in order, repeat a draft
+  - [ ] M4-9 Send runs with progress and cancel
+  - [ ] M4-10 Import an `.hl7` file into the store
 - [ ] **Auto-refresh trigger** — desktop notification on new messages (optional)
+  - [ ] M4-11 Watch: notify about new messages that match the current filter
+- [ ] M4-12 Release v1.0.0
 
 ### Acceptance Criteria
 
 - [ ] A received message can be replayed to a configured target address with a single click
 - [ ] A template can be filled out in the UI, sent, and the response (ACK/NAK) displayed
 - [ ] Raw HL7 can be edited and sent directly
+- [ ] A message can be sent to a target that requires TLS
+- [ ] Sending is off until `harux.toml` switches it on, and can be limited to listed destinations; everything Harux sends is visible in the message list with the address that asked for it
 
 ---
 
@@ -192,7 +207,7 @@ This document tracks all milestones and planned features. Each milestone lists i
 
 **Extended Features**
 - [ ] **Multi-port listener** — multiple MLLP ports simultaneously (test separate Orchestra channels)
-- [ ] **TLS support** — encrypted MLLP connections (MLLP/S). Until then, `server.web_bind = "127.0.0.1"` behind a TLS reverse proxy covers the web side (#237)
+- [ ] **TLS support for the listener** — encrypted incoming MLLP connections (MLLP/S); outgoing connections get TLS in Milestone 4. Until then, `server.web_bind = "127.0.0.1"` behind a TLS reverse proxy covers the web side (#237)
 - [ ] **ACK configuration** — customizable ACK responses (e.g. always send NAK to test retry logic)
 - [ ] **Regex filter** — extended search with regular expressions
 - [ ] **Dark/Light theme toggle**

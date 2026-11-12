@@ -1,0 +1,440 @@
+<!DOCTYPE html>
+<html lang="en">
+<!--
+  Milestone 4 (Workflow & Testing) — UI mockup for docs/MILESTONE_4_PLAN.md.
+
+  Static illustration, not application code. It loads the application's real
+  stylesheet (../../static/style.css), so it shows the proposal in the current
+  look; everything under "Proposed components" below is new and would move
+  into static/style.css. Open it from a checkout of the repository.
+-->
+<head>
+<meta charset="UTF-8">
+<title>Harux — Milestone 4 workbench mockup</title>
+<link rel="stylesheet" href="../../static/style.css">
+<style>
+/* The app loads its fonts from /fonts/; from a file:// page use relative paths. */
+@font-face { font-family: 'Inter'; font-weight: 100 900; src: url('../../static/fonts/Inter-latin.woff2') format('woff2'); }
+@font-face { font-family: 'JetBrains Mono'; font-weight: 100 900; src: url('../../static/fonts/JetBrains-Mono-latin.woff2') format('woff2'); }
+
+/* ── Mockup page chrome (not part of the proposal) ─────────────────── */
+body { height: auto; overflow: auto; display: block; padding: 32px 0 60px; }
+.mock-intro, .frame-caption { width: 1440px; margin: 0 auto; }
+.mock-intro h1 { font-size: 22px; letter-spacing: -0.01em; margin-bottom: 6px; }
+.mock-intro p { color: var(--text-secondary); font-size: 13px; line-height: 1.6; max-width: 980px; margin-bottom: 26px; }
+.frame-caption { display: flex; gap: 12px; align-items: baseline; margin-bottom: 10px; margin-top: 34px; }
+.frame-caption .num { font-family: var(--font-mono); font-size: 11px; color: var(--accent); border: 1px solid rgba(122,162,255,.35); border-radius: 4px; padding: 2px 7px; }
+.frame-caption h2 { font-size: 15px; font-weight: 600; }
+.frame-caption span.sub { color: var(--text-muted); font-size: 12px; }
+.frame { width: 1440px; height: 800px; margin: 0 auto; display: flex; flex-direction: column; border: 1px solid var(--border); border-radius: 10px; overflow: hidden; position: relative; background: var(--bg-primary); }
+.frame .message-list { overflow: hidden; }
+.frame .list-panel { flex-basis: 52%; }
+.frame .detail-content { overflow: hidden; }
+.frame .message-row { content-visibility: visible; }
+.note-new { outline: 1px dashed rgba(122,162,255,.55); outline-offset: 3px; border-radius: 6px; }
+
+/* ── Proposed components (new in Milestone 4) ──────────────────────── */
+
+/* Primary action: "New message", "Send" */
+.btn-primary { background: var(--accent); border-color: var(--accent); color: #0b0d12; font-weight: 600; }
+.btn-primary:hover { background: var(--accent-dim); }
+
+/* Sent rows: direction glyph, dashed bar, target instead of source address */
+.msg-dir { font-family: var(--font-mono); font-size: 11px; font-weight: 700; color: var(--accent); width: 12px; text-align: center; }
+.msg-dir.in { color: var(--text-muted); }
+.message-row.outbound .msg-source-bar { background: repeating-linear-gradient(180deg, var(--accent) 0 5px, transparent 5px 9px) !important; }
+.message-row.outbound .msg-row2 .src { color: var(--accent); }
+.msg-latency { font-family: var(--font-mono); font-size: 10px; color: var(--text-muted); margin-left: 6px; }
+.msg-ack.pending { color: var(--text-secondary); border-color: var(--border); background: var(--bg-tertiary); }
+.msg-ack.fail { color: var(--error); border-color: rgba(234,99,99,.45); background: rgba(234,99,99,.10); }
+.msg-origin { font-family: var(--font-mono); font-size: 10px; color: var(--text-muted); border: 1px solid var(--border); border-radius: 4px; padding: 1px 6px; }
+
+/* Rails: targets next to sources, drafts under them */
+.source-chip.target { border-style: dashed; }
+.source-chip.target .arrow { color: var(--accent); font-family: var(--font-mono); font-weight: 700; }
+.rail-sep { width: 1px; height: 16px; background: var(--border); margin: 0 4px; flex-shrink: 0; }
+.draft-rail { display: flex; align-items: center; gap: 8px; padding: 8px 14px; border-bottom: 1px solid var(--border); background: var(--bg-secondary); }
+.draft-rail .label { font-size: 10px; text-transform: uppercase; letter-spacing: .08em; color: var(--text-muted); margin-right: 4px; }
+.draft-chip { display: inline-flex; align-items: center; gap: 7px; height: 26px; padding: 0 9px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg-tertiary); color: var(--text-secondary); font-size: 12px; cursor: pointer; }
+.draft-chip .t { font-family: var(--font-mono); font-size: 11px; color: var(--accent); }
+.draft-chip .unsent { width: 6px; height: 6px; border-radius: 50%; background: var(--warning); }
+.draft-chip .x { color: var(--text-muted); font-size: 11px; }
+.draft-chip.active { border-color: rgba(122,162,255,.55); background: rgba(122,162,255,.10); color: var(--text-primary); }
+
+/* Detail header: send actions on the title row, tags/bookmark/pin on a tools row */
+.detail-header.m4 { grid-template-areas: "title actions" "desc desc" "meta meta" "tools tools"; }
+.detail-tools { grid-area: tools; display: flex; align-items: center; gap: 6px; margin-top: 6px; padding-top: 10px; border-top: 1px dashed var(--border); }
+.detail-tools .action-btn { display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 10px; background: transparent; border: 1px solid transparent; color: var(--text-secondary); font-size: 12px; border-radius: 6px; }
+.detail-tools .spacer { flex: 1; }
+.split-btn { display: inline-flex; }
+.split-btn button { border-radius: 6px 0 0 6px; height: 30px; }
+.split-btn button + button { border-radius: 0 6px 6px 0; border-left: 0; padding: 0 8px; }
+.split-btn .to { color: var(--text-muted); font-family: var(--font-mono); font-size: 11px; }
+.dir-badge { font-family: var(--font-mono); font-size: 11px; font-weight: 600; padding: 3px 8px; border-radius: 4px; border: 1px dashed rgba(122,162,255,.45); color: var(--accent); }
+.dir-badge.draft { border: 1px solid rgba(229,165,75,.45); color: var(--warning); background: rgba(229,165,75,.08); }
+.origin-link { color: var(--accent); cursor: pointer; }
+
+/* Target menu (opens from the Resend caret and from the draft's target button) */
+.send-menu { position: absolute; z-index: 30; width: 400px; background: var(--bg-tertiary); border: 1px solid var(--border); border-radius: 10px; box-shadow: 0 18px 50px rgba(0,0,0,.55); padding: 10px; }
+.send-menu h4 { font-size: 10px; text-transform: uppercase; letter-spacing: .08em; color: var(--text-muted); font-weight: 600; margin: 6px 6px 6px; }
+.target-option { display: grid; grid-template-columns: 14px 1fr auto; gap: 2px 10px; align-items: center; padding: 7px 8px; border-radius: 6px; cursor: pointer; }
+.target-option:hover, .target-option.selected { background: var(--bg-hover); }
+.target-option .radio { width: 10px; height: 10px; border-radius: 50%; border: 1.5px solid var(--text-muted); }
+.target-option.selected .radio { border-color: var(--accent); background: var(--accent); box-shadow: inset 0 0 0 2px var(--bg-hover); }
+.target-option .name { font-size: 12px; font-weight: 600; }
+.target-option .addr { grid-column: 2; font-family: var(--font-mono); font-size: 10.5px; color: var(--text-muted); }
+.target-option .last { grid-row: 1 / span 2; grid-column: 3; font-family: var(--font-mono); font-size: 10.5px; color: var(--text-muted); text-align: right; }
+.target-option .last.ok { color: var(--success); }
+.target-option .last.bad { color: var(--error); }
+.target-option .guard { color: var(--warning); font-size: 10.5px; font-weight: 600; }
+.send-menu h4 .h4-actions { float: right; text-transform: none; letter-spacing: 0; font-weight: 400; color: var(--accent); }
+.target-option .tls { font-family: var(--font-mono); font-size: 9.5px; font-weight: 600; color: var(--success); border: 1px solid rgba(79,185,138,.4); border-radius: 3px; padding: 0 4px; margin-left: 4px; vertical-align: 1px; }
+/* The user's own target list: a small form in the same menu (decision D2) */
+.target-form { margin: 6px 4px 2px; padding: 8px; border: 1px dashed var(--border); border-radius: 8px; }
+.target-form h4 { margin: 0 2px 6px; }
+.target-form .row { display: flex; align-items: center; gap: 6px; font-size: 11.5px; color: var(--text-secondary); }
+.target-form .row + .row { margin-top: 8px; }
+.target-form input { flex: 1 1 0; min-width: 0; background: var(--bg-primary); border: 1px solid var(--border); border-radius: 6px; color: var(--text-primary); font-family: var(--font-mono); font-size: 11px; padding: 6px 8px; }
+.target-form input.host { flex: 1.6 1 0; }
+.target-form input.port { flex: 0 0 58px; }
+.target-form .spacer { flex: 1; }
+.target-form button { height: 26px; padding: 0 10px; }
+/* Toggle switch (style guide: no native checkboxes) */
+.switch { width: 26px; height: 14px; border-radius: 7px; background: var(--bg-primary); border: 1px solid var(--border); position: relative; flex-shrink: 0; }
+.switch::after { content: ''; position: absolute; top: 1px; left: 1px; width: 10px; height: 10px; border-radius: 50%; background: var(--text-muted); }
+.switch.on { background: rgba(122,162,255,.18); border-color: rgba(122,162,255,.55); }
+.switch.on::after { left: 13px; background: var(--accent); }
+.switch + span { margin-right: 8px; }
+.send-menu hr { border: 0; border-top: 1px solid var(--border); margin: 8px 0; }
+.opt-row { display: flex; align-items: center; gap: 8px; padding: 5px 8px; font-size: 12px; color: var(--text-secondary); }
+.opt-row .radio { width: 10px; height: 10px; border-radius: 50%; border: 1.5px solid var(--text-muted); flex-shrink: 0; }
+.opt-row.selected { color: var(--text-primary); }
+.opt-row.selected .radio { border-color: var(--accent); background: var(--accent); box-shadow: inset 0 0 0 2px var(--bg-tertiary); }
+.opt-row code { font-family: var(--font-mono); font-size: 10.5px; color: var(--text-muted); }
+.send-menu .foot { display: flex; justify-content: space-between; align-items: center; padding: 8px 8px 2px; }
+.send-menu .foot .hint { font-size: 10.5px; color: var(--text-muted); }
+
+/* Draft: target button + Send */
+.target-btn { height: 30px; gap: 8px; }
+.target-btn .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--success); }
+.target-btn .k { color: var(--text-muted); }
+kbd.key { font-family: var(--font-mono); font-size: 10px; padding: 1px 5px; border-radius: 4px; background: rgba(11,13,18,.25); border: 1px solid rgba(11,13,18,.25); }
+
+/* Editable segments */
+.field-table.editable td.field-val { padding-top: 4px; padding-bottom: 4px; cursor: text; }
+.field-input { width: 100%; background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 5px; color: var(--text-primary); font-family: var(--font-mono); font-size: 12px; padding: 5px 8px; }
+.field-input.focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(122,162,255,.15); }
+.field-input.warn { border-color: rgba(229,165,75,.6); }
+.field-input.auto { color: #c4a7ff; border-style: dashed; }
+.auto-badge { font-family: var(--font-mono); font-size: 10px; color: #c4a7ff; border: 1px solid rgba(196,167,255,.4); border-radius: 4px; padding: 1px 6px; white-space: nowrap; }
+.field-quick { font-size: 10.5px; color: var(--accent); cursor: pointer; white-space: nowrap; }
+.seg-tools { margin-left: auto; display: inline-flex; gap: 10px; font-size: 10.5px; color: var(--text-muted); font-weight: 400; }
+.seg-pill.addable { cursor: pointer; border-style: dashed; }
+
+/* Send result */
+.result-banner { display: flex; align-items: center; gap: 12px; padding: 12px 14px; border-radius: 8px; border: 1px solid rgba(79,185,138,.4); background: rgba(79,185,138,.08); color: var(--success); font-size: 13px; margin-bottom: 14px; }
+.result-banner strong { color: var(--text-primary); }
+.result-banner .ms { margin-left: auto; font-family: var(--font-mono); font-size: 11px; color: var(--text-secondary); }
+.result-facts { display: flex; flex-wrap: wrap; gap: 6px 18px; font-family: var(--font-mono); font-size: 11px; color: var(--text-muted); margin-bottom: 16px; }
+.result-facts .v { color: var(--text-secondary); }
+.result-facts .ok { color: var(--success); }
+.send-history { margin-top: 18px; border-top: 1px solid var(--border); padding-top: 12px; }
+.send-history h5 { font-size: 10px; text-transform: uppercase; letter-spacing: .08em; color: var(--text-muted); margin-bottom: 8px; }
+.send-history .h-row { display: flex; gap: 12px; align-items: center; font-family: var(--font-mono); font-size: 11px; color: var(--text-secondary); padding: 4px 0; }
+.send-history .h-row .when { color: var(--text-muted); width: 70px; }
+
+/* Send run (several messages): progress docked under the list */
+.run-bar { display: flex; align-items: center; gap: 12px; padding: 9px 14px; border-top: 1px solid var(--border); background: var(--bg-secondary); font-size: 12px; color: var(--text-secondary); }
+.run-bar .track { flex: 0 0 120px; height: 6px; border-radius: 3px; background: var(--bg-tertiary); overflow: hidden; }
+.run-bar .track i { display: block; height: 100%; width: 48%; background: var(--accent); }
+.run-bar .mono { font-family: var(--font-mono); font-size: 11px; white-space: nowrap; }
+.run-bar .what { overflow: hidden; text-overflow: ellipsis; }
+.run-bar .ok { color: var(--success); }
+.run-bar .bad { color: var(--warning); }
+.run-bar .spacer { flex: 1; }
+</style>
+</head>
+<body>
+
+<div class="mock-intro">
+    <h1>Milestone 4 — Harux as a workbench: send, edit, resend</h1>
+    <p>Three states of the same window. Nothing opens in a dialog or on a separate page: sent messages appear in the
+       list next to received ones, a draft is shown where a message is shown, and the response to a sent message sits
+       where the ACK of a received one sits. Dashed blue outlines mark what is new. Plan: <code>docs/MILESTONE_4_PLAN.md</code>.</p>
+</div>
+
+<div id="frames"></div>
+
+<script>
+// ── Icons (lucide outlines, as in static/util.js) ───────────────────────
+const svg = (body, cls = 'i') => `<svg class="${cls}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${body}</svg>`;
+const I = {
+    logo: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z" fill="var(--accent)" stroke="var(--accent)"/></svg>',
+    search: svg('<circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/>', 'i search-icon'),
+    pause: svg('<rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/>'),
+    down: svg('<line x1="12" y1="5" x2="12" y2="19"/><polyline points="19 12 12 19 5 12"/>'),
+    star: svg('<polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/>'),
+    warn: svg('<path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/>'),
+    pin: svg('<line x1="12" y1="17" x2="12" y2="22"/><path d="M5 17h14V8a3 3 0 0 0-3-3H8a3 3 0 0 0-3 3v9z"/>'),
+    dl: svg('<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/>'),
+    trash: svg('<polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/>'),
+    send: svg('<line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/>'),
+    edit: svg('<path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/>'),
+    resend: svg('<polyline points="17 1 21 5 17 9"/><path d="M3 11V9a4 4 0 0 1 4-4h14"/><polyline points="7 23 3 19 7 15"/><path d="M21 13v2a4 4 0 0 1-4 4H3"/>'),
+    bell: svg('<path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/>'),
+    updown: svg('<polyline points="8 7 12 3 16 7"/><line x1="12" y1="3" x2="12" y2="21"/><polyline points="16 17 12 21 8 17"/>'),
+    chev: svg('<polyline points="6 9 12 15 18 9"/>', 'i-sm'),
+    chevR: svg('<polyline points="9 18 15 12 9 6"/>', 'i-sm'),
+    plus: svg('<line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>'),
+    check: svg('<polyline points="20 6 9 17 4 12"/>'),
+};
+
+// ── Shared parts ────────────────────────────────────────────────────────
+const header = () => `
+<header>
+    <div class="logo">${I.logo} Harux</div>
+    <div class="health">
+        <div class="health-pill live"><span class="dot"></span><span class="label">listening</span><span class="value">:2575</span></div>
+        <div class="health-pill"><span class="label">conns</span><span class="value">2 / 100</span></div>
+        <div class="health-pill"><span class="label">rate</span><span class="value">14/min</span></div>
+        <div class="topbar-divider"></div>
+        <div class="health-pill"><span class="label">total</span><span class="value">248</span></div>
+        <div class="health-pill note-new" title="new: messages sent"><span class="label">sent</span><span class="value">12</span></div>
+        <div class="health-pill warn-pill"><span class="label">validation</span><span class="value">29</span></div>
+        <div class="health-pill err-pill"><span class="label">parse errors</span><span class="value">1</span></div>
+    </div>
+    <div class="header-actions">
+        <button class="btn-primary note-new">${I.edit} New message ${I.chev}</button>
+        <button>${I.dl} Export</button>
+        <button class="danger">${I.trash} Clear</button>
+    </div>
+</header>`;
+
+const SRC = { orch: 'hsl(180, 70%, 50%)', his: 'hsl(30, 85%, 60%)' };
+
+// One list row. `m.out` = sent by Harux (target instead of source address).
+const row = (m) => `
+<div class="message-row${m.out ? ' outbound' : ''}${m.selected ? ' selected' : ''}">
+    <div class="msg-source-bar" style="background:${m.color || SRC.orch}"></div>
+    <div class="msg-body">
+        <div class="msg-row1">
+            <span class="msg-dir${m.out ? '' : ' in'}">${m.out ? '↑' : '↓'}</span>
+            <span class="msg-type">${m.type}</span><span class="msg-patient">${m.patient}</span>
+            ${m.warn ? `<span class="msg-warning warn">⚠ ${m.warn}</span>` : ''}
+            ${m.origin ? `<span class="msg-origin">${m.origin}</span>` : ''}
+            <span class="msg-ack ${m.ackClass || 'aa'}">${m.ack || 'AA'}</span>${m.ms ? `<span class="msg-latency">${m.ms}</span>` : ''}
+        </div>
+        <div class="msg-row2">
+            <span class="facility">${m.fac}</span><span class="sep">·</span>
+            <span class="src">${m.out ? '→ ' + m.target : m.src}</span><span class="sep">·</span>
+            <span class="segs">${m.segs} segs</span><span class="time">${m.time}</span>
+        </div>
+    </div>
+    <div class="msg-actions"></div>
+</div>`;
+
+const ROWS = (selected) => [
+    { type: 'ADT^A01', patient: 'Müller, Max', fac: 'ORCHESTRA', src: '10.4.1.22:51302', segs: 6, time: '1s ago', id: 'in-new' },
+    { out: true, type: 'ADT^A01', patient: 'Müller, Max', fac: 'KIS', target: 'orchestra-test-adt', segs: 5, time: '2s ago', ms: '42 ms', origin: 'draft', id: 'sent' },
+    { type: 'ORU^R01', patient: 'Schmidt, Anna', fac: 'LAB', src: '10.4.1.30:40112', segs: 9, time: '41s ago', color: SRC.his, warn: 1 },
+    { out: true, type: 'ADT^A08', patient: 'Weber, Jonas', fac: 'KIS', target: 'orchestra-test-adt', segs: 6, time: '2m ago', ack: '✕ timeout', ackClass: 'fail', origin: '↻ resend' },
+    { type: 'ADT^A01', patient: 'Müller, Max', fac: 'KIS', src: '10.4.1.22:50988', segs: 5, time: '3m ago', id: 'orig' },
+    { type: 'MDM^T02', patient: 'Weber, Jonas', fac: 'DMS', src: '10.4.1.22:50871', segs: 4, time: '4m ago' },
+    { type: 'ADT^A08', patient: 'Weber, Jonas', fac: 'KIS', src: '10.4.1.22:50790', segs: 6, time: '12:01:22', ack: 'AA' },
+    { type: 'SIU^S12', patient: 'Koch, Lena', fac: 'RIS', src: '10.4.1.30:39977', segs: 7, time: '11:58:03', color: SRC.his },
+].map((m) => row({ ...m, selected: m.id === selected })).join('');
+
+const listPanel = ({ selected, draftActive, runBar }) => `
+<div class="list-panel">
+    <div class="search-bar">${I.search}<input type="text" placeholder="Filter: type, patient, facility, ID, has:errors, is:sent…"><kbd class="search-tip">^K</kbd></div>
+    <div class="inbox-controls">
+        <button class="ctl-btn">${I.pause}<span class="btn-label">Pause</span></button>
+        <button class="ctl-btn on ok-on">${I.down}<span class="btn-label">Auto</span></button>
+        <div class="ctl-divider"></div>
+        <button class="ctl-btn">${I.star}<span class="btn-label">Bookmarks</span></button>
+        <button class="ctl-btn">${I.warn}<span class="btn-label">All</span></button>
+        <button class="ctl-btn note-new" title="new: All → Received → Sent">${I.updown}<span class="btn-label">In + Out</span></button>
+        <div class="ctl-divider"></div>
+        <button class="ctl-btn note-new" title="new: notify me about new messages matching the filter">${I.bell}<span class="btn-label">Watch</span></button>
+    </div>
+    <div class="source-rail">
+        <span class="label">Sources</span>
+        <div class="source-rail-chips">
+            <span class="source-chip"><span class="dot" style="background:${SRC.orch};color:${SRC.orch}"></span>10.4.1.22<span class="num">211</span></span>
+            <span class="source-chip"><span class="dot" style="background:${SRC.his};color:${SRC.his}"></span>10.4.1.30<span class="num">25</span></span>
+            <span class="rail-sep"></span>
+            <span class="source-chip target note-new"><span class="arrow">→</span>orchestra-test-adt<span class="num">12</span></span>
+        </div>
+    </div>
+    <div class="draft-rail note-new">
+        <span class="label">Drafts</span>
+        <span class="draft-chip${draftActive ? ' active' : ''}"><span class="t">ADT^A01</span>Müller, Max<span class="unsent" title="changed since the last send"></span><span class="x">✕</span></span>
+        <span class="draft-chip"><span class="t">ORU^R01</span>Glucose 7.9<span class="x">✕</span></span>
+    </div>
+    <div class="message-list">
+        <div class="group-header">Live</div>
+        ${ROWS(selected)}
+    </div>
+    ${runBar ? `
+    <div class="run-bar note-new">
+        <span class="mono what">Resending 50 messages → orchestra-test-adt</span>
+        <span class="track"><i></i></span>
+        <span class="mono">24 / 50</span>
+        <span class="mono ok">22 AA</span><span class="mono bad">2 AE</span><span class="mono">avg 38 ms</span>
+        <span class="spacer"></span>
+        <button class="ctl-btn">Cancel</button>
+    </div>` : ''}
+</div>
+<div class="panel-splitter"></div>`;
+
+const meta = (pairs) => pairs.map(([k, v]) => `<span class="item"><span class="k">${k}</span><span class="v">${v}</span></span>`).join('<span class="sep">·</span>');
+
+const tools = () => `
+<div class="detail-tools">
+    <div class="msg-tag-add"><input type="text" placeholder="Add tag"><button>+</button></div>
+    <span class="msg-tag">regression-17</span>
+    <span class="spacer"></span>
+    <button class="action-btn">${I.star}<span class="btn-label">Bookmark</span></button>
+    <button class="action-btn">${I.pin}<span class="btn-label">Pin diff</span></button>
+</div>`;
+
+const tabs = (names, active) => `<div class="detail-tabs">${names.map((n) =>
+    `<button class="detail-tab${n === active ? ' active' : ''}">${n}</button>`).join('')}</div>`;
+
+const fieldRow = (idx, desc, value, extra = '') => `
+<tr><td class="field-idx">${idx}<span class="desc-text">${desc}</span></td>
+    <td class="field-val">${value}</td><td class="field-components">${extra}</td></tr>`;
+
+const segBlock = (name, count, rows, toolsHtml = '') => `
+<div class="segment-block"><div class="segment-name"><span class="collapse-icon">${I.chev}</span> ${name} <span class="field-count">(${count})</span>${toolsHtml}</div>
+<table class="field-table${toolsHtml ? ' editable' : ''}"><tbody>${rows}</tbody></table></div>`;
+
+const checklist = (pills) => `<div class="seg-checklist"><span class="seg-checklist-label">Typical segments</span>${pills}</div>`;
+
+// ── Frame 1: a received message, "Resend" menu open ─────────────────────
+const detailReceived = () => `
+<div class="detail-panel">
+    <div class="detail-header m4">
+        <div class="detail-title-line"><span class="detail-type">ADT^A01</span><span class="detail-title">Müller, Max</span></div>
+        <div class="detail-actions">
+            <span class="split-btn note-new">
+                <button>${I.resend} Resend <span class="to">→ orchestra-test-adt</span></button><button>${I.chev}</button>
+            </span>
+            <button class="note-new">${I.edit} Edit</button>
+        </div>
+        <div class="detail-desc">Admit / Visit Notification</div>
+        <div class="detail-meta">${meta([['patient', 'Müller, Max'], ['MRN', '4711'], ['control', 'MSG00042185'], ['v', '2.5'], ['from', '10.4.1.22:50988'], ['charset', '8859/1'], ['received', '2026-11-12 12:00:41']])}</div>
+        ${tools()}
+    </div>
+    ${tabs(['Segments <span class="badge">5</span>', 'Raw', 'ACK', 'JSON'], 'Segments <span class="badge">5</span>')}
+    <div class="detail-content" style="padding:18px 22px">
+        ${checklist('<span class="seg-pill present">MSH ✓</span><span class="seg-pill present">EVN ✓</span><span class="seg-pill present">PID ✓</span><span class="seg-pill absent">PD1</span><span class="seg-pill absent">NK1</span><span class="seg-pill present">PV1 ✓</span><span class="seg-pill absent">PV2</span><span class="seg-pill absent">AL1</span><span class="seg-pill absent">DG1</span>')}
+        ${segBlock('MSH', 18,
+            fieldRow('MSH-3', 'Sending Application', 'KIS') + fieldRow('MSH-4', 'Sending Facility', 'KLINIK') +
+            fieldRow('MSH-7', 'Date/Time Of Message', '20261112120041') + fieldRow('MSH-9', 'Message Type', 'ADT^A01', 'ADT <span class="field-sep comp"> ^ </span> A01') +
+            fieldRow('MSH-10', 'Message Control ID', 'MSG00042185') + fieldRow('MSH-11', 'Processing ID', 'T'))}
+        ${segBlock('PID', 8, fieldRow('PID-3', 'Patient Identifier List', '4711^^^KLINIK') + fieldRow('PID-5', 'Patient Name', 'Müller^Max'))}
+    </div>
+
+    <div class="send-menu" style="top:104px; right:96px">
+        <h4>My targets <span class="h4-actions">Edit · Save to file · Load</span></h4>
+        <div class="target-option selected"><span class="radio"></span><span class="name">orchestra-test-adt <span class="tls">TLS</span></span><span class="last ok">AA · 42 ms<br>2 min ago</span><span class="addr">orchestra-test.klinik.local:6661</span></div>
+        <div class="target-option"><span class="radio"></span><span class="name">orchestra-test-oru <span class="tls">TLS</span></span><span class="last">not used yet</span><span class="addr">orchestra-test.klinik.local:6662</span></div>
+        <div class="target-option"><span class="radio"></span><span class="name">orchestra-prod-adt <span class="tls">TLS</span> <span class="guard">⚠ asks before sending</span></span><span class="last bad">refused<br>yesterday</span><span class="addr">orchestra.klinik.local:6661</span></div>
+        <div class="target-option"><span class="radio"></span><span class="name">This Harux</span><span class="last ok">AA · 1 ms</span><span class="addr">127.0.0.1:2575 · loopback</span></div>
+        <div class="target-form">
+            <h4>Add target</h4>
+            <div class="row"><input type="text" value="orchestra-test-mdm" placeholder="Name"><input type="text" class="host" value="orchestra-test.klinik.local" placeholder="Host"><input type="text" class="port" value="6663" placeholder="Port"></div>
+            <div class="row"><span class="switch on"></span><span>TLS</span><span class="switch"></span><span>Ask before sending</span><span class="spacer"></span><button>Save</button></div>
+        </div>
+        <hr>
+        <h4>Send as</h4>
+        <div class="opt-row selected"><span class="radio"></span>As received <code>byte for byte</code></div>
+        <div class="opt-row"><span class="radio"></span>With a new control ID <code>MSH-10</code></div>
+        <div class="opt-row"><span class="radio"></span>With a new control ID and the current time <code>MSH-10, MSH-7</code></div>
+        <div class="foot"><span class="hint">Remembered for the next one-click resend</span><button class="btn-primary">${I.send} Send</button></div>
+    </div>
+</div>`;
+
+// ── Frame 2: a draft, edited field by field ─────────────────────────────
+const inp = (v, cls = '') => `<input class="field-input ${cls}" value="${v}">`;
+const detailDraft = () => `
+<div class="detail-panel">
+    <div class="detail-header m4">
+        <div class="detail-title-line"><span class="dir-badge draft">DRAFT</span><span class="detail-type">ADT^A01</span><span class="detail-title">Müller, Max</span></div>
+        <div class="detail-actions">
+            <button class="target-btn"><span class="dot"></span><span class="k">to</span> orchestra-test-adt ${I.chev}</button>
+            <button class="btn-primary">${I.send} Send <kbd class="key">Ctrl ⏎</kbd></button>
+        </div>
+        <div class="detail-desc">Edit of <span class="origin-link">MSG00042185</span>, received 12:00:41 from 10.4.1.22 · changed since the last send</div>
+        <div class="detail-meta">${meta([['to', 'orchestra-test.klinik.local:6661 (TLS)'], ['encoding', 'ISO-8859-1 (MSH-18)'], ['segments', '5'], ['size', '731 B'], ['sent', '2×']])}</div>
+    </div>
+    ${tabs(['Segments <span class="badge">5</span>', 'Raw', 'Response', 'Diff vs pinned'], 'Segments <span class="badge">5</span>')}
+    <div class="detail-content" style="padding:18px 22px">
+        ${checklist('<span class="seg-pill present">MSH ✓</span><span class="seg-pill present">EVN ✓</span><span class="seg-pill present">PID ✓</span><span class="seg-pill absent addable">+ PD1</span><span class="seg-pill absent addable">+ NK1</span><span class="seg-pill warn">PV1 ⚠</span><span class="seg-pill absent addable">+ PV2</span><span class="seg-pill absent addable">+ AL1</span><span class="seg-pill absent addable">+ DG1</span>')}
+        <details class="validation-summary"><summary><span class="summary-icon">${I.warn}</span><span class="summary-text"><strong>1 validation warning</strong> · required field missing in <span class="seg-list">PV1-2</span></span><span class="summary-chevron">${I.chevR}</span></summary></details>
+        ${segBlock('MSH', 18,
+            fieldRow('MSH-4', 'Sending Facility', inp('KLINIK')) +
+            fieldRow('MSH-7', 'Date/Time Of Message', inp('{{now}}', 'auto'), '<span class="auto-badge">set when sent</span>') +
+            fieldRow('MSH-9', 'Message Type', inp('ADT^A01'), 'ADT <span class="field-sep comp"> ^ </span> A01') +
+            fieldRow('MSH-10', 'Message Control ID', inp('{{id}}', 'auto'), '<span class="auto-badge">new for every send</span>') +
+            fieldRow('MSH-11', 'Processing ID', inp('T')),
+            '<span class="seg-tools"><span>show empty fields</span></span>')}
+        ${segBlock('PID', 8,
+            fieldRow('PID-3', 'Patient Identifier List', inp('4711^^^KLINIK'), '4711 <span class="field-sep comp"> ^ </span> <span class="field-sep comp"> ^ </span> <span class="field-sep comp"> ^ </span> KLINIK') +
+            fieldRow('PID-5', 'Patient Name', inp('Müller^Max', 'focus'), 'Müller <span class="field-sep comp"> ^ </span> Max') +
+            fieldRow('PID-7', 'Date/Time of Birth', inp('19800515')),
+            '<span class="seg-tools"><span>show empty fields</span><span>duplicate</span><span>remove</span></span>')}
+        ${segBlock('PV1', 3,
+            fieldRow('PV1-2', 'Patient Class', inp('', 'warn'), '<span class="field-quick">required for ADT^A01</span>') +
+            fieldRow('PV1-3', 'Assigned Patient Location', inp('W1^R12^B2')),
+            '<span class="seg-tools"><span>show empty fields</span><span>duplicate</span><span>remove</span></span>')}
+    </div>
+</div>`;
+
+// ── Frame 3: a sent message and the response it got ─────────────────────
+const rawLine = (seg, rest) => `<div class="segment-line"><span class="hl-seg-name">${seg}</span>${rest.replace(/[|^~\\&]/g, (c) => `<span class="hl-delim">${c}</span>`)}</div>`;
+const detailSent = () => `
+<div class="detail-panel">
+    <div class="detail-header m4">
+        <div class="detail-title-line"><span class="dir-badge">SENT</span><span class="detail-type">ADT^A01</span><span class="detail-title">Müller, Max</span></div>
+        <div class="detail-actions">
+            <span class="split-btn"><button>${I.resend} Resend <span class="to">→ orchestra-test-adt</span></button><button>${I.chev}</button></span>
+            <button>${I.edit} Edit</button>
+        </div>
+        <div class="detail-desc">Sent from a draft based on <span class="origin-link">MSG00042185</span> · requested by 10.1.2.17</div>
+        <div class="detail-meta">${meta([['patient', 'Müller, Max'], ['control', 'HX3F9A61C27D0B4E8812'], ['to', 'orchestra-test.klinik.local:6661 (TLS)'], ['sent', '2026-11-12 12:03:10'], ['response', 'AA in 42 ms']])}</div>
+        ${tools()}
+    </div>
+    ${tabs(['Segments <span class="badge">5</span>', 'Raw', 'Response', 'JSON', 'Diff vs pinned'], 'Response')}
+    <div class="detail-content" style="padding:18px 22px">
+        <div class="result-banner">${I.check}<span><strong>AA</strong> — accepted by orchestra-test-adt</span><span class="ms">42 ms</span></div>
+        <div class="result-facts">
+            <span>MSA-2 <span class="v">HX3F9A61C27D0B4E8812</span> <span class="ok">matches the sent control ID</span></span>
+            <span>connected <span class="v">3 ms</span></span><span>response charset <span class="v">8859/1</span></span>
+        </div>
+        <div class="raw-view">${rawLine('MSH', '|^~\\&|ORCHESTRA|KLINIK|KIS|KLINIK|20261112120310||ACK^A01|O-88213|T|2.5||||||8859/1')
+            + rawLine('MSA', '|AA|HX3F9A61C27D0B4E8812')}</div>
+        <div class="send-history">
+            <h5>Trace</h5>
+            <div class="h-row"><span class="when">12:03:11</span><span>↓ ADT^A01 from 10.4.1.22 with the same control ID</span><span class="origin-link">show</span></div>
+            <div class="h-row"><span class="when"></span><span class="origin-link">Filter the list by control ID HX3F9A61C27D0B4E8812</span></div>
+        </div>
+    </div>
+</div>`;
+
+// ── Assemble ────────────────────────────────────────────────────────────
+const frames = [
+    { n: 1, title: 'Resend a received message', sub: 'One click on “Resend” uses the remembered target; the caret opens this menu.',
+      body: listPanel({ selected: 'orig' }) + detailReceived() },
+    { n: 2, title: 'Edit and send a draft', sub: '“Edit” or “New message” opens a draft in the detail panel: the same Segments and Raw tabs, editable.',
+      body: listPanel({ selected: null, draftActive: true }) + detailDraft() },
+    { n: 3, title: 'A sent message and its response', sub: 'Sent messages are rows in the same list; the Response tab takes the place of the ACK tab.',
+      body: listPanel({ selected: 'sent', runBar: true }) + detailSent() },
+];
+document.getElementById('frames').innerHTML = frames.map((f) => `
+<div class="frame-caption"><span class="num">${f.n}</span><h2>${f.title}</h2><span class="sub">${f.sub}</span></div>
+<div class="frame" id="frame-${f.n}">${header()}<div class="main-container">${f.body}</div></div>`).join('');
+</script>
+</body>
+</html>
