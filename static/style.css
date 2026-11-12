@@ -152,12 +152,25 @@ header {
 }
 
 .health-pill .dot {
+    position: relative;
     width: 7px;
     height: 7px;
     border-radius: 50%;
     background: var(--success);
-    box-shadow: 0 0 0 0 rgba(79, 185, 138, 0.55);
+}
+
+/* The pulse ring is a pseudo-element animated with transform + opacity only,
+   which the compositor runs off the main thread. Animating box-shadow
+   repainted on the main thread at 60 fps, idle or not (#216). */
+.health-pill .dot::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    border-radius: 50%;
+    background: rgba(79, 185, 138, 0.5);
     animation: health-pulse 1.8s ease-out infinite;
+    will-change: transform, opacity;
+    pointer-events: none;
 }
 
 .health-pill.live {
@@ -180,8 +193,11 @@ header {
 
 .health-pill.disconnected .dot {
     background: var(--error);
-    box-shadow: none;
+}
+
+.health-pill.disconnected .dot::after {
     animation: none;
+    display: none;
 }
 
 .health-pill .value.warn {
@@ -223,13 +239,17 @@ header {
     flex-shrink: 0;
 }
 
+/* Same look as the former 0 → 6px box-shadow ring around the 7px dot:
+   scale 1 → 19/7 while fading out. */
 @keyframes health-pulse {
     0% {
-        box-shadow: 0 0 0 0 rgba(79, 185, 138, 0.5);
+        transform: scale(1);
+        opacity: 1;
     }
 
     100% {
-        box-shadow: 0 0 0 6px rgba(79, 185, 138, 0);
+        transform: scale(2.7);
+        opacity: 0;
     }
 }
 
@@ -406,6 +426,13 @@ body.resizing * {
     cursor: pointer;
     position: relative;
     transition: background 0.1s, opacity 0.15s, outline 0.1s;
+    /* Off-screen rows skip layout and paint (#216): the per-second
+       relative-time update no longer lays out up to 2000 rows. Every row is
+       61 px high (tags and warnings stay on its two lines): 60 px content
+       plus the 1 px border, so the estimate keeps the scrollbar exact;
+       `auto` remembers the real size once a row has been seen. */
+    content-visibility: auto;
+    contain-intrinsic-size: auto 60px;
 }
 
 .message-row:focus-visible {
@@ -1402,6 +1429,24 @@ body.resizing * {
     font-family: var(--font-mono);
     color: var(--text-primary);
     word-break: break-all;
+}
+
+/* Preview of a value too long to lay out in full (#215). */
+.value-truncated {
+    margin-left: 6px;
+    color: var(--text-muted);
+    font-family: var(--font-sans);
+    font-size: 11px;
+    font-style: italic;
+    word-break: normal;
+    white-space: nowrap;
+}
+
+.json-shortened-note {
+    margin-bottom: 8px;
+    color: var(--text-muted);
+    font-size: 12px;
+    font-style: italic;
 }
 
 .field-table .field-empty {
