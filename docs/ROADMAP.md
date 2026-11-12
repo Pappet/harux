@@ -122,7 +122,7 @@ This document tracks all milestones and planned features. Each milestone lists i
 
 **Goal:** Rapid testing against Orchestra — send, edit, replay messages directly from the UI.
 
-**Status: Planned** — [implementation plan](MILESTONE_4_PLAN.md) proposed (design, API, safety rules, work packages M4-1 … M4-9). The work packages below follow it and are final once its open decisions (section 11) are taken.
+**Status: Planned** — [implementation plan](MILESTONE_4_PLAN.md) proposed (design, API, safety rules, work packages M4-1 … M4-11). The work packages below follow it and are final once its open decisions (section 11) are taken.
 
 ### Requirements
 
@@ -131,19 +131,21 @@ This document tracks all milestones and planned features. Each milestone lists i
 ### Tasks
 
 - [ ] **Message replay** — resend stored messages to a configurable target address/port (MLLP client)
-  - [ ] M4-1 Sending over the API: targets and send policy in `harux.toml`, MLLP client, sent messages and their responses in the store
-  - [ ] M4-2 Resend in the UI: one-click resend, sent messages in the list, response view
+  - [ ] M4-1 Send a stored message, unchanged: targets and send policy in `harux.toml`, MLLP client, sent messages and their responses in the store and shown as sent
+  - [ ] M4-2 Resend in the UI: one-click resend, target menu, direction filter
+  - [ ] M4-3 Changes on resend: new control ID, current time, field overrides
 - [ ] **Message editor** — edit raw HL7 in the UI and send
-  - [ ] M4-3 Drafts: write or edit a message in the detail panel and send it, validated live
-  - [ ] M4-4 Edit a draft field by field
+  - [ ] M4-4 Drafts on the server: preview, field write-back, building the bytes
+  - [ ] M4-5 Drafts in the UI: write or edit a message in the detail panel and send it, validated live
+  - [ ] M4-6 Edit a draft field by field
 - [ ] **Test message generator** — templates for common types (ADT^A01, ORM^O01, ORU^R01) with editable fields
-  - [ ] M4-5 Built-in templates and a template directory
+  - [ ] M4-7 Built-in templates and a template directory
+- [ ] M4-8 Release v0.10.0
 - [ ] **Several messages** — resend the filtered messages in order, repeat a draft
-  - [ ] M4-6 Send runs with progress and cancel
-  - [ ] M4-7 Import an `.hl7` file into the store (optional)
+  - [ ] M4-9 Send runs with progress and cancel
+  - [ ] M4-10 Import an `.hl7` file into the store (optional)
 - [ ] **Auto-refresh trigger** — desktop notification on new messages (optional)
-  - [ ] M4-8 Watch: notify about new messages that match the current filter
-- [ ] M4-9 Release v0.10.0
+  - [ ] M4-11 Watch: notify about new messages that match the current filter
 
 ### Acceptance Criteria
 
