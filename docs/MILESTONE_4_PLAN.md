@@ -323,6 +323,13 @@ browser ── POST /api/send ──► web.rs ──► send.rs (run) ──►
   `received_at` the moment the send began. Both names stay as they are, since
   the UI and the API use them everywhere; the meaning is "the peer" and "when
   it entered the list".
+- A destination must never show up as a sender. Everything that groups or
+  colours by source — the source rail and its counters (`registerSource`,
+  `sourceCounts`, `srcLabelFor`), the row's bar (`getSourceColor`) and the
+  highlight — keys a sent message by its target (`Outbound.target`, `target`
+  in the summary), not by `source_addr`. The search is the one place that
+  uses both: for a sent message the source match covers the destination and
+  the target's name, so `orchestra-test` finds what was sent there.
 - `MessageMeta` gets `delivery: Option<Delivery>`:
   `Delivery { state, ack_code, response, error, latency_ms, control_id_matches }`.
   It is `None` for received messages.
@@ -355,10 +362,15 @@ browser ── POST /api/send ──► web.rs ──► send.rs (run) ──►
 
 `src/mllp_client.rs` does one exchange on an open connection and knows nothing
 about the store: write `VT payload FS CR`, read until `FS CR`, with a timeout
-for each step and a size limit for the response (1 MB). It uses `wrap_mllp`
-and `extract_mllp_frame` from `src/mllp.rs`, which become `pub(crate)`. The
-response is decoded with `decode_payload` and read with `parse_message` under
-`catch_unwind`, as incoming frames are. From it come MSA-1 (`AA`/`CA`
+for each step and a size limit for the response (1 MB). It uses the framing
+constants and `extract_mllp_frame` from `src/mllp.rs` (the function becomes
+`pub(crate)`). The frame is written in three parts — start byte, payload, end
+bytes — as the export stream does, not as a framed copy from `wrap_mllp`: the
+payload is borrowed from the stored sent message (`wire_bytes()` is a `Cow`),
+so a message in flight is never held a third time. Only a re-encoded charset
+(`WireForm::Encoded`) needs a buffer of its own, for the one item being
+written. The response is decoded with `decode_payload` and read with
+`parse_message` under `catch_unwind`, as incoming frames are. From it come MSA-1 (`AA`/`CA`
 accepted, `AE`/`CE` error, `AR`/`CR` rejected), MSA-2 and the text. A response
 that is not HL7 is kept as text and marked as such.
 
@@ -400,9 +412,12 @@ that is not HL7 is kept as text and marked as such.
 
 - **Field overrides** are `"MSH-10": "value"` pairs (segment, optional
   occurrence `OBX[2]-5`, field). They are applied to the text with the
-  message's own delimiters and `msh_split_index`; a missing field is created
-  by adding separators, a missing segment is an error. The menu's
-  "new control ID" is the override `MSH-10 = {{id}}`.
+  message's own delimiters and `msh_split_index`. Segments are found the way
+  the parser finds them (split at `CR` and `LF`, blank lines skipped), and
+  only the one field's text is replaced: every other byte, the line ends and
+  the final terminator stay as they are. A missing field is created by adding
+  separators, a missing segment is an error. The menu's "new control ID" is
+  the override `MSH-10 = {{id}}`.
 - **Placeholders** are filled in for override values and for draft text, never
   for the text of a stored message. Only these names are recognized; anything
   else in double braces is sent as written.
@@ -423,8 +438,10 @@ that is not HL7 is kept as text and marked as such.
 `POST /api/parse` takes a draft's text and returns what
 `GET /api/messages/{id}` returns for a stored message — segments,
 descriptions, type information, validation warnings or the parse error — plus
-each field's datatype. Nothing is stored. Placeholders are filled in with
-sample values first, so `{{now}}` is not reported as an invalid timestamp.
+each field's datatype. Nothing is stored. The fields come from the text as
+written, so an input shows `{{now}}`; the warnings come from the same text
+with sample values filled in, so `{{now}}` is not reported as an invalid
+timestamp. The validator itself knows nothing about placeholders.
 
 The draft editor asks for it 300 ms after the last change (the debounce the
 search uses) and renders it with the builders `static/render.js` already
@@ -462,6 +479,8 @@ max_concurrent_runs = 4
 # allowed_destinations = ["orchestra-test.klinik.local:6000-6999"]
 # Directory with .hl7 templates for everyone (read only).
 # templates_dir = "templates"
+# Largest .hl7 file that can be imported (with M4-7).
+# max_import_mb = 50
 
 # [[send.targets]]
 # name = "orchestra-test-adt"
@@ -529,10 +548,20 @@ covers them (#227).
   needs `confirmed` · `413` message or run too large · `422` text does not
   parse (without `allow_invalid`), unmappable character, changed resend of an
   irreproducible message · `429` too many runs.
-- The body limit of `/api/send`, `/api/parse` and `/api/import` is raised
-  from axum's default 2 MB to fit `mllp.max_message_size_mb`.
-- The requesting address comes from the connection (`ConnectInfo`). Behind a
-  reverse proxy it is the proxy's.
+- **Body limits.** axum's default is 2 MB. `/api/send` and `/api/parse` take
+  JSON and get twice `mllp.max_message_size_mb` plus a margin: a message
+  inside a JSON string grows by escaping (every `CR` becomes two characters,
+  other control characters six), so a limit equal to the message cap would
+  refuse messages the listener accepts. The size that counts is checked on
+  the decoded message. `/api/import` takes the file as the raw request body,
+  not as JSON, and has a limit of its own (`send.max_import_mb`).
+- **The requesting address** comes from the connection (`ConnectInfo`). The
+  code does not provide it yet: `src/main.rs` serves the router with
+  `axum::serve(listener, app)`. M4-1 switches that call to
+  `into_make_service_with_connect_info::<SocketAddr>()`. It is the call that
+  carries the graceful shutdown, so the shutdown path
+  (`server.shutdown_timeout_secs`, `wait_for_drain`) is tested again, not only
+  compiled. Behind a reverse proxy the address is the proxy's.
 
 **WebSocket:** one new event, `delivery_updated`, with a summary like
 `tags_updated`. `new_message` carries the new summary fields. Clients that
@@ -550,7 +579,10 @@ Changes to existing files:
 
 - `state.js` — targets, drafts and the selected draft, direction filter, watch.
 - `ws.js` — `delivery_updated` in `handleServerEvent` (queued during a list
-  load like the other events, #239); sent messages are left out of `rateWindow`.
+  load like the other events, #239). It can arrive within the 250 ms before
+  its message is flushed to the list, so it updates the summary in
+  `state.messages` or in `state.pendingMessages`, as `tags_updated` does.
+  Sent messages are left out of `rateWindow` and `lastMessageReceivedAt`.
 - `render.js` — the row skeleton gets the direction element and the `outbound`
   class; `patchRow` learns `delivery`; the detail header gets the tools row and
   the send buttons; the ACK tab renders a response.
