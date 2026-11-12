@@ -297,7 +297,10 @@ function getParsedQuery(query) {
 const DISPLAY_VALUE_MAX = 2000;
 const DISPLAY_VALUE_PREVIEW = 1000;
 
-// Approximate size of `n` characters (Base64 and HL7 text are ~1 byte each).
+// Approximate size of `n` characters, i.e. UTF-16 code units — not a byte
+// count. Exact for Base64 and ASCII; for non-ASCII text the bytes on the wire
+// can differ (Latin-1: one byte per unit, UTF-8: up to three), so treat it
+// as a size label, not a byte count.
 function formatSize(n) {
     if (n < 1024) return `${n} B`;
     if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;

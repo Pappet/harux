@@ -239,18 +239,34 @@ function iconNode(name) {
 
 function rowSkeleton() {
     if (!messageRowTemplate) {
-        const t = document.createElement('template');
-        t.innerHTML = '<div class="message-row" tabindex="0" role="button" data-action="select-message">' +
-            '<div class="msg-source-bar"></div>' +
-            '<div class="msg-body">' +
-            '<div class="msg-row1"><span class="msg-type"></span><span class="msg-patient"></span></div>' +
-            '<div class="msg-row2"><span class="facility"></span><span class="sep">·</span>' +
-            '<span class="src"></span><span class="sep">·</span>' +
-            '<span class="segs"></span><span class="time"></span></div>' +
-            '</div>' +
-            '<div class="msg-actions"><button class="msg-bookmark" data-action="bookmark" title="Bookmark"></button></div>' +
-            '</div>';
-        messageRowTemplate = t.content.firstElementChild;
+        // Built with DOM calls (no HTML parsing), once; every row is a clone.
+        const span = (cls, text) => {
+            const el = document.createElement('span');
+            el.className = cls;
+            if (text) el.textContent = text;
+            return el;
+        };
+        const div = (cls, ...children) => {
+            const el = document.createElement('div');
+            el.className = cls;
+            for (const c of children) el.appendChild(c);
+            return el;
+        };
+        const bookmark = document.createElement('button');
+        bookmark.className = 'msg-bookmark';
+        bookmark.dataset.action = 'bookmark';
+        bookmark.title = 'Bookmark';
+        const row = div('message-row',
+            div('msg-source-bar'),
+            div('msg-body',
+                div('msg-row1', span('msg-type'), span('msg-patient')),
+                div('msg-row2', span('facility'), span('sep', '·'), span('src'), span('sep', '·'),
+                    span('segs'), span('time'))),
+            div('msg-actions', bookmark));
+        row.tabIndex = 0;
+        row.setAttribute('role', 'button');
+        row.dataset.action = 'select-message';
+        messageRowTemplate = row;
     }
     return messageRowTemplate.cloneNode(true);
 }

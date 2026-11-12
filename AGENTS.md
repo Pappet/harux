@@ -275,7 +275,7 @@ tests/
 ├── alloc_accounting.rs           # Counting allocator: estimated_bytes() matches the real heap (#226)
 ├── doc_paths.rs                  # Paths named in the docs exist (#246)
 ├── web_api.rs                    # Axum REST/handler integration tests
-├── js/                           # node:test tests for static/*.js (diff pairing, list load queue, client buffer + counters + list DOM, long-value preview)
+├── js/                           # node:test tests for static/*.js (diff, list load queue, client buffer + counters, row builder, long-value preview); fake-dom.mjs is the shared minimal DOM
 ├── benchmark_concurrent_insert.rs # Concurrent store insert benchmark
 ├── messages/                     # .hl7 fixtures (valid / errors / unknown_types)
 ├── test.sh                       # Linux/macOS functional + load test (netcat)

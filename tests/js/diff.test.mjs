@@ -8,12 +8,12 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
 
-function loadDiff() {
+function loadDiff(previewText = (t) => ({ text: t, truncated: false, size: '' })) {
     const ctx = {
         state: { diffPinnedMessage: null, diffIgnoreDynamic: false },
         DYNAMIC_DIFF_FIELDS: new Set(['MSH-7', 'MSH-10']),
         esc: (s) => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'),
-        previewText: (t) => ({ text: t, truncated: false, size: '' }),
+        previewText,
         escAttr: (s) => String(s ?? '').replace(/"/g, '&quot;'),
     };
     vm.createContext(ctx);
@@ -104,4 +104,26 @@ test('hiding dynamic fields still matches MSH-7/MSH-10 by segment name', () => {
     const b = oru('BB', obx(1, 'GLU', '5.4')); // different MSH-7 and MSH-10
     assert.match(render(ctx, a, b, true).summary, /identical \(2 dynamic hidden\)/);
     assert.deepEqual(render(ctx, a, b, false).changed, ['MSH-7', 'MSH-10']);
+});
+
+// #215 / #267 review: a long value is shown as a preview with a note, but the
+// comparison uses the full values — two values that agree in their first
+// characters and differ later are still a difference.
+test('long values are previewed but compared in full', () => {
+    const preview = (t) => (typeof t === 'string' && t.length > 20
+        ? { text: t.slice(0, 10), truncated: true, size: '5.0 MB' }
+        : { text: t, truncated: false, size: '' });
+    const ctx = loadDiff(preview);
+    const head = 'A'.repeat(30);
+    const stats = { totalDiffs: 0, hiddenDynamic: 0, segHasDiff: false };
+    const html = ctx.buildDiffFieldRow('OBX', 'OBX', 5, { value: head + 'X' }, { value: head + 'Y' }, false, stats);
+    assert.equal(stats.totalDiffs, 1, 'differs beyond the preview');
+    assert.match(html, /class="diff-row changed"/);
+    assert.equal((html.match(/value-truncated/g) || []).length, 2);
+    assert.match(html, /5\.0 MB in total, shortened for display/);
+    assert.ok(!html.includes(head + 'X'), 'the full value is not rendered');
+
+    const same = { totalDiffs: 0, hiddenDynamic: 0, segHasDiff: false };
+    ctx.buildDiffFieldRow('OBX', 'OBX', 5, { value: head + 'X' }, { value: head + 'X' }, false, same);
+    assert.equal(same.totalDiffs, 0);
 });
