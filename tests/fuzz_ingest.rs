@@ -19,7 +19,7 @@
 //! `HARUX_FUZZ_SEED` picks another sequence.
 
 use harux::hl7::charset::decode_payload;
-use harux::hl7::parser::{build_ack, build_nack, parse_message};
+use harux::hl7::parser::{build_ack, build_nack, parse_message, AckError};
 use harux::hl7::types::{Hl7Message, Hl7MessageSummary, MessageMeta};
 use harux::mllp::ingest;
 use std::panic::{catch_unwind, AssertUnwindSafe};
@@ -159,7 +159,7 @@ fn check(payload: &[u8]) -> Result<(), String> {
                     "ingest stored a parsed message, parse_message failed: {reason}"
                 ));
             }
-            let nack = build_nack(&reason);
+            let nack = build_nack(AckError::SegmentSequence, &reason, None);
             parse_message(&nack, "127.0.0.1:1").map_err(|e| format!("NACK unparseable: {e}"))?;
             return Ok(());
         }

@@ -173,6 +173,20 @@ async fn unparseable_frame_gets_nack_and_is_stored() {
     s.write_all(&frame(b"NOT HL7 AT ALL")).await.unwrap();
     let reply = read_reply(&mut s).await.expect("NACK");
     assert!(msa(&reply).starts_with("MSA|AE|UNKNOWN"), "{reply}");
+    // #218: MSA-3 and an ERR segment carry the parser's reason, not only a
+    // generic text.
+    assert!(
+        msa(&reply).contains("Message parse error: Message does not start with MSH"),
+        "{reply}"
+    );
+    let err = reply
+        .split('\r')
+        .find(|seg| seg.starts_with("ERR"))
+        .expect("NACK has an ERR segment");
+    assert!(
+        err.starts_with("ERR|||100^Segment sequence error^HL70357|E||||Message parse error: "),
+        "{err}"
+    );
     let stored = summaries(&srv.store).await;
     assert_eq!(stored.len(), 1);
     assert!(stored[0].parse_error.is_some());
@@ -263,6 +277,12 @@ async fn oversize_frame_is_rejected_visibly_and_connection_survives() {
     for expected in ["MSA|AR|BIG1", "MSA|AR|BIG2", "MSA|AA|SMALL"] {
         let reply = read_reply(&mut s).await.expect(expected);
         assert!(msa(&reply).starts_with(expected), "{reply}");
+        // A reject carries ERR 207 (#218); an ACK has no ERR.
+        assert_eq!(
+            reply.contains("\rERR|||207^Application internal error^HL70357|E"),
+            expected.contains("|AR|"),
+            "{reply}"
+        );
     }
 
     let stored = summaries(&srv.store).await;
@@ -401,6 +421,72 @@ async fn latin1_payload_decoded_per_msh18() {
         .validation_warnings
         .iter()
         .all(|w| w.code != "CHARSET_FALLBACK"));
+}
+
+/// The reply's raw bytes (without the MLLP framing).
+async fn read_reply_bytes(s: &mut TcpStream) -> Vec<u8> {
+    let read = async {
+        let mut buf = Vec::new();
+        loop {
+            buf.push(s.read_u8().await.unwrap());
+            if buf.ends_with(&[FS, CR]) {
+                return buf[1..buf.len() - 2].to_vec();
+            }
+        }
+    };
+    tokio::time::timeout(Duration::from_secs(5), read)
+        .await
+        .expect("reply")
+}
+
+fn contains(haystack: &[u8], needle: &[u8]) -> bool {
+    haystack.windows(needle.len()).any(|w| w == needle)
+}
+
+/// #266 review: a Latin-1 sender gets its reply in Latin-1 — echoed values
+/// and the quoted start of a broken frame — not as UTF-8 mojibake, and the
+/// ACK declares the charset in MSH-18.
+#[tokio::test]
+async fn reply_is_written_in_the_senders_charset() {
+    let srv = start(config()).await;
+    let mut s = TcpStream::connect(srv.addr).await.unwrap();
+
+    // MSH-3 "KÄS" in 8859/1 (0xC4), echoed into the ACK's MSH-5.
+    let mut payload = b"MSH|^~\\&|K".to_vec();
+    payload.extend_from_slice(
+        b"\xC4S|KLINIK|RCV|RZ|20240101120000||ADT^A01|L2|P|2.5||||||8859/1\rPID|1\r",
+    );
+    s.write_all(&frame(&payload)).await.unwrap();
+    let ack = read_reply_bytes(&mut s).await;
+    assert!(
+        contains(&ack, b"|K\xC4S|KLINIK|"),
+        "{}",
+        String::from_utf8_lossy(&ack)
+    );
+    assert!(
+        !contains(&ack, "Ä".as_bytes()),
+        "no UTF-8 in a Latin-1 reply"
+    );
+    assert!(
+        contains(&ack, b"|2.5||||||8859/1\rMSA|AA|L2"),
+        "{}",
+        String::from_utf8_lossy(&ack)
+    );
+
+    // Not HL7, invalid UTF-8 (Latin-1 "ää"): the NACK quotes it in the
+    // charset it was decoded with (Windows-1252), declaring none.
+    s.write_all(&frame(b"NOPE\xE4\xE4rest")).await.unwrap();
+    let nack = read_reply_bytes(&mut s).await;
+    assert!(
+        contains(&nack, b"NOPE\xE4\xE4rest"),
+        "{}",
+        String::from_utf8_lossy(&nack)
+    );
+    assert!(!contains(&nack, "ä".as_bytes()), "no UTF-8 mojibake");
+    assert!(
+        !contains(&nack, b"8859"),
+        "a fallback charset is not declared"
+    );
 }
 
 /// #230: the export gives back exactly the bytes that arrived — whatever the

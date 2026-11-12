@@ -1,6 +1,8 @@
 use crate::config::MllpConfig;
 use crate::hl7::charset::{decode_payload, DecodedPayload};
-use crate::hl7::parser::{build_ack, build_nack, build_reject, parse_message};
+use crate::hl7::parser::{
+    build_ack, build_nack, build_reject, parse_message, reply_charset, AckError,
+};
 use crate::hl7::types::{Hl7Message, WireForm};
 use crate::store::MessageStore;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -344,19 +346,42 @@ async fn handle_connection(
 /// Decode, parse, store one frame and return the reply to send, if any.
 ///
 /// The message is stored before the reply goes out, so an ACK means the
-/// message is in the store.
+/// message is in the store. The reply comes back as bytes in the sender's
+/// own charset ([`reply_bytes`]).
 async fn process_frame(
     payload: &[u8],
     peer: &str,
     store: &MessageStore,
     stats: &MllpStats,
-) -> Option<String> {
+) -> Option<Vec<u8>> {
     let mut msg = ingest(payload, peer);
-    let reply = if let Some(e) = &msg.parse_error {
+    let reply = reply_for(&mut msg, peer, stats);
+    let reply = reply.map(|text| reply_bytes(&text, &msg));
+    store.insert(msg).await;
+    reply
+}
+
+/// The reply to a stored message, recorded on it (`ack_response`,
+/// `ack_code`): a NACK with MSA-3 + ERR for a parse error, no reply for an
+/// incoming ACK (ACK storms), an ACK otherwise.
+fn reply_for(msg: &mut Hl7Message, peer: &str, stats: &MllpStats) -> Option<String> {
+    if let Some(e) = &msg.parse_error {
         stats.parse_errors.fetch_add(1, Ordering::Relaxed);
         warn!("Parse error from {}: {}", peer, e);
-        // NACK (AE = Application Error)
-        let nack = build_nack("Message parse error");
+        // NACK (AE = Application Error) with the actual reason in MSA-3 and
+        // an ERR segment, so the sender's log says what was wrong without
+        // opening Harux (#218). A parser panic is Harux's fault (207), any
+        // other parse error a structure the message doesn't have (100).
+        let error = if e.starts_with(PARSER_PANIC_PREFIX) {
+            AckError::InternalError
+        } else {
+            AckError::SegmentSequence
+        };
+        let nack = build_nack(
+            error,
+            &format!("Message parse error: {e}"),
+            reply_charset(msg),
+        );
         msg.ack_response = Some(nack.clone());
         msg.ack_code = Some("AE".to_string());
         Some(nack)
@@ -370,14 +395,24 @@ async fn process_frame(
             );
             None
         } else {
-            let ack = build_ack(&msg, "AA");
+            let ack = build_ack(msg, "AA");
             msg.ack_response = Some(ack.clone());
             msg.ack_code = Some("AA".to_string());
             Some(ack)
         }
-    };
-    store.insert(msg).await;
-    reply
+    }
+}
+
+/// The reply as bytes in the charset the sender's payload was written in
+/// (#266 review): a Latin-1 sender gets its echoed MSH-3/4 and the quoted
+/// start of a broken frame back in Latin-1, not as UTF-8 mojibake. Harux's
+/// own texts in the reply are ASCII, so they fit any charset. Payloads that
+/// were UTF-8, or whose bytes no encoding reproduces, are answered in UTF-8.
+fn reply_bytes(reply: &str, msg: &Hl7Message) -> Vec<u8> {
+    match msg.wire {
+        WireForm::Encoded(encoding) => encoding.encode(reply).0.into_owned(),
+        WireForm::Utf8 | WireForm::Original(_) => reply.as_bytes().to_vec(),
+    }
 }
 
 /// Turn a frame's bytes into the message to store: parsed, or — when parsing
@@ -389,6 +424,11 @@ async fn process_frame(
 pub fn ingest(payload: &[u8], peer: &str) -> Hl7Message {
     ingest_with(payload, peer, parse_message)
 }
+
+/// Start of the `parse_error` of a frame whose parser panicked. `reply_for`
+/// answers those with ERR-3 `207` instead of `100` — one constant, so the
+/// two can't drift apart (#266 review).
+const PARSER_PANIC_PREFIX: &str = "Internal error while parsing the message";
 
 fn ingest_with(
     payload: &[u8],
@@ -412,7 +452,7 @@ fn ingest_with(
 
     let parsed = catch_panic(|| parse(&decoded.text, peer)).unwrap_or_else(|p| {
         error!("Internal error while parsing a frame from {peer}: {p}");
-        Err(format!("Internal error while parsing the message: {p}"))
+        Err(format!("{PARSER_PANIC_PREFIX}: {p}"))
     });
     let mut msg = match parsed {
         Ok(msg) => msg,
@@ -465,7 +505,7 @@ async fn reject_oversize(
     store: &MessageStore,
     stats: &MllpStats,
     config: &MllpConfig,
-) -> Option<String> {
+) -> Option<Vec<u8>> {
     stats.parse_errors.fetch_add(1, Ordering::Relaxed);
     warn!(
         "Message from {} exceeds {} MB (mllp.max_message_size_mb) — rejected with AR",
@@ -485,7 +525,9 @@ async fn reject_oversize(
     msg.ack_response = Some(reject.clone());
     msg.ack_code = Some("AR".to_string());
     store.insert(msg).await;
-    Some(reject)
+    // The frame was not decoded per MSH-18 (only its head is kept), so the
+    // reject is UTF-8: Harux's ASCII text and the echoed MSH-10.
+    Some(reject.into_bytes())
 }
 
 /// The store entry for an over-limit frame: its first bytes as `raw`, header
@@ -536,7 +578,7 @@ fn skip_to_frame_end(data: &[u8], last_was_fs: &mut bool) -> Option<usize> {
 
 async fn send_reply(
     socket: &mut tokio::net::TcpStream,
-    reply: &str,
+    reply: &[u8],
     peer: &str,
     write_timeout: Duration,
 ) {
@@ -574,10 +616,10 @@ fn extract_mllp_frame(buf: &[u8], scan_from: usize) -> Option<(&[u8], usize)> {
 }
 
 /// Wrap a message in MLLP framing
-fn wrap_mllp(message: &str) -> Vec<u8> {
+fn wrap_mllp(message: &[u8]) -> Vec<u8> {
     let mut frame = Vec::with_capacity(message.len() + 3);
     frame.push(MLLP_START);
-    frame.extend_from_slice(message.as_bytes());
+    frame.extend_from_slice(message);
     frame.push(MLLP_END_1);
     frame.push(MLLP_END_2);
     frame
@@ -628,7 +670,7 @@ mod tests {
 
     #[test]
     fn test_wrap_mllp() {
-        let wrapped = wrap_mllp("TEST");
+        let wrapped = wrap_mllp(b"TEST");
         assert_eq!(wrapped[0], MLLP_START);
         assert_eq!(wrapped[wrapped.len() - 2], MLLP_END_1);
         assert_eq!(wrapped[wrapped.len() - 1], MLLP_END_2);
@@ -650,11 +692,37 @@ mod tests {
         let msg = ingest_with(b"MSH|^~\\&|A|B", "t", |_, _| panic!("boom"));
         assert_eq!(msg.message_type, "UNKNOWN");
         assert_eq!(msg.raw, "MSH|^~\\&|A|B");
-        let err = msg.parse_error.unwrap();
+        let err = msg.parse_error.clone().unwrap();
         assert!(
-            err.contains("Internal error") && err.contains("boom"),
+            err.starts_with(PARSER_PANIC_PREFIX) && err.contains("boom"),
             "{err}"
         );
+    }
+
+    /// #218 / #266 review: a parser panic is answered with ERR-3 `207`
+    /// (Harux's fault), any other parse error with `100`; an ACK has no ERR.
+    #[test]
+    fn test_reply_error_codes() {
+        let stats = MllpStats::new();
+        let mut panicked = ingest_with(b"MSH|^~\\&|A|B", "t", |_, _| panic!("boom"));
+        let nack = reply_for(&mut panicked, "t", &stats).unwrap();
+        assert!(
+            nack.contains("\rERR|||207^Application internal error^HL70357|E"),
+            "{nack}"
+        );
+        assert_eq!(panicked.ack_code.as_deref(), Some("AE"));
+
+        let mut broken = ingest(b"NOT HL7", "t");
+        let nack = reply_for(&mut broken, "t", &stats).unwrap();
+        assert!(
+            nack.contains("\rERR|||100^Segment sequence error^HL70357|E"),
+            "{nack}"
+        );
+
+        let mut ok = ingest(b"MSH|^~\\&|A|B|C|D|20240101||ADT^A01|C1|P|2.5\r", "t");
+        let ack = reply_for(&mut ok, "t", &stats).unwrap();
+        assert!(ack.contains("MSA|AA|C1") && !ack.contains("ERR"), "{ack}");
+        assert_eq!(stats.parse_errors.load(Ordering::Relaxed), 2);
     }
 
     /// #222 inputs go through the real pipeline without panicking.

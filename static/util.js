@@ -89,7 +89,11 @@ function saveSession() {
             diffIgnoreDynamic: state.diffIgnoreDynamic,
             diffPinnedId: state.diffPinnedMessage ? state.diffPinnedMessage.id : null
         }));
-    } catch (_) { /* sessionStorage full or unavailable */ }
+    } catch (e) {
+        // sessionStorage full or unavailable: the view still works, it just
+        // won't survive a reload. Visible in the console for diagnosis (#190).
+        console.debug('Could not save the session view state:', e);
+    }
 }
 
 function loadSession() {
@@ -114,7 +118,10 @@ function loadSession() {
         if (Array.isArray(saved.collapsedSegments)) {
             state.collapsedSegments = new Set(saved.collapsedSegments);
         }
-    } catch (_) { /* corrupted or unavailable */ }
+    } catch (e) {
+        // Corrupted or unavailable: start with a fresh view (#190).
+        console.debug('Could not restore the session view state:', e);
+    }
 }
 
 // --- Escaping helpers ---

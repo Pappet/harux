@@ -120,22 +120,17 @@ function updateMessageTags(summary) {
 }
 
 function updateMessageBookmark(summary) {
+    // A message is in the flushed list or still in the pending buffer —
+    // since #239 never in both, but the counter must not depend on that:
+    // it changes at most once per event, by the state the client held (#184).
     const listMsg = state.messages.find(m => m.id === summary.id);
-    if (listMsg) {
-        if (listMsg.bookmarked !== summary.bookmarked) {
-            state.totalBookmarkCount += summary.bookmarked ? 1 : -1;
-        }
-        listMsg.bookmarked = summary.bookmarked;
-    }
-
     const pendingMsg = state.pendingMessages.find(m => m.id === summary.id);
-    if (pendingMsg) {
-        // Edge case: message arrived but not yet flushed from pendingMessages.
-        if (pendingMsg.bookmarked !== summary.bookmarked) {
-            state.totalBookmarkCount += summary.bookmarked ? 1 : -1;
-        }
-        pendingMsg.bookmarked = summary.bookmarked;
+    const held = listMsg || pendingMsg;
+    if (held && held.bookmarked !== summary.bookmarked) {
+        state.totalBookmarkCount += summary.bookmarked ? 1 : -1;
     }
+    if (listMsg) listMsg.bookmarked = summary.bookmarked;
+    if (pendingMsg) pendingMsg.bookmarked = summary.bookmarked;
 
     if (state.selectedMessage && state.selectedMessage.id === summary.id) {
         state.selectedMessage.bookmarked = summary.bookmarked;
@@ -176,13 +171,15 @@ function forgetMessageCounters(m) {
 // Returns the Set of dropped IDs (empty when nothing was trimmed).
 function trimClientBuffer() {
     const dropped = new Set();
-    let excess = state.messages.length - CLIENT_MESSAGE_CAP;
-    if (excess <= 0) return dropped;
-    // O(1) early exit: if exempt entries alone account for the excess there
-    // is nothing droppable, so don't scan the whole buffer on every flush.
-    // (pendingMessages is empty here, so totalBookmarkCount covers messages[].)
+    // The cap counts the droppable messages only: bookmarked and selected
+    // ones are exempt and don't take places in it. Computing the excess from
+    // the total instead dropped as many extra messages as there were
+    // bookmarks on one flush, and none on the next (#204).
+    // O(1): pendingMessages is empty here, so totalBookmarkCount covers
+    // messages[] and no scan is needed when nothing is droppable.
     const selectedExempt = state.selectedId && !(state.selectedMessage && state.selectedMessage.bookmarked) ? 1 : 0;
-    if (state.messages.length - state.totalBookmarkCount - selectedExempt <= CLIENT_MESSAGE_CAP) return dropped;
+    let excess = state.messages.length - state.totalBookmarkCount - selectedExempt - CLIENT_MESSAGE_CAP;
+    if (excess <= 0) return dropped;
 
     for (let i = state.messages.length - 1; i >= 0 && excess > 0; i--) {
         const m = state.messages[i];
@@ -364,14 +361,20 @@ async function restoreAfterLoad() {
         const seq = ++state.diffPinRequestSeq;
         try {
             const r = await fetch(`/api/messages/${pinId}`);
-            if (r.ok && seq === state.diffPinRequestSeq) {
+            if (!r.ok) {
+                // Evicted or cleared since the session was saved (#190).
+                console.debug(`Pinned diff message ${pinId} is no longer stored (HTTP ${r.status})`);
+            } else if (seq === state.diffPinRequestSeq) {
                 const msg = await r.json();
                 if (seq === state.diffPinRequestSeq) {
                     state.diffPinnedMessage = msg;
                     renderMessageList();
                 }
             }
-        } catch (_) { /* pinned message gone — silently drop */ }
+        } catch (e) {
+            // Network error while restoring the pin: drop it (#190).
+            console.debug('Could not restore the pinned diff message:', e);
+        }
     }
     if (state.selectedId) {
         selectMessage(state.selectedId);

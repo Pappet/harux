@@ -186,7 +186,7 @@ pub(crate) fn parse_delimiters(bytes: &[u8]) -> Result<Delimiters, String> {
     // or the control ID intact (#243).
     if field_sep.is_ascii_alphanumeric() {
         return Err(format!(
-            "MSH-1 field separator {field_sep:?} is a letter or digit — the MSH header is damaged"
+            "MSH-1 field separator {field_sep:?} is a letter or digit - the MSH header is damaged"
         ));
     }
 
@@ -204,7 +204,7 @@ pub(crate) fn parse_delimiters(bytes: &[u8]) -> Result<Delimiters, String> {
         }
         if b.is_ascii_alphanumeric() {
             return Err(format!(
-                "MSH-2 encoding character {} {:?} is a letter or digit — the MSH header is damaged",
+                "MSH-2 encoding character {} {:?} is a letter or digit - the MSH header is damaged",
                 i + 1,
                 b as char
             ));
@@ -322,17 +322,68 @@ struct AckSpec<'a> {
     processing_id: &'a str,
     /// MSH-12 of the original; empty → [`DEFAULT_ACK_VERSION`].
     version: &'a str,
+    /// MSH-18 to declare: the sender's own charset when the reply is written
+    /// in it ([`reply_charset`]); `None` → no MSH-18 (ASCII/UTF-8).
+    charset: Option<&'a str>,
     /// MSA-1: `AA`, `AE` or `AR`.
     ack_code: &'a str,
     /// MSA-2: MSH-10 of the message being acknowledged; empty → `UNKNOWN`
     /// (MSA-2 is required, same fallback as the NACK).
     acknowledged_control_id: &'a str,
-    /// MSA-3 free text; escaped before it is written.
+    /// Why the message was not accepted: MSA-3 (cut to
+    /// [`MAX_MSA_TEXT_CHARS`]) and, with `error`, ERR-8 (cut to
+    /// [`MAX_ERR_TEXT_CHARS`]). Escaped before it is written.
     text: Option<&'a str>,
+    /// Adds an ERR segment with this HL7 error code (#218).
+    error: Option<AckError>,
 }
 
-/// Render an [`AckSpec`] as `MSH…\rMSA…`. Every ACK/NACK gets a fresh
-/// 20-character MSH-10 control ID.
+/// HL7 table 0357 error condition for the ERR segment of a NACK or reject
+/// (ERR-3), with ERR-4 severity `E` and the reason in ERR-8 (#218).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AckError {
+    /// `100` Segment sequence error — the message structure can't be
+    /// processed (no MSH, damaged header, unusable delimiters).
+    SegmentSequence,
+    /// `207` Application internal error — Harux can't process the frame for
+    /// reasons of its own (a parser panic, a frame above the size limit).
+    InternalError,
+}
+
+impl AckError {
+    fn code(self) -> (&'static str, &'static str) {
+        match self {
+            AckError::SegmentSequence => ("100", "Segment sequence error"),
+            AckError::InternalError => ("207", "Application internal error"),
+        }
+    }
+}
+
+/// Longest MSA-3 text Harux writes, in characters: the field's length in
+/// HL7 v2.5 (#218). The full reason goes into ERR-8.
+pub const MAX_MSA_TEXT_CHARS: usize = 80;
+/// Longest ERR-8 (user message) Harux writes, in characters: the field's
+/// length in HL7 v2.5. Parse errors can quote the start of the frame;
+/// senders log NACKs verbatim, so text is cut with "…" instead of growing
+/// with the input.
+pub const MAX_ERR_TEXT_CHARS: usize = 250;
+
+/// `text` cut to `max` characters, ending in "..." — by characters, before
+/// escaping, so neither a multi-byte character nor an escape is split. The
+/// marker is ASCII: the reply is written in the sender's charset, which may
+/// be Latin-1 (#266 review).
+fn cut_text(text: &str, max: usize) -> Cow<'_, str> {
+    if text.chars().count() > max {
+        let mut cut: String = text.chars().take(max - 3).collect();
+        cut.push_str("...");
+        Cow::Owned(cut)
+    } else {
+        Cow::Borrowed(text)
+    }
+}
+
+/// Render an [`AckSpec`] as `MSH…\rMSA…[\rERR…]`. Every ACK/NACK gets a
+/// fresh 20-character MSH-10 control ID.
 fn render_ack(spec: &AckSpec) -> String {
     let d = spec.delimiters;
     let f = d.field;
@@ -346,9 +397,14 @@ fn render_ack(spec: &AckSpec) -> String {
     let acknowledged_control_id = non_empty_or(spec.acknowledged_control_id, "UNKNOWN");
     let control_id = &uuid::Uuid::new_v4().simple().to_string()[..20];
     let now = chrono::Utc::now().format("%Y%m%d%H%M%S");
+    // MSH-13..17 empty, MSH-18 the charset the reply is written in.
+    let msh18 = match spec.charset.filter(|c| !c.is_empty()) {
+        Some(c) => format!("{f}{f}{f}{f}{f}{f}{}", super::escape::encode(c, d)),
+        None => String::new(),
+    };
 
     let mut ack = format!(
-        "MSH{f}{}{}{}{}{f}Harux{f}Harux{f}{}{f}{}{f}{now}{f}{f}{message_type}{f}{control_id}{f}{processing_id}{f}{version}\rMSA{f}{}{f}{}",
+        "MSH{f}{}{}{}{}{f}Harux{f}Harux{f}{}{f}{}{f}{now}{f}{f}{message_type}{f}{control_id}{f}{processing_id}{f}{version}{msh18}\rMSA{f}{}{f}{}",
         d.component,
         d.repetition,
         d.escape,
@@ -360,7 +416,26 @@ fn render_ack(spec: &AckSpec) -> String {
     );
     if let Some(text) = spec.text {
         ack.push(f);
-        ack.push_str(&super::escape::encode(text, d));
+        ack.push_str(&super::escape::encode(
+            &cut_text(text, MAX_MSA_TEXT_CHARS),
+            d,
+        ));
+    }
+    // ERR (v2.5): ERR-3 error code, ERR-4 severity, ERR-8 user message.
+    // MSA-3 is deprecated since v2.4 but still what many receivers read, so
+    // both carry the reason.
+    if let Some(error) = spec.error {
+        let (code, label) = error.code();
+        let c = d.component;
+        ack.push_str(&format!(
+            "\rERR{f}{f}{f}{code}{c}{label}{c}HL70357{f}E{f}{f}{f}{f}"
+        ));
+        if let Some(text) = spec.text {
+            ack.push_str(&super::escape::encode(
+                &cut_text(text, MAX_ERR_TEXT_CHARS),
+                d,
+            ));
+        }
     }
     ack
 }
@@ -389,16 +464,36 @@ pub fn build_ack(original: &Hl7Message, ack_code: &str) -> String {
         trigger_event: &original.trigger_event,
         processing_id: &processing_id,
         version: &original.version,
+        charset: reply_charset(original),
         ack_code,
         acknowledged_control_id: &original.message_control_id,
         text: None,
+        error: None,
     })
+}
+
+/// MSH-18 for the reply to `msg`: the charset the sender declared, if the
+/// payload was decoded with it. After a `CHARSET_FALLBACK` the declaration
+/// was wrong, so the reply declares nothing. The reply bytes themselves are
+/// written in the payload's encoding by the MLLP layer (#266 review).
+pub fn reply_charset(msg: &Hl7Message) -> Option<&str> {
+    let fell_back = msg
+        .validation_warnings
+        .iter()
+        .any(|w| w.code == "CHARSET_FALLBACK");
+    if fell_back {
+        None
+    } else {
+        msg.charset.as_deref()
+    }
 }
 
 /// Build a NACK (`AE`, Application Error) for a frame that could not be
 /// parsed. Nothing of the original is trustworthy, so it uses default
-/// delimiters, MSH-9 `ACK` and MSA-2 `UNKNOWN`; `reason` goes into MSA-3.
-pub fn build_nack(reason: &str) -> String {
+/// delimiters, MSH-9 `ACK` and MSA-2 `UNKNOWN`. `reason` goes into MSA-3
+/// (cut to 80 characters) and, with the `error` code, into an ERR segment
+/// (ERR-8, cut to 250 characters).
+pub fn build_nack(error: AckError, reason: &str, charset: Option<&str>) -> String {
     render_ack(&AckSpec {
         delimiters: Delimiters::default(),
         receiving_application: "",
@@ -406,9 +501,11 @@ pub fn build_nack(reason: &str) -> String {
         trigger_event: "",
         processing_id: "",
         version: "",
+        charset,
         ack_code: "AE",
         acknowledged_control_id: "UNKNOWN",
         text: Some(reason),
+        error: Some(error),
     })
 }
 
@@ -416,7 +513,8 @@ pub fn build_nack(reason: &str) -> String {
 /// outright, e.g. one above `mllp.max_message_size_mb` (#223). Written in
 /// `delimiters` — the sender's own when its MSH header could be read, like
 /// the ACK, so the sender can parse the reject; default delimiters otherwise.
-/// MSA-2 echoes `control_id` (empty → `UNKNOWN`), `reason` goes into MSA-3.
+/// MSA-2 echoes `control_id` (empty → `UNKNOWN`), `reason` goes into MSA-3
+/// and ERR-8; ERR-3 is `207` (application internal error).
 pub fn build_reject(delimiters: Delimiters, control_id: &str, reason: &str) -> String {
     render_ack(&AckSpec {
         delimiters,
@@ -425,9 +523,14 @@ pub fn build_reject(delimiters: Delimiters, control_id: &str, reason: &str) -> S
         trigger_event: "",
         processing_id: "",
         version: "",
+        // The frame was not decoded (only its first 4 KB are kept), so the
+        // reply is plain ASCII and declares nothing.
+        charset: None,
         ack_code: "AR",
         acknowledged_control_id: control_id,
         text: Some(reason),
+        // Too large to process: an application limit, not a structure error.
+        error: Some(AckError::InternalError),
     })
 }
 
@@ -724,7 +827,7 @@ mod tests {
     /// MSH-10 control ID instead of an empty one.
     #[test]
     fn test_build_nack() {
-        let nack = build_nack("Message parse error");
+        let nack = build_nack(AckError::SegmentSequence, "Message parse error", None);
         let parsed = parse_message(&nack, "test").unwrap();
         assert_eq!(parsed.message_type, "ACK");
         assert_eq!(parsed.sending_application, "Harux");
@@ -735,6 +838,59 @@ mod tests {
         assert_eq!(field(&parsed, "MSA", 1), "AE");
         assert_eq!(field(&parsed, "MSA", 2), "UNKNOWN");
         assert_eq!(field(&parsed, "MSA", 3), "Message parse error");
+        // #218: ERR-3 error code, ERR-4 severity, ERR-8 the reason.
+        assert_eq!(
+            field(&parsed, "ERR", 3),
+            "100^Segment sequence error^HL70357"
+        );
+        assert_eq!(field(&parsed, "ERR", 4), "E");
+        assert_eq!(field(&parsed, "ERR", 8), "Message parse error");
+        assert_eq!(parsed.segments.len(), 3, "MSH, MSA, ERR");
+        // An ACK has no ERR.
+        let msg = parse_message(SAMPLE_ADT, "test").unwrap();
+        assert!(!build_ack(&msg, "AA").contains("ERR"));
+    }
+
+    /// #266 review: the reply declares the sender's charset in MSH-18 when
+    /// it is written in it, and nothing after a charset fallback.
+    #[test]
+    fn test_reply_declares_the_senders_charset() {
+        let latin1 = "MSH|^~\\&|APP|FAC|R|RF|20240101||ADT^A01|C1|P|2.5|||||DE|8859/1\rPID|1";
+        let mut msg = parse_message(latin1, "t").unwrap();
+        msg.charset = Some("8859/1".into());
+        let ack = parse_message(&build_ack(&msg, "AA"), "t").unwrap();
+        assert_eq!(field(&ack, "MSH", 18), "8859/1");
+        assert_eq!(
+            field(&ack, "MSH", 12),
+            "2.5",
+            "MSH-13..17 are empty, not shifted"
+        );
+
+        msg.validation_warnings
+            .push(crate::validation::ValidationWarning {
+                code: "CHARSET_FALLBACK".into(),
+                message: String::new(),
+                segment: "MSH".into(),
+                field: Some(18),
+            });
+        assert!(
+            !build_ack(&msg, "AA").contains("8859"),
+            "a wrong declaration is not echoed"
+        );
+
+        let nack = parse_message(
+            &build_nack(AckError::SegmentSequence, "x", Some("8859/1")),
+            "t",
+        )
+        .unwrap();
+        assert_eq!(field(&nack, "MSH", 18), "8859/1");
+        let plain = build_nack(AckError::SegmentSequence, "x", None);
+        assert!(plain.starts_with("MSH|^~\\&|Harux|Harux|"), "{plain}");
+        assert_eq!(
+            plain.split('\r').next().unwrap().matches('|').count(),
+            11,
+            "no MSH-18"
+        );
     }
 
     #[test]
@@ -742,7 +898,7 @@ mod tests {
         let msg = parse_message(SAMPLE_ADT, "test").unwrap();
         let a = parse_message(&build_ack(&msg, "AA"), "test").unwrap();
         let b = parse_message(&build_ack(&msg, "AA"), "test").unwrap();
-        let n = parse_message(&build_nack("x"), "test").unwrap();
+        let n = parse_message(&build_nack(AckError::SegmentSequence, "x", None), "test").unwrap();
         assert_ne!(a.message_control_id, b.message_control_id);
         assert_ne!(a.message_control_id, n.message_control_id);
     }
@@ -797,19 +953,58 @@ mod tests {
         assert_eq!(field(&parsed, "MSA", 1), "AR");
         assert_eq!(field(&parsed, "MSA", 2), "C9");
         assert_eq!(field(&parsed, "MSA", 3), "too big");
+        // The ERR segment uses the same delimiters (component `*`).
+        assert_eq!(
+            field(&parsed, "ERR", 3),
+            "207*Application internal error*HL70357"
+        );
+        assert_eq!(field(&parsed, "ERR", 8), "too big");
 
         let default = build_reject(Delimiters::default(), "", "x");
-        assert!(default.contains("MSA|AR|UNKNOWN|x"), "{default}");
+        assert!(
+            default.contains("MSA|AR|UNKNOWN|x\rERR|||207^"),
+            "{default}"
+        );
+    }
+
+    /// #218: the reason is cut to 80 characters in MSA-3 and to 250 in
+    /// ERR-8 (with an ASCII "..."), by characters, before escaping.
+    #[test]
+    fn test_nack_text_is_capped() {
+        let reason = format!("Message does not start with MSH: {}", "ä|".repeat(300));
+        let nack = build_nack(AckError::SegmentSequence, &reason, None);
+        let parsed = parse_message(&nack, "test").unwrap();
+        for (segment, index, max) in [
+            ("MSA", 3, MAX_MSA_TEXT_CHARS),
+            ("ERR", 8, MAX_ERR_TEXT_CHARS),
+        ] {
+            let text =
+                crate::hl7::escape::decode(&field(&parsed, segment, index), parsed.delimiters)
+                    .into_owned();
+            assert_eq!(text.chars().count(), max, "{segment}-{index}");
+            assert!(text.ends_with("..."), "{text}");
+            assert!(reason.starts_with(text.trim_end_matches("...")));
+        }
+        // Short texts are untouched.
+        let short = build_nack(AckError::SegmentSequence, "short", None);
+        assert!(short.contains("|short\r"), "{short}");
+        assert!(short.ends_with("||||short"), "{short}");
     }
 
     #[test]
     fn test_nack_text_is_escaped() {
-        let nack = build_nack("a|b^c&d~e\\f\r\ng");
+        let nack = build_nack(AckError::SegmentSequence, "a|b^c&d~e\\f\r\ng", None);
+        let escaped = "a\\F\\b\\S\\c\\T\\d\\R\\e\\E\\f  g";
         assert!(
-            nack.ends_with("MSA|AE|UNKNOWN|a\\F\\b\\S\\c\\T\\d\\R\\e\\E\\f  g"),
+            nack.contains(&format!("MSA|AE|UNKNOWN|{escaped}\r")),
             "{nack:?}"
         );
-        assert_eq!(nack.matches('\r').count(), 1, "only the MSH/MSA separator");
+        assert!(nack.ends_with(&format!("|E||||{escaped}")), "{nack:?}");
+        assert_eq!(
+            nack.matches('\r').count(),
+            2,
+            "only the MSH/MSA/ERR separators"
+        );
     }
 
     #[test]
