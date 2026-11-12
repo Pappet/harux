@@ -159,7 +159,7 @@ fn check(payload: &[u8]) -> Result<(), String> {
                     "ingest stored a parsed message, parse_message failed: {reason}"
                 ));
             }
-            let nack = build_nack(AckError::SegmentSequence, &reason);
+            let nack = build_nack(AckError::SegmentSequence, &reason, None);
             parse_message(&nack, "127.0.0.1:1").map_err(|e| format!("NACK unparseable: {e}"))?;
             return Ok(());
         }

@@ -423,6 +423,72 @@ async fn latin1_payload_decoded_per_msh18() {
         .all(|w| w.code != "CHARSET_FALLBACK"));
 }
 
+/// The reply's raw bytes (without the MLLP framing).
+async fn read_reply_bytes(s: &mut TcpStream) -> Vec<u8> {
+    let read = async {
+        let mut buf = Vec::new();
+        loop {
+            buf.push(s.read_u8().await.unwrap());
+            if buf.ends_with(&[FS, CR]) {
+                return buf[1..buf.len() - 2].to_vec();
+            }
+        }
+    };
+    tokio::time::timeout(Duration::from_secs(5), read)
+        .await
+        .expect("reply")
+}
+
+fn contains(haystack: &[u8], needle: &[u8]) -> bool {
+    haystack.windows(needle.len()).any(|w| w == needle)
+}
+
+/// #266 review: a Latin-1 sender gets its reply in Latin-1 — echoed values
+/// and the quoted start of a broken frame — not as UTF-8 mojibake, and the
+/// ACK declares the charset in MSH-18.
+#[tokio::test]
+async fn reply_is_written_in_the_senders_charset() {
+    let srv = start(config()).await;
+    let mut s = TcpStream::connect(srv.addr).await.unwrap();
+
+    // MSH-3 "KÄS" in 8859/1 (0xC4), echoed into the ACK's MSH-5.
+    let mut payload = b"MSH|^~\\&|K".to_vec();
+    payload.extend_from_slice(
+        b"\xC4S|KLINIK|RCV|RZ|20240101120000||ADT^A01|L2|P|2.5||||||8859/1\rPID|1\r",
+    );
+    s.write_all(&frame(&payload)).await.unwrap();
+    let ack = read_reply_bytes(&mut s).await;
+    assert!(
+        contains(&ack, b"|K\xC4S|KLINIK|"),
+        "{}",
+        String::from_utf8_lossy(&ack)
+    );
+    assert!(
+        !contains(&ack, "Ä".as_bytes()),
+        "no UTF-8 in a Latin-1 reply"
+    );
+    assert!(
+        contains(&ack, b"|2.5||||||8859/1\rMSA|AA|L2"),
+        "{}",
+        String::from_utf8_lossy(&ack)
+    );
+
+    // Not HL7, invalid UTF-8 (Latin-1 "ää"): the NACK quotes it in the
+    // charset it was decoded with (Windows-1252), declaring none.
+    s.write_all(&frame(b"NOPE\xE4\xE4rest")).await.unwrap();
+    let nack = read_reply_bytes(&mut s).await;
+    assert!(
+        contains(&nack, b"NOPE\xE4\xE4rest"),
+        "{}",
+        String::from_utf8_lossy(&nack)
+    );
+    assert!(!contains(&nack, "ä".as_bytes()), "no UTF-8 mojibake");
+    assert!(
+        !contains(&nack, b"8859"),
+        "a fallback charset is not declared"
+    );
+}
+
 /// #230: the export gives back exactly the bytes that arrived — whatever the
 /// charset, including the final segment terminator — and keeps a second copy
 /// only when re-encoding can't reproduce them.

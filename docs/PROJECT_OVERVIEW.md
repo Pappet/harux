@@ -75,7 +75,7 @@ Listens on `server.mllp_bind:mllp_port`, handles MLLP framing (`0x0B` start, `0x
 
 - **No frame is lost silently:** decoding and parsing run under `catch_unwind`; a frame that fails to parse — or panics the parser — is stored as a parse-error entry and answered with a NACK.
 - **ACK storm prevention:** incoming messages with `message_type.starts_with("ACK")` are stored but never ACK'd back — prevents infinite ping-pong with Orchestra.
-- **ACKs** are written in the sender's own delimiters and echo MSH-10 in MSA-2; NACKs use default delimiters and MSA-2 `UNKNOWN`. A NACK or reject says why: MSA-3 (up to 80 characters) and an ERR segment with an HL7 error code (ERR-3, table 0357) and the reason (ERR-8, up to 250 characters).
+- **ACKs** are written in the sender's own delimiters and echo MSH-10 in MSA-2; NACKs use default delimiters and MSA-2 `UNKNOWN`. A NACK or reject says why: MSA-3 (up to 80 characters) and an ERR segment with an HL7 error code (ERR-3, table 0357) and the reason (ERR-8, up to 250 characters). Replies are written in the sender's own charset (e.g. Latin-1 per MSH-18) and declare it in MSH-18.
 - **Limits:** `mllp.max_message_size_mb` (10 MB) — a larger frame gets an `AR` reject, its first 4 KB are stored as a parse error, and the connection stays usable; 60 s read and 30 s write timeout; `mllp.max_connections` (100) — connections beyond it are closed and counted as rejected.
 - **Robustness:** an `accept()` error (e.g. out of file descriptors) is logged and retried, never fatal; on Ctrl+C or SIGTERM the server stops accepting and waits up to `server.shutdown_timeout_secs` for open connections to drain.
 
