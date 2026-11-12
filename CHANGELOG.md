@@ -9,7 +9,14 @@ and this project follows [Semantic Versioning](https://semver.org/lang/en/).
 
 ## [Unreleased]
 
-> Hardens Harux against what it receives and who talks to it: no MLLP frame is lost silently any more (every frame is stored and answered, shutdown waits for frames in flight), the web UI refuses requests made by other sites, `store.max_memory_mb` now bounds real memory instead of an estimate a tenth of it, and the diff and validation no longer report correct or different messages wrongly.
+### Added
+- **Plan for Milestone 4 (Workflow & Testing)** — `docs/MILESTONE_4_PLAN.md` proposes how sending, resending and editing messages become part of the existing window and architecture instead of separate dialogs: one message lifecycle (draft → sent → received), sent messages as rows of the shared list with their response where the ACK is shown, a send policy in `harux.toml` that fails closed, the API, the tests and nine work packages (M4-1 … M4-9). `docs/design/harux-m4-workbench.html` is the mockup, drawn with the application's stylesheet; `docs/ROADMAP.md` lists the work packages. Planning only: no code or behaviour changes, and the plan's open decisions (its section 11) are the owner's.
+
+---
+
+## [0.9.0] – 2026-11-12 – Reliability & Security Hardening
+
+> The fixes from the v0.8.0 review (#222–#250). Hardens Harux against what it receives and who talks to it: no MLLP frame is lost silently any more (every frame is stored and answered, shutdown waits for frames in flight), the web UI refuses requests made by other sites, `store.max_memory_mb` now bounds real memory instead of an estimate a tenth of it, and the diff and validation no longer report correct or different messages wrongly.
 
 ### Upgrade Notes
 - **Harux no longer starts with an invalid `harux.toml`.** Unknown keys (e.g. the `max_size_mb` logging key removed in 0.5) and out-of-range values were silently ignored before; check the error message on the first start after the update. (#233)
@@ -17,6 +24,17 @@ and this project follows [Semantic Versioning](https://semver.org/lang/en/).
 - **Stricter DT/TS validation can add `INVALID_DATATYPE` warnings to traffic that was clean before.** Timestamps must now have 4/6/8/10/12/14 digits, a fraction of 1–4 digits only after the seconds and an offset of exactly `+/-HHMM` on at least a full date; dates must exist. Senders that emit e.g. `+05`, a 5-digit fraction or `2024+0100` will show the warning after the update. This changes only the validation badge: such messages are still stored and ACK'd as before. Check the message list after deploying. (#238)
 - **Daily log files are now pruned: only the last 14 are kept** (`logging.max_files`, today's file included). Before, they were never deleted. Set `max_files = 0` to keep all of them, e.g. if another tool archives the directory. Only files named exactly `<file>.YYYY-MM-DD` are ever deleted. A `max_files` key left over from before 0.5 is accepted again with this meaning. (#240)
 - If users open the UI by DNS name (e.g. `http://harux.klinik.local:8080`), add that name to `server.allowed_hosts` in `harux.toml`; otherwise the browser gets `403 Host not allowed`. IP addresses and `localhost` always work. (#227)
+- **ACK/NACK wire changes** (#218, #223, #266):
+  - A NACK now carries `Message parse error: <reason>` in MSA-3, cut to 80 characters, **and** an ERR segment (ERR-3 `100` or `207` from HL7 table 0357, ERR-4 `E`, ERR-8 the reason). Before, MSA-3 was a fixed `Message parse error` and there was no ERR.
+  - A frame above `mllp.max_message_size_mb` is answered with `AR` and the connection stays open. Before, the connection was closed without a reply.
+  - Replies are encoded in the sender's charset and declare its MSH-18. Before, they were always UTF-8 without MSH-18.
+  - A message is stored before its ACK is written.
+  - Receivers that parse NACKs strictly, or expect UTF-8 replies from a Latin-1 interface, should be checked.
+- **A letter or digit as an HL7 delimiter is now a parse error** and gets a NACK instead of an ACK. Only senders that negotiated such delimiters are affected. (#243)
+- **`GET /api/export` returns the bytes as received.** A Latin-1 message is exported in Latin-1 (not converted to UTF-8), and the final segment terminator is kept. Tools that read the export as UTF-8 text should be checked. (#230)
+- **`GET /api/search` uses the UI filter's semantics** (`has:warnings`/`has:errors`, tags, Unicode case folding), so a REST client can get different hits than before. New query parameters: `before=` on `/api/messages` and `/api/search`, `include_bookmarks=` on `/api/messages`. `before` combined with `offset` or `include_bookmarks` gives `400`. (#197, #198, #231)
+- **New optional configuration keys:** `server.mllp_bind`, `server.web_bind`, `server.allowed_hosts`, `logging.max_files`. All of them are listed in `examples/harux-example.toml`. Only `logging.max_files` changes behaviour by default (see above).
+- **Dependencies updated:** `toml` 0.8 → 1.2, `tower` 0.4 → 0.5, plus minor/patch updates of axum, serde, chrono, uuid, encoding_rs and others (Dependabot, #262–#264). No behaviour change is expected.
 
 ### Security
 - **tokio 1.54.1 and anyhow 1.0.104** — `cargo audit` flagged tokio 1.49.0 (RUSTSEC-2026-0386, `AsyncFd` constructors violate I/O safety) and anyhow 1.0.102 (RUSTSEC-2026-0190, `Error::downcast_mut`) as unsound. Harux calls neither API; both are semver-compatible updates (`cargo update -p tokio -p anyhow`). The remaining warning, `pin-utils` (unmaintained, via hyper), has no fixed release and is ignored with a reason in `.cargo/audit.toml`. (#244)
@@ -73,7 +91,6 @@ and this project follows [Semantic Versioning](https://semver.org/lang/en/).
 - **Each WebSocket event is serialized once, not once per viewer** — every connected browser's task turned the same summary into JSON itself, via a `serde_json::Value` tree, so N viewers meant N identical serializations per message (#196). The broadcast channel now carries `Arc<EventFrame>`: the event plus its frame, rendered by the first subscriber (`EventFrame::cached_json`, `OnceLock`) and reused by the others; `ws_event_json` (`src/web.rs`) serializes straight into a string. The wire format is unchanged (`ws_event_json_keeps_the_wire_format`). With 20 connected clients and 5,000 messages the server used 1.8 s of CPU instead of 2.25–2.42 s.
 
 ### Added
-- **Plan for Milestone 4 (Workflow & Testing)** — `docs/MILESTONE_4_PLAN.md` proposes how sending, resending and editing messages become part of the existing window and architecture instead of separate dialogs: one message lifecycle (draft → sent → received), sent messages as rows of the shared list with their response where the ACK is shown, a send policy in `harux.toml` that fails closed, the API, the tests and nine work packages (M4-1 … M4-9). `docs/design/harux-m4-workbench.html` is the mockup, drawn with the application's stylesheet; `docs/ROADMAP.md` lists the work packages. Planning only: no code or behaviour changes, and the plan's open decisions (its section 11) are the owner's.
 - **Older messages can be loaded and searched in the UI** — the UI loads the newest 1,000 messages (plus bookmarks); everything older the store held was out of reach, and filters only covered what was loaded (#198). The note at the end of the list now offers **"Load 500 older"** — `GET /api/messages?before=<id>` pages by cursor, since offsets shift as messages arrive — and, while a search is active, **"Search older on the server"** (#197): `GET /api/search?before=<id>` searches the part not loaded and continues below its last hit. Found messages are merged in arrival order and raise the client cap (`olderLoaded`) so new live messages don't trim them at once; a reload resets it. `/api/search` was unused by the UI and matched differently from the client filter; it now uses `SearchQuery` (`src/store.rs`), which mirrors `getParsedQuery`/`matchesSearch`: `has:warnings`/`has:errors`, tags, Unicode case folding. `before` cannot be combined with `offset` or `include_bookmarks` (`400` instead of silently ignoring one).
 - **JS tests for the long-value preview and the row builder** — `tests/js/preview.test.mjs`: unchanged short values, preview and size of a 5 MB value, no split surrogate pair, `formatSize` (#215). `tests/js/rows.test.mjs`: the row skeleton's structure that `patchRow`, the delegation and the CSS rely on, a filled row (texts, chip order with the ACK last, bookmark button) and a parse-error row (#202). `tests/js/diff.test.mjs`: a long value is previewed in the diff but compared in full. The fake DOM is shared in `tests/js/fake-dom.mjs`.
 - **JS tests for the client buffer** — `tests/js/buffer.test.mjs` (no npm, a minimal fake DOM in `node:vm`): the cap and its exemptions, counters equal to a full recount after trim, server eviction and pause/resume, the bookmark counter with a message in both buffers, no orphaned group headers after rows are removed, and the truncation note's position (#204). Three of its six tests fail on the previous `ws.js`.
@@ -436,7 +453,8 @@ and this project follows [Semantic Versioning](https://semver.org/lang/en/).
 
 ---
 
-[Unreleased]: https://github.com/Pappet/harux/compare/v0.8.0...HEAD
+[Unreleased]: https://github.com/Pappet/harux/compare/v0.9.0...HEAD
+[0.9.0]: https://github.com/Pappet/harux/compare/v0.8.0...v0.9.0
 [0.8.0]: https://github.com/Pappet/harux/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/Pappet/harux/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/Pappet/harux/compare/v0.5.0...v0.6.0

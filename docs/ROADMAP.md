@@ -2,7 +2,7 @@
 
 This document tracks all milestones and planned features. Each milestone lists its tasks, completion status, and acceptance criteria. It is the one place for planning facts (current milestone, next work); `AGENTS.md` and the other guides link here instead of repeating them.
 
-**Current state:** Milestones 0–3 are complete. Since v0.8.0 the work has been hardening from the v0.8.0 review (#222–#250, see the `[Unreleased]` changelog). **Next planned:** Milestone 4 (Workflow & Testing) — its [implementation plan](MILESTONE_4_PLAN.md) is a proposal; the decisions it leaves to the owner are open.
+**Current state:** Milestones 0–3 are complete. v0.9.0 shipped the hardening from the v0.8.0 review (#222–#250). **Next planned:** Milestone 4 (Workflow & Testing) — its [implementation plan](MILESTONE_4_PLAN.md) is a proposal; the decisions it leaves to the owner are open.
 
 ---
 
@@ -143,7 +143,7 @@ This document tracks all milestones and planned features. Each milestone lists i
   - [ ] M4-7 Import an `.hl7` file into the store (optional)
 - [ ] **Auto-refresh trigger** — desktop notification on new messages (optional)
   - [ ] M4-8 Watch: notify about new messages that match the current filter
-- [ ] M4-9 Release v0.9.0
+- [ ] M4-9 Release v0.10.0
 
 ### Acceptance Criteria
 

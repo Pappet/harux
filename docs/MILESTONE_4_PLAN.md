@@ -597,9 +597,9 @@ target reports unused code, so a package cannot add an engine without a route
 that uses it. Sizes are relative (S, M, L).
 
 ```
-M4-1 ─► M4-2 ─► M4-3 ─► M4-4 ─► M4-5 ─► M4-9 (v0.9.0)
-          ├───► M4-6 ─► M4-7                (v0.9.x)
-          └───► M4-8                        (v0.9.x)
+M4-1 ─► M4-2 ─► M4-3 ─► M4-4 ─► M4-5 ─► M4-9 (v0.10.0)
+          ├───► M4-6 ─► M4-7                (v0.10.x)
+          └───► M4-8                        (v0.10.x)
 ```
 
 ### Stage 1 — Resend
@@ -669,10 +669,10 @@ it. Independent of the other packages once M4-2 is in.
 
 ### Release
 
-**M4-9 · Release v0.9.0 "Workflow & Testing"** (S), after stage 3
+**M4-9 · Release v0.10.0 "Workflow & Testing"** (S), after stage 3
 `README.md` features, `docs/ROADMAP.md`, the full API and configuration tables
 in `docs/PROJECT_OVERVIEW.md`, upgrade notes, version. Stages 4 and 5 follow
-as v0.9.x. `main` is usable after every package, so the team does not have to
+as v0.10.x. `main` is usable after every package, so the team does not have to
 wait for the tag.
 
 ### Done means, for every package
@@ -748,7 +748,7 @@ The plan assumes the recommendation in each row.
 | D7 | How large may a run be? | **1,000 messages** by default, every one stored. Larger load tests are a later feature |
 | D8 | Watch without desktop notifications on plain HTTP — acceptable? | **Yes**: title counter and sound everywhere, desktop notification behind HTTPS or on `localhost` |
 | D9 | Import (M4-7) in this milestone? | **Optional**, last. Small, and useful until persistence exists |
-| D10 | One release at the end, or one per stage? | **`main` is usable after every package; tag v0.9.0 after stage 3**, v0.9.x for stages 4 and 5 |
+| D10 | One release at the end, or one per stage? | **`main` is usable after every package; tag v0.10.0 after stage 3**, v0.10.x for stages 4 and 5 (v0.9.0 is the hardening release) |
 
 ---
 
