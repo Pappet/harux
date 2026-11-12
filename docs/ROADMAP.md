@@ -2,7 +2,7 @@
 
 This document tracks all milestones and planned features. Each milestone lists its tasks, completion status, and acceptance criteria. It is the one place for planning facts (current milestone, next work); `AGENTS.md` and the other guides link here instead of repeating them.
 
-**Current state:** Milestones 0–3 are complete. Since v0.8.0 the work has been hardening from the v0.8.0 review (#222–#250, see the `[Unreleased]` changelog). **Next planned:** Milestone 4 (Workflow & Testing).
+**Current state:** Milestones 0–3 are complete. Since v0.8.0 the work has been hardening from the v0.8.0 review (#222–#250, see the `[Unreleased]` changelog). **Next planned:** Milestone 4 (Workflow & Testing) — its [implementation plan](MILESTONE_4_PLAN.md) is a proposal; the decisions it leaves to the owner are open.
 
 ---
 
@@ -122,7 +122,7 @@ This document tracks all milestones and planned features. Each milestone lists i
 
 **Goal:** Rapid testing against Orchestra — send, edit, replay messages directly from the UI.
 
-**Status: Planned**
+**Status: Planned** — [implementation plan](MILESTONE_4_PLAN.md) proposed (design, API, safety rules, work packages M4-1 … M4-9). The work packages below follow it and are final once its open decisions (section 11) are taken.
 
 ### Requirements
 
@@ -131,15 +131,26 @@ This document tracks all milestones and planned features. Each milestone lists i
 ### Tasks
 
 - [ ] **Message replay** — resend stored messages to a configurable target address/port (MLLP client)
-- [ ] **Test message generator** — templates for common types (ADT^A01, ORM^O01, ORU^R01) with editable fields
+  - [ ] M4-1 Sending over the API: targets and send policy in `harux.toml`, MLLP client, sent messages and their responses in the store
+  - [ ] M4-2 Resend in the UI: one-click resend, sent messages in the list, response view
 - [ ] **Message editor** — edit raw HL7 in the UI and send
+  - [ ] M4-3 Drafts: write or edit a message in the detail panel and send it, validated live
+  - [ ] M4-4 Edit a draft field by field
+- [ ] **Test message generator** — templates for common types (ADT^A01, ORM^O01, ORU^R01) with editable fields
+  - [ ] M4-5 Built-in templates and a template directory
+- [ ] **Several messages** — resend the filtered messages in order, repeat a draft
+  - [ ] M4-6 Send runs with progress and cancel
+  - [ ] M4-7 Import an `.hl7` file into the store (optional)
 - [ ] **Auto-refresh trigger** — desktop notification on new messages (optional)
+  - [ ] M4-8 Watch: notify about new messages that match the current filter
+- [ ] M4-9 Release v0.9.0
 
 ### Acceptance Criteria
 
 - [ ] A received message can be replayed to a configured target address with a single click
 - [ ] A template can be filled out in the UI, sent, and the response (ACK/NAK) displayed
 - [ ] Raw HL7 can be edited and sent directly
+- [ ] Harux connects only to targets and destinations its configuration allows, and everything it sends is visible in the message list
 
 ---
 
