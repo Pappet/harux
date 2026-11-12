@@ -168,7 +168,11 @@ function tickRowRelativeTimes() {
         if (!ts) return;
         if (new Date(ts).getTime() < cutoff) return;
         const timeEl = row.querySelector('.msg-row2 .time');
-        if (timeEl) timeEl.textContent = rowTimeLabel({ received_at: ts }, now);
+        if (!timeEl) return;
+        // Assigning an unchanged label still replaces the text node and
+        // invalidates layout; skip it (#216).
+        const label = rowTimeLabel({ received_at: ts }, now);
+        if (timeEl.textContent !== label) timeEl.textContent = label;
     });
 }
 
@@ -214,95 +218,104 @@ function updateHeaderCounters() {
 }
 
 // --- Message list ---
-function buildMessageRow(msg) {
-    const row = document.createElement('div');
-    let rowClass = 'message-row';
-    if (msg.id === state.selectedId) rowClass += ' selected';
-    if (msg.bookmarked) rowClass += ' bookmarked';
+// Row skeleton, parsed once and cloned per row (#202). Parsing a template
+// string (with two inline SVGs) per row and attaching two closures to each
+// cost ~0.8 ms/row, so resuming after a long pause blocked ~1.6 s for 2000
+// rows. Clicks and Enter/Space reach the row through the document-level
+// `data-action` delegation in app.js (`select-message`).
+let messageRowTemplate = null;
+const iconNodeCache = new Map();
 
-    const srcKey = state.colorByPort ? msg.source_addr : (msg.source_addr ? msg.source_addr.split(':')[0] : '');
-    if (state.highlightedSource && srcKey !== state.highlightedSource) {
-        rowClass += ' dimmed';
+function iconNode(name) {
+    let node = iconNodeCache.get(name);
+    if (!node) {
+        const t = document.createElement('template');
+        t.innerHTML = ICONS[name];
+        node = t.content.firstElementChild;
+        iconNodeCache.set(name, node);
     }
+    return node.cloneNode(true);
+}
 
-    row.className = rowClass;
+function rowSkeleton() {
+    if (!messageRowTemplate) {
+        const t = document.createElement('template');
+        t.innerHTML = '<div class="message-row" tabindex="0" role="button" data-action="select-message">' +
+            '<div class="msg-source-bar"></div>' +
+            '<div class="msg-body">' +
+            '<div class="msg-row1"><span class="msg-type"></span><span class="msg-patient"></span></div>' +
+            '<div class="msg-row2"><span class="facility"></span><span class="sep">·</span>' +
+            '<span class="src"></span><span class="sep">·</span>' +
+            '<span class="segs"></span><span class="time"></span></div>' +
+            '</div>' +
+            '<div class="msg-actions"><button class="msg-bookmark" data-action="bookmark" title="Bookmark"></button></div>' +
+            '</div>';
+        messageRowTemplate = t.content.firstElementChild;
+    }
+    return messageRowTemplate.cloneNode(true);
+}
+
+function textSpan(className, text, title) {
+    const el = document.createElement('span');
+    el.className = className;
+    el.textContent = text;
+    if (title) el.title = title;
+    return el;
+}
+
+function buildMessageRow(msg) {
+    const row = rowSkeleton();
+    if (msg.id === state.selectedId) row.classList.add('selected');
+    if (msg.bookmarked) row.classList.add('bookmarked');
+    const srcKey = state.colorByPort ? msg.source_addr : (msg.source_addr ? msg.source_addr.split(':')[0] : '');
+    if (state.highlightedSource && srcKey !== state.highlightedSource) row.classList.add('dimmed');
+
     row.dataset.id = msg.id;
-    row.tabIndex = 0;
-    row.setAttribute('role', 'button');
+    row.dataset.received = msg.received_at || '';
     row.setAttribute('aria-label', `Message from ${msg.sending_facility || 'unknown'}, type ${msg.message_type || 'unknown'}, received ${msg.received_at}`);
-    row.onclick = () => selectMessage(msg.id);
-    row.onkeydown = (e) => {
-        if (e.key === 'Enter' || e.key === ' ') {
-            e.preventDefault();
-            selectMessage(msg.id);
-        }
-    };
 
-    const srcColor = getSourceColor(msg.source_addr);
+    const [bar, body, actions] = row.children;
+    bar.title = msg.source_addr || '';
+    bar.style.background = getSourceColor(msg.source_addr);
 
-    const typeHtml = msg.parse_error
-        ? `<span class="msg-type parse-error" title="${escAttr(msg.parse_error)}">⚠ PARSE ERROR</span>`
-        : `<span class="msg-type">${esc(msg.message_type || '—')}</span>`;
+    const [row1, row2] = body.children;
+    const [type, patient] = row1.children;
+    if (msg.parse_error) {
+        type.classList.add('parse-error');
+        type.title = msg.parse_error;
+        type.textContent = '⚠ PARSE ERROR';
+    } else {
+        type.textContent = msg.message_type || '—';
+    }
+    patient.textContent = msg.patient_name || msg.patient_id || '—';
 
     const warnCount = msg.validation_warning_count || 0;
-    const warnHtml = warnCount > 0
-        ? `<span class="msg-warning ${msg.has_segment_errors ? 'err' : 'warn'}" title="${warnCount} validation warning${warnCount > 1 ? 's' : ''}">⚠ ${warnCount}</span>`
-        : '';
-
-    const tagsArr = msg.tags || [];
-    let tagsHtml = '';
-    if (tagsArr.length > 0) {
-        const visible = tagsArr.slice(0, 2).map(t => `<span class="msg-tag-small">${esc(t)}</span>`).join('');
-        const overflow = tagsArr.length > 2
-            ? `<span class="msg-tag-small">+${tagsArr.length - 2}</span>`
-            : '';
-        tagsHtml = `<span class="msg-tags-list">${visible}${overflow}</span>`;
+    if (warnCount > 0) {
+        row1.appendChild(textSpan(`msg-warning ${msg.has_segment_errors ? 'err' : 'warn'}`, `⚠ ${warnCount}`,
+            `${warnCount} validation warning${warnCount > 1 ? 's' : ''}`));
     }
-
+    const tagsArr = msg.tags || [];
+    if (tagsArr.length > 0) {
+        const tags = document.createElement('span');
+        tags.className = 'msg-tags-list';
+        for (const t of tagsArr.slice(0, 2)) tags.appendChild(textSpan('msg-tag-small', t));
+        if (tagsArr.length > 2) tags.appendChild(textSpan('msg-tag-small', `+${tagsArr.length - 2}`));
+        row1.appendChild(tags);
+    }
     const ackCode = (msg.ack_code || '').toUpperCase();
-    const ackHtml = ackCode
-        ? `<span class="${ackChipClass(ackCode)}">${esc(ackCode)}</span>`
-        : `<span class="msg-ack none">—</span>`;
+    row1.appendChild(ackCode ? textSpan(ackChipClass(ackCode), ackCode) : textSpan('msg-ack none', '—'));
 
-    const now = Date.now();
-    const timeLabel = rowTimeLabel(msg, now);
-    const segCount = msg.segment_count != null ? `${msg.segment_count} segs` : '—';
-    const facility = esc(msg.sending_facility || 'unknown');
-    const sourceAddr = esc(msg.source_addr || '');
-    const patient = esc(msg.patient_name || msg.patient_id || '—');
+    const [facility, , src, , segs, time] = row2.children;
+    facility.textContent = msg.sending_facility || 'unknown';
+    src.textContent = msg.source_addr || '';
+    segs.textContent = msg.segment_count != null ? `${msg.segment_count} segs` : '—';
+    time.textContent = rowTimeLabel(msg, Date.now());
 
-    const bookmarkClass = msg.bookmarked ? 'msg-bookmark active' : 'msg-bookmark';
-    const bookmarkSvg = msg.bookmarked ? ICONS.starFilled : ICONS.starOutline;
-    const bookmarkLabel = msg.bookmarked ? 'Remove bookmark' : 'Add bookmark';
-
-    row.dataset.received = msg.received_at || '';
-
-    row.innerHTML = `
-        <div class="msg-source-bar" title="${escAttr(msg.source_addr || '')}"></div>
-        <div class="msg-body">
-            <div class="msg-row1">
-                ${typeHtml}
-                <span class="msg-patient">${patient}</span>
-                ${warnHtml}
-                ${tagsHtml}
-                ${ackHtml}
-            </div>
-            <div class="msg-row2">
-                <span class="facility">${facility}</span>
-                <span class="sep">·</span>
-                <span class="src">${sourceAddr}</span>
-                <span class="sep">·</span>
-                <span class="segs">${segCount}</span>
-                <span class="time">${esc(timeLabel)}</span>
-            </div>
-        </div>
-        <div class="msg-actions">
-            <button class="${bookmarkClass}" aria-label="${bookmarkLabel}" data-action="bookmark" data-id="${msg.id}" title="Bookmark">${bookmarkSvg}</button>
-        </div>
-    `;
-    // Set source bar color via JS after innerHTML (avoids inline style= attribute)
-    const bar = row.querySelector('.msg-source-bar');
-    if (bar) bar.style.background = srcColor;
+    const btn = actions.firstElementChild;
+    btn.dataset.id = msg.id;
+    btn.setAttribute('aria-label', msg.bookmarked ? 'Remove bookmark' : 'Add bookmark');
+    if (msg.bookmarked) btn.classList.add('active');
+    btn.appendChild(iconNode(msg.bookmarked ? 'starFilled' : 'starOutline'));
     return row;
 }
 
@@ -954,7 +967,9 @@ function buildFieldStructure(td, seg, f, delims) {
                     + (reps.length > 1 ? `[${r + 1}]` : '')
                     + `.${c + 1}`
                     + (subs.length > 1 ? `.${sIdx + 1}` : '');
-                el.textContent = leaf;
+                const shown = previewText(leaf);
+                el.textContent = shown.text;
+                if (shown.truncated) el.appendChild(truncationNote(shown.size));
                 td.appendChild(el);
             });
         });
@@ -982,7 +997,14 @@ function buildFieldRow(seg, f, isWarn, delims) {
         tdVal.setAttribute('role', 'button');
         tdVal.tabIndex = 0;
         tdVal.setAttribute('aria-label', 'Copy field value');
-        tdVal.textContent = f.value;
+        const shown = previewText(f.value);
+        tdVal.textContent = shown.text;
+        if (shown.truncated) {
+            // A multi-MB value would freeze layout for seconds (#215); show a
+            // preview, and let the copy handler take the full value.
+            tdVal.appendChild(truncationNote(shown.size, 'click to copy the full value'));
+            fullFieldValues.set(tdVal, f.value);
+        }
     } else {
         const emptySpan = document.createElement('span');
         emptySpan.className = 'field-empty';
@@ -1101,7 +1123,13 @@ function renderRawLinesView(container, raw, withCopyButton) {
         span.className = 'hl-seg-name';
         span.textContent = line.substring(0, 3);
         row.appendChild(span);
-        appendColorizedSegmentBody(row, line.substring(3), delimSet);
+        // A multi-MB line (an MDM attachment) is shown as a preview (#215);
+        // "Copy All" copies the complete message from state, not the DOM.
+        const shown = previewText(line);
+        appendColorizedSegmentBody(row, shown.text.substring(3), delimSet);
+        if (shown.truncated) {
+            row.appendChild(truncationNote(shown.size, withCopyButton ? '"Copy All" copies the complete message' : ''));
+        }
         view.appendChild(row);
     }
     children.push(view);
@@ -1149,15 +1177,34 @@ function highlightJson(json) {
 }
 
 function renderJsonTab(content, msg) {
-    let json = detailJsonCache.get(msg);
-    if (json === undefined) {
-        json = JSON.stringify(msg, null, 2);
-        detailJsonCache.set(msg, json);
+    let cached = detailJsonCache.get(msg);
+    if (cached === undefined) {
+        // Long strings are shortened for display (#215): stringifying and
+        // highlighting a multi-MB attachment, twice (value + repetitions),
+        // froze the tab. The JSON API (/api/messages/{id}) has everything.
+        let shortened = false;
+        const json = JSON.stringify(msg, (key, value) => {
+            const shown = previewText(value);
+            if (!shown.truncated) return value;
+            shortened = true;
+            return `${shown.text}… [${shown.size}, shortened for display]`;
+        }, 2);
+        cached = { json, shortened };
+        detailJsonCache.set(msg, cached);
+    }
+    const children = [];
+    if (cached.shortened) {
+        const note = document.createElement('div');
+        note.className = 'json-shortened-note';
+        note.textContent = `Strings longer than ${DISPLAY_VALUE_MAX.toLocaleString()} characters are shortened here. ` +
+            `The complete message is at /api/messages/${msg.id}.`;
+        children.push(note);
     }
     const pre = document.createElement('pre');
     pre.className = 'raw-view json-view';
-    pre.innerHTML = highlightJson(json);
-    content.replaceChildren(pre);
+    pre.innerHTML = highlightJson(cached.json);
+    children.push(pre);
+    content.replaceChildren(...children);
 }
 
 function renderTab() {

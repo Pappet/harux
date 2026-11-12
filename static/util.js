@@ -289,6 +289,46 @@ function getParsedQuery(query) {
     return result;
 }
 
+// --- Long values in the detail views (#215) ---
+// Laying out one multi-MB unbroken string (an MDM's Base64 attachment) froze
+// the tab for seconds, nearly all of it in Layout/Paint. The views show a
+// preview of any value above DISPLAY_VALUE_MAX characters instead; copying
+// still gives the complete value (fullFieldValues, copyRawMessage).
+const DISPLAY_VALUE_MAX = 2000;
+const DISPLAY_VALUE_PREVIEW = 1000;
+
+// Approximate size of `n` characters (Base64 and HL7 text are ~1 byte each).
+function formatSize(n) {
+    if (n < 1024) return `${n} B`;
+    if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
+    return `${(n / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+// `{ text, truncated, size }`: the text unchanged when short, else its first
+// DISPLAY_VALUE_PREVIEW characters (never splitting a surrogate pair) and the
+// full size for the "shortened" note.
+function previewText(text) {
+    if (typeof text !== 'string' || text.length <= DISPLAY_VALUE_MAX) {
+        return { text, truncated: false, size: '' };
+    }
+    let end = DISPLAY_VALUE_PREVIEW;
+    const code = text.charCodeAt(end - 1);
+    if (code >= 0xd800 && code <= 0xdbff) end--;
+    return { text: text.slice(0, end), truncated: true, size: formatSize(text.length) };
+}
+
+// The "… (5.0 MB, shortened — click to copy)" note after a preview.
+function truncationNote(size, hint) {
+    const note = document.createElement('span');
+    note.className = 'value-truncated';
+    note.textContent = `… ${size} in total, shortened for display${hint ? ' — ' + hint : ''}`;
+    return note;
+}
+
+// Full values of field cells that show a preview: the copy handler reads
+// from here instead of the (shortened) text in the cell.
+const fullFieldValues = new WeakMap();
+
 // Cache for the JSON tab's stringified payload. WeakMap keys the cache on
 // the message object itself so we don't mutate the data model with a
 // presentation-layer property, and entries are reclaimed automatically when

@@ -13,6 +13,7 @@ function loadDiff() {
         state: { diffPinnedMessage: null, diffIgnoreDynamic: false },
         DYNAMIC_DIFF_FIELDS: new Set(['MSH-7', 'MSH-10']),
         esc: (s) => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'),
+        previewText: (t) => ({ text: t, truncated: false, size: '' }),
         escAttr: (s) => String(s ?? '').replace(/"/g, '&quot;'),
     };
     vm.createContext(ctx);

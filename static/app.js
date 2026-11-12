@@ -295,6 +295,7 @@ function handleInteraction(e) {
     if (actionEl) {
         const action = actionEl.dataset.action;
         const id = actionEl.dataset.id;
+        if (action === 'select-message') { selectMessage(id); return; }
         if (action === 'bookmark') { toggleBookmark(id, e); return; }
         if (action === 'toggle-source') { toggleHighlightSource(actionEl.dataset.source); return; }
         if (action === 'remove-tag') { removeTag(id, actionEl.dataset.tag); return; }
@@ -311,7 +312,9 @@ function handleInteraction(e) {
 
     const cell = e.target.closest('.field-val');
     if (cell && !cell.querySelector('.field-empty')) {
-        copyToClipboard(cell.textContent.trim(), cell);
+        // A shortened cell (#215) shows a preview: copy the full value.
+        const full = fullFieldValues.get(cell);
+        copyToClipboard(full !== undefined ? full : cell.textContent.trim(), cell);
     }
 }
 

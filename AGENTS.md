@@ -174,6 +174,9 @@ Key frontend behaviors:
 - **Client buffer cap:** `state.messages` holds at most `CLIENT_MESSAGE_CAP` (2000, `util.js`) messages **plus** bookmarked and selected ones, which are exempt and don't take places in the cap (bookmarks are bounded server-side by `store.bookmark_budget_percent`). The paused `pendingMessages` buffer is capped at the same number, oldest first, without exemptions — new messages are almost never bookmarked yet. Covered by `tests/js/buffer.test.mjs`. Excess oldest messages are dropped via `trimClientBuffer()` (O(1) early exit when only exempt entries are over the cap) and their rows removed bottom-up via `removeRowsFromList()` — no full rebuild. Dropped messages stay on the server; `updateTruncationNote()` keeps a note at the bottom of the list whenever the server holds more than the view, because filters/search only cover loaded messages (server-side search: #197/#198). The header `total` shows the server total (`state.totalMessagesCount`, from WS `init` / `addMessage` / `pollStats` every 3 s — so it can lag by one poll while paused), not the buffer length
 - **List (re)load (#239):** WS events go through `handleServerEvent()`. While `loadMessages()` waits for the list (on `init` / `lagged`), events are queued in `state.loadQueue` and replayed in order after the snapshot is applied (`new_message` for IDs already loaded is skipped); a newer load supersedes an older one via `state.loadSeq`. Never apply WS events directly to `state.messages` around a load. Covered by `tests/js/load.test.mjs`
 - Search is client-side (filters `messages[]` array via `matchesSearch()`), debounced 300ms
+- **Rows are cheap to build (#202):** `buildMessageRow` clones a prebuilt skeleton (`rowSkeleton()`) and caches parsed SVG icons (`iconNode()`); a row has `data-action="select-message"`, so clicks and Enter/Space go through the document-level delegation in `app.js` — no per-row closures, no per-row `innerHTML` parsing
+- **Rows use `content-visibility: auto` (#216)** with `contain-intrinsic-size: auto 60px`: every row is 61 px (60 + 1 px border). If the row layout ever changes height, update the intrinsic size, or the scrollbar drifts. `tickRowRelativeTimes` only writes labels that changed; the health dot's pulse animates `transform`/`opacity` on a pseudo-element (compositor-only) — never animate `box-shadow` or other paint properties in an infinite animation
+- **Long values are previewed (#215):** field values, component leaves, raw lines and JSON strings above `DISPLAY_VALUE_MAX` (2000) characters show their first 1000 plus a size note (`previewText`, `truncationNote` in `util.js`). Code that needs a value must read it from the message data, never from the DOM: the field copy handler uses `fullFieldValues`, "Copy All" uses `state.selectedMessage.raw`
 - Parse errors are shown with `⚠ PARSE ERROR` in red (`var(--error)`) in the message list
 
 ## Critical Knowledge — Read Before Changing Anything
@@ -272,7 +275,7 @@ tests/
 ├── alloc_accounting.rs           # Counting allocator: estimated_bytes() matches the real heap (#226)
 ├── doc_paths.rs                  # Paths named in the docs exist (#246)
 ├── web_api.rs                    # Axum REST/handler integration tests
-├── js/                           # node:test tests for static/*.js (diff pairing, list load queue, client buffer + counters + list DOM)
+├── js/                           # node:test tests for static/*.js (diff pairing, list load queue, client buffer + counters + list DOM, long-value preview)
 ├── benchmark_concurrent_insert.rs # Concurrent store insert benchmark
 ├── messages/                     # .hl7 fixtures (valid / errors / unknown_types)
 ├── test.sh                       # Linux/macOS functional + load test (netcat)

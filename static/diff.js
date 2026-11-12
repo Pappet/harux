@@ -42,9 +42,18 @@ function buildDiffFieldRow(segName, label, idx, fA, fB, ignoreDynamic, stats) {
     return `
         <tr class="${rowClass}">
             <td class="diff-field-name" title="${escAttr(desc)}">${esc(label)}-${idx}${descHtml}</td>
-            <td class="diff-val diff-val-a ${changed ? 'diff-changed' : ''}">${esc(vA) || '<span class="field-empty">empty</span>'}</td>
-            <td class="diff-val diff-val-b ${changed ? 'diff-changed' : ''}">${esc(vB) || '<span class="field-empty">empty</span>'}</td>
+            <td class="diff-val diff-val-a ${changed ? 'diff-changed' : ''}">${diffValueHtml(vA)}</td>
+            <td class="diff-val diff-val-b ${changed ? 'diff-changed' : ''}">${diffValueHtml(vB)}</td>
         </tr>`;
+}
+
+// A diff cell: the value (compared in full above), shown as a preview when
+// it is a multi-MB attachment (#215).
+function diffValueHtml(v) {
+    if (!v) return '<span class="field-empty">empty</span>';
+    const shown = previewText(v);
+    if (!shown.truncated) return esc(v);
+    return esc(shown.text) + `<span class="value-truncated">… ${esc(shown.size)} in total, shortened for display</span>`;
 }
 
 function buildDiffSegmentBlock(segName, label, segA, segB, ignoreDynamic, stats) {
