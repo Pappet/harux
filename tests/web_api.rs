@@ -786,6 +786,16 @@ async fn history_state() -> AppState {
                     field: None,
                 });
         }
+        if i == 4 {
+            // A warning that is not a segment error: has:warnings, not has:errors.
+            msg.validation_warnings
+                .push(harux::validation::ValidationWarning {
+                    code: "MISSING_FIELD".into(),
+                    message: "PID-3 missing".into(),
+                    segment: "PID".into(),
+                    field: Some(3),
+                });
+        }
         state.store.insert(msg).await;
     }
     state.store.add_tag("m1", "Bug 1234".into()).await;
@@ -821,6 +831,18 @@ async fn messages_before_a_cursor_page_through_older_history() {
         ids(&get_json(&state, "/api/messages?before=gone&limit=2").await),
         Vec::<String>::new()
     );
+    // `before` replaces `offset` / `include_bookmarks`: combining them is an
+    // error, not a silently ignored parameter.
+    for uri in [
+        "/api/messages?before=m3&offset=1",
+        "/api/messages?before=m3&include_bookmarks=true",
+    ] {
+        let res = create_router(state.clone())
+            .oneshot(Request::builder().uri(uri).body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::BAD_REQUEST, "{uri}");
+    }
 }
 
 #[tokio::test]
@@ -833,6 +855,10 @@ async fn search_matches_like_the_ui_filter() {
     assert_eq!(ids(&get_json(&state, &q("M%C3%9CLLER")).await), ["m2"]);
     // has:errors / has:warnings prefixes, with and without a term.
     assert_eq!(ids(&get_json(&state, &q("has:errors")).await), ["m3"]);
+    assert_eq!(
+        ids(&get_json(&state, &q("has:warnings")).await),
+        ["m4", "m3"]
+    );
     assert_eq!(
         ids(&get_json(&state, &q("has:warnings%20oru")).await),
         ["m3"]

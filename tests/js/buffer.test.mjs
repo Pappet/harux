@@ -269,6 +269,16 @@ test('a server search continues below its last hit and stops when exhausted', as
     assert.match(calls[3], /\/api\/messages\?before=n8&limit=3$/);
 });
 
+test('an empty older page says so', async () => {
+    const { ctx, state } = setup({ cap: 10 });
+    const toasts = [];
+    ctx.showToast = (m, type) => toasts.push([m, type]);
+    ctx.fetch = async () => ({ ok: true, json: async () => [] });
+    state.messages = [timed('n1', 10)];
+    await ctx.loadOlderMessages();
+    assert.deepEqual(toasts, [['No older messages on the server', 'info']]);
+});
+
 test('an older page fetched across a reload is dropped', async () => {
     const { ctx, state } = setup({ cap: 10 });
     let release;

@@ -510,7 +510,12 @@ async function loadOlderMessages() {
         ? `/api/messages?before=${encodeURIComponent(cursor)}&limit=${OLDER_PAGE_SIZE}`
         : `/api/messages?limit=${OLDER_PAGE_SIZE}`;
     const found = await fetchOlder(url);
-    if (found) mergeOlderMessages(found, false);
+    if (!found) return;
+    if (mergeOlderMessages(found, false) === 0) {
+        // Nothing older (or the cursor was evicted meanwhile): say so, like
+        // the server search does (#268 review).
+        showToast('No older messages on the server', 'info');
+    }
 }
 
 // "Search older on the server" (#197): the current query over the messages
@@ -529,5 +534,5 @@ async function searchOlderOnServer() {
     state.serverSearch.done = found.length < OLDER_PAGE_SIZE;
     const added = mergeOlderMessages(found, true);
     if (added === 0) updateTruncationNote();
-    if (found.length === 0) showToast('No older matches on the server');
+    if (found.length === 0) showToast('No older matches on the server', 'info');
 }

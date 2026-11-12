@@ -610,7 +610,8 @@ function renderMessageList() {
 // no-op call per absent property.
 function matchesSearch(msg, parsedQuery) {
     if (parsedQuery.hasWarnings) {
-        if ((msg.validation_warning_count || 0) === 0 && !msg.has_segment_errors) return false;
+        // Any warning; a segment error is one, too (same in SearchQuery).
+        if ((msg.validation_warning_count || 0) === 0) return false;
     } else if (parsedQuery.hasErrors) {
         if (!msg.has_segment_errors) return false;
     }

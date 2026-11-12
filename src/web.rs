@@ -321,7 +321,16 @@ async fn list_messages(
     let offset = params.offset.unwrap_or(0);
     let limit = params.limit.unwrap_or(100).min(1000);
     if let Some(before) = params.before.as_deref() {
-        return Json(state.store.older_than(Some(before), None, limit).await);
+        // `before` replaces `offset` and pages plain history; combining them
+        // would silently ignore one, so say so instead (#268 review).
+        if params.offset.is_some() || params.include_bookmarks.is_some() {
+            return (
+                StatusCode::BAD_REQUEST,
+                "`before` cannot be combined with `offset` or `include_bookmarks`",
+            )
+                .into_response();
+        }
+        return Json(state.store.older_than(Some(before), None, limit).await).into_response();
     }
     let include_bookmarks = matches!(
         params
@@ -339,7 +348,7 @@ async fn list_messages(
     } else {
         state.store.list_summaries(offset, limit).await
     };
-    Json(summaries)
+    Json(summaries).into_response()
 }
 
 async fn get_message(State(state): State<AppState>, Path(id): Path<String>) -> impl IntoResponse {
@@ -586,7 +595,13 @@ struct WsFrame<'a, T: serde::Serialize> {
 }
 
 fn frame_json<T: serde::Serialize>(kind: &str, data: Option<&T>) -> String {
-    serde_json::to_string(&WsFrame { kind, data }).expect("event frames serialize")
+    // Summaries and ID lists always serialize. If one ever doesn't, don't
+    // panic in the WebSocket task: send `lagged`, which makes the UI reload
+    // the list from the REST API and so recover the event's effect.
+    serde_json::to_string(&WsFrame { kind, data }).unwrap_or_else(|e| {
+        tracing::error!("Could not serialize the {kind} event: {e}");
+        r#"{"type":"lagged","missed":1}"#.to_string()
+    })
 }
 
 /// The wire format of a store event. Rendered once per event for all

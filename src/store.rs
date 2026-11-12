@@ -7,28 +7,6 @@ use tracing::{info, warn};
 
 const BROADCAST_CAPACITY: usize = 4096;
 
-/// Case-insensitive substring search.
-///
-/// Fast path: ASCII-only needle — byte-level windowed scan, zero allocation.
-/// ASCII code points are all single bytes, so windows of byte-length(needle)
-/// always align on character boundaries and `eq_ignore_ascii_case` is correct.
-///
-/// Slow path: non-ASCII needle (unusual for HL7 searches) — allocate and use
-/// Unicode-aware `to_lowercase` so multi-byte code points fold correctly.
-fn contains_ignore_ascii_case(haystack: &str, needle: &str) -> bool {
-    if needle.is_empty() {
-        return true;
-    }
-    if needle.is_ascii() {
-        let needle = needle.as_bytes();
-        return haystack
-            .as_bytes()
-            .windows(needle.len())
-            .any(|w| w.eq_ignore_ascii_case(needle));
-    }
-    haystack.to_lowercase().contains(&needle.to_lowercase())
-}
-
 /// A search query as the UI writes it — parsed like `getParsedQuery` in
 /// `static/util.js`, and matched like `matchesSearch` in `static/render.js`,
 /// so a server search finds what the client filter shows (#197): an optional
@@ -61,37 +39,48 @@ impl SearchQuery {
 
     fn matches(&self, entry: &StoredEntry) -> bool {
         let m = &entry.message;
-        let segment_errors = || {
-            m.validation_warnings
-                .iter()
-                .any(|w| w.code == "MISSING_SEGMENT")
-        };
-        if self.has_warnings && m.validation_warnings.is_empty() && !segment_errors() {
+        // has:warnings = any warning; a segment error is one, too.
+        if self.has_warnings && m.validation_warnings.is_empty() {
             return false;
         }
-        if self.has_errors && !segment_errors() {
+        if self.has_errors
+            && !m
+                .validation_warnings
+                .iter()
+                .any(|w| w.code == "MISSING_SEGMENT")
+        {
             return false;
         }
         let q = self.text.as_str();
         if q.is_empty() {
             return true;
         }
-        let opt = |v: &Option<String>| {
-            v.as_deref()
-                .is_some_and(|v| contains_ignore_ascii_case(v, q))
-        };
+        // `text` is lowercased once in `parse`; only the haystack is folded
+        // per field (and only for a non-ASCII needle).
+        let hit = |v: &str| contains_lowercase(v, q);
+        let opt = |v: &Option<String>| v.as_deref().is_some_and(hit);
         opt(&m.patient_name)
-            || contains_ignore_ascii_case(&m.message_type, q)
-            || contains_ignore_ascii_case(&m.sending_facility, q)
+            || hit(&m.message_type)
+            || hit(&m.sending_facility)
             || opt(&m.patient_id)
-            || contains_ignore_ascii_case(&m.message_control_id, q)
-            || contains_ignore_ascii_case(&m.source_addr, q)
-            || entry
-                .meta
-                .tags
-                .iter()
-                .any(|t| contains_ignore_ascii_case(t, q))
+            || hit(&m.message_control_id)
+            || hit(&m.source_addr)
+            || entry.meta.tags.iter().any(|t| hit(t))
     }
+}
+
+/// Case-insensitive `haystack.contains(needle)` for a needle that is already
+/// lowercase — [`SearchQuery`] folds it once instead of once per field.
+fn contains_lowercase(haystack: &str, needle: &str) -> bool {
+    if needle.is_ascii() {
+        let needle = needle.as_bytes();
+        return needle.is_empty()
+            || haystack
+                .as_bytes()
+                .windows(needle.len())
+                .any(|w| w.eq_ignore_ascii_case(needle));
+    }
+    haystack.to_lowercase().contains(needle)
 }
 
 #[derive(Clone)]
