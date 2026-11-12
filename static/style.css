@@ -618,6 +618,20 @@ body.resizing * {
     border-top: 1px dashed var(--border);
 }
 
+.list-truncated-note .note-text {
+    display: block;
+    margin-bottom: 8px;
+}
+
+.list-truncated-note .note-action {
+    margin: 0 4px;
+}
+
+.list-truncated-note .note-action:disabled {
+    opacity: 0.5;
+    cursor: progress;
+}
+
 .group-header {
     position: sticky;
     top: 0;

@@ -63,6 +63,9 @@ const SOURCE_PALETTE = [
 // bookmark budget, so the buffer stays bounded overall.
 const CLIENT_MESSAGE_CAP = 2000;
 
+// Messages per "Load older" / server-search request (#198, #197).
+const OLDER_PAGE_SIZE = 500;
+
 // Fields that change every transmission — used by the diff view to suppress
 // noise when the user enables "Hide dynamic fields".
 const DYNAMIC_DIFF_FIELDS = new Set(['MSH-7', 'MSH-10']);

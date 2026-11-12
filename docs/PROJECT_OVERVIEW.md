@@ -137,7 +137,7 @@ The Content-Security-Policy forbids inline scripts, styles and event handlers.
 Key behaviors:
 - Messages are batched and rendered at most every 250ms to prevent DOM freeze at high throughput
 - Pause/Live button, Validation Filter, and Bookmarks toggle live in the `.inbox-controls` row; they buffer or filter incoming messages locally.
-- The browser keeps at most 2,000 messages (plus bookmarked and selected ones); the server may hold more, and a note at the bottom of the list says so. Bookmarked messages are loaded on every (re)load, so they survive a page reload.
+- The browser keeps at most 2,000 messages (plus bookmarked and selected ones); the server may hold more, and a note at the bottom of the list says so and offers "Load 500 older" and, during a search, "Search older on the server". Loaded pages stay until a reload. Bookmarked messages are loaded on every (re)load, so they survive a page reload.
 - Search is client-side over the loaded messages, via a pre-parsed query cache (bounded at 100 entries). Global shortcut is `Cmd+K`.
 - Top-bar health pills show connection count, message rate, and error/validation counts.
 - Parse errors are shown with `⚠ PARSE ERROR` in red in the message list and tracked in the health pills.
@@ -184,9 +184,9 @@ Built-in defaults → `harux.toml` (next to the binary, then the working directo
 
 | Method | Endpoint | Description |
 |---|---|---|
-| `GET` | `/api/messages?offset=0&limit=100&include_bookmarks=true` | Paginated message list, newest first (`limit` capped at 1000); `include_bookmarks` adds every older bookmarked message |
+| `GET` | `/api/messages?offset=0&limit=100&include_bookmarks=true` | Paginated message list, newest first (`limit` capped at 1000); `include_bookmarks` adds every older bookmarked message; `before=<id>` instead of `offset` pages through older history (the UI's "Load older") |
 | `GET` | `/api/messages/{id}` | Full message with all segments and fields |
-| `GET` | `/api/search?q=ADT&limit=100` | Search by type, patient, facility, ID, IP (the UI filters client-side and does not use it yet) |
+| `GET` | `/api/search?q=ADT&limit=100&before=<id>` | Search like the UI filter (`has:warnings`/`has:errors`, type, patient, facility, control ID, source, tags), newest first; `before` searches only older messages. The UI uses it for "Search older on the server" |
 | `GET` | `/api/stats` | Live server stats: message counts, store bytes and limit, parse errors, connections |
 | `GET` | `/api/export` | Every stored message as one MLLP-framed `harux-export.hl7`, byte for byte as received, oldest first (streamed) |
 | `POST` | `/api/clear` | Delete all messages from store |

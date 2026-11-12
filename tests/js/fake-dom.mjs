@@ -46,6 +46,10 @@ export class El {
         if (this.parent) this.parent.children.splice(this.parent.children.indexOf(this), 1);
         this.parent = null;
     }
+    replaceChildren(...nodes) {
+        for (const c of [...this.children]) c.remove();
+        for (const n of nodes) this.appendChild(n);
+    }
     appendChild(c) { c.remove(); c.parent = this; this.children.push(c); return c; }
     insertBefore(c, ref) {
         c.remove();

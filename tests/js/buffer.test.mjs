@@ -33,6 +33,7 @@ function setup({ cap = 5 } = {}) {
         setTimeout: noop,
         WeakMap, Set, Map,
         CLIENT_MESSAGE_CAP: cap,
+        OLDER_PAGE_SIZE: 3,
         DETAIL_EMPTY_HTML: '',
         detailJsonCache: new WeakMap(),
         srcLabelFor: (addr) => addr || '',
@@ -184,7 +185,15 @@ test('the truncation note stays at the bottom and disappears when everything is 
     state.totalMessagesCount = 10; // the server holds more than the view
     ctx.updateTruncationNote();
     assert.deepEqual(shape(list), ['[Live]', 'a', 'b', '#list-truncated-note']);
-    assert.match(list.lastElementChild.textContent, /newest 2 of 10/);
+    const note = list.lastElementChild;
+    assert.match(note.children[0].textContent, /holds 2 of 10 messages/);
+    // #198: the note offers to load older messages; #197: with a search
+    // query, also to search them on the server.
+    assert.deepEqual(note.children.slice(1).map((b) => b.dataset.action), ['load-older']);
+    state.searchQuery = 'adt';
+    ctx.updateTruncationNote();
+    assert.deepEqual(note.children.slice(1).map((b) => b.dataset.action), ['load-older', 'search-older']);
+    state.searchQuery = '';
 
     // Rows removed from the bottom: the note is still last, headers clean.
     list.appendChild(header('Older'));
@@ -196,4 +205,89 @@ test('the truncation note stays at the bottom and disappears when everything is 
     state.totalMessagesCount = 2;
     ctx.updateTruncationNote();
     assert.ok(list.lastElementChild.classList.contains('hidden'));
+});
+
+// --- Older history (#198) and server search (#197) ---
+const at = (sec) => new Date(Date.UTC(2026, 10, 12, 12, 0, sec)).toISOString();
+const timed = (id, sec, extra = {}) => msg(id, { received_at: at(sec), ...extra });
+
+test('the history cursor skips bookmarked, selected and search-hit messages', () => {
+    const { ctx, state } = setup({ cap: 10 });
+    state.messages = [timed('n3', 30), timed('n2', 20), timed('sel', 10), timed('bm', 5, { bookmarked: true })];
+    state.selectedId = 'sel';
+    assert.equal(ctx.historyCursor(), 'n2');
+    state.messages.push(timed('hit', 1, { _searchHit: true }));
+    assert.equal(ctx.historyCursor(), 'n2');
+    state.messages = [];
+    assert.equal(ctx.historyCursor(), null);
+});
+
+test('older pages merge in arrival order, skip loaded ones, count, and raise the cap', () => {
+    const { ctx, state } = setup({ cap: 2 });
+    state.messages = [timed('n4', 40), timed('n3', 30), timed('bm', 5, { bookmarked: true })];
+    state.totalBookmarkCount = 1;
+    const added = ctx.mergeOlderMessages([
+        timed('n2', 20, { validation_warning_count: 2 }), timed('n1', 10), timed('bm', 5, { bookmarked: true }),
+    ], false);
+    assert.equal(added, 2, 'the already loaded bookmark is not added twice');
+    assert.deepEqual(ids(state.messages), ['n4', 'n3', 'n2', 'n1', 'bm']);
+    assert.equal(state.olderLoaded, 2);
+    assert.equal(state.totalValidationCount, 2);
+    // Live messages trim against CLIENT_MESSAGE_CAP + olderLoaded: the
+    // loaded page survives the next flush.
+    ctx.addMessage(timed('n5', 50));
+    ctx.flushAndRender();
+    assert.deepEqual(ids(state.messages), ['n5', 'n4', 'n3', 'n2', 'bm'], 'only one over the raised cap goes');
+    assert.deepEqual(counters(state), recount(state));
+    // A reload forgets the loaded history.
+    ctx.applySnapshot([timed('n5', 50)]);
+    assert.equal(state.olderLoaded, 0);
+});
+
+test('a server search continues below its last hit and stops when exhausted', async () => {
+    const { ctx, state } = setup({ cap: 10 });
+    const calls = [];
+    const pages = [[timed('h3', 3), timed('h2', 2), timed('h1', 1)], [timed('h0', 0)]];
+    ctx.fetch = async (url) => { calls.push(url); return { ok: true, json: async () => pages.shift() || [] }; };
+    state.messages = [timed('n9', 90), timed('n8', 80)];
+    state.searchQuery = 'adt';
+    await ctx.searchOlderOnServer();
+    assert.match(calls[0], /\/api\/search\?q=adt&limit=3&before=n8$/);
+    assert.deepEqual(ids(state.messages), ['n9', 'n8', 'h3', 'h2', 'h1']);
+    assert.ok(state.messages[2]._searchHit);
+    await ctx.searchOlderOnServer();
+    assert.match(calls[1], /before=h1$/, 'continues below the last hit');
+    assert.equal(state.serverSearch.done, true, 'fewer than a page: no more matches');
+    await ctx.searchOlderOnServer();
+    assert.equal(calls.length, 2, 'no request once exhausted');
+    // A new query starts over; "Load older" continues below the loaded run,
+    // not below the search hits.
+    state.searchQuery = 'oru';
+    await ctx.searchOlderOnServer();
+    assert.match(calls[2], /q=oru&limit=3&before=n8$/);
+    await ctx.loadOlderMessages();
+    assert.match(calls[3], /\/api\/messages\?before=n8&limit=3$/);
+});
+
+test('an empty older page says so', async () => {
+    const { ctx, state } = setup({ cap: 10 });
+    const toasts = [];
+    ctx.showToast = (m, type) => toasts.push([m, type]);
+    ctx.fetch = async () => ({ ok: true, json: async () => [] });
+    state.messages = [timed('n1', 10)];
+    await ctx.loadOlderMessages();
+    assert.deepEqual(toasts, [['No older messages on the server', 'info']]);
+});
+
+test('an older page fetched across a reload is dropped', async () => {
+    const { ctx, state } = setup({ cap: 10 });
+    let release;
+    ctx.fetch = () => new Promise((r) => { release = () => r({ ok: true, json: async () => [timed('old', 1)] }); });
+    state.messages = [timed('n1', 10)];
+    const pending = ctx.loadOlderMessages();
+    state.loadSeq++; // a list reload started meanwhile
+    release();
+    await pending;
+    assert.deepEqual(ids(state.messages), ['n1']);
+    assert.equal(state.olderLoading, false);
 });

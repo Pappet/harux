@@ -7,26 +7,80 @@ use tracing::{info, warn};
 
 const BROADCAST_CAPACITY: usize = 4096;
 
-/// Case-insensitive substring search.
-///
-/// Fast path: ASCII-only needle — byte-level windowed scan, zero allocation.
-/// ASCII code points are all single bytes, so windows of byte-length(needle)
-/// always align on character boundaries and `eq_ignore_ascii_case` is correct.
-///
-/// Slow path: non-ASCII needle (unusual for HL7 searches) — allocate and use
-/// Unicode-aware `to_lowercase` so multi-byte code points fold correctly.
-fn contains_ignore_ascii_case(haystack: &str, needle: &str) -> bool {
-    if needle.is_empty() {
-        return true;
+/// A search query as the UI writes it — parsed like `getParsedQuery` in
+/// `static/util.js`, and matched like `matchesSearch` in `static/render.js`,
+/// so a server search finds what the client filter shows (#197): an optional
+/// `has:warnings` / `has:errors` prefix, then a case-insensitive substring of
+/// the patient name or ID, message type, facility, control ID, source
+/// address or a tag.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SearchQuery {
+    text: String,
+    has_warnings: bool,
+    has_errors: bool,
+}
+
+impl SearchQuery {
+    pub fn parse(query: &str) -> Self {
+        let lower = query.trim().to_lowercase();
+        let (rest, has_warnings, has_errors) = if let Some(r) = lower.strip_prefix("has:warnings") {
+            (r, true, false)
+        } else if let Some(r) = lower.strip_prefix("has:errors") {
+            (r, false, true)
+        } else {
+            (lower.as_str(), false, false)
+        };
+        Self {
+            text: rest.trim().to_string(),
+            has_warnings,
+            has_errors,
+        }
     }
+
+    fn matches(&self, entry: &StoredEntry) -> bool {
+        let m = &entry.message;
+        // has:warnings = any warning; a segment error is one, too.
+        if self.has_warnings && m.validation_warnings.is_empty() {
+            return false;
+        }
+        if self.has_errors
+            && !m
+                .validation_warnings
+                .iter()
+                .any(|w| w.code == "MISSING_SEGMENT")
+        {
+            return false;
+        }
+        let q = self.text.as_str();
+        if q.is_empty() {
+            return true;
+        }
+        // `text` is lowercased once in `parse`; only the haystack is folded
+        // per field (and only for a non-ASCII needle).
+        let hit = |v: &str| contains_lowercase(v, q);
+        let opt = |v: &Option<String>| v.as_deref().is_some_and(hit);
+        opt(&m.patient_name)
+            || hit(&m.message_type)
+            || hit(&m.sending_facility)
+            || opt(&m.patient_id)
+            || hit(&m.message_control_id)
+            || hit(&m.source_addr)
+            || entry.meta.tags.iter().any(|t| hit(t))
+    }
+}
+
+/// Case-insensitive `haystack.contains(needle)` for a needle that is already
+/// lowercase — [`SearchQuery`] folds it once instead of once per field.
+fn contains_lowercase(haystack: &str, needle: &str) -> bool {
     if needle.is_ascii() {
         let needle = needle.as_bytes();
-        return haystack
-            .as_bytes()
-            .windows(needle.len())
-            .any(|w| w.eq_ignore_ascii_case(needle));
+        return needle.is_empty()
+            || haystack
+                .as_bytes()
+                .windows(needle.len())
+                .any(|w| w.eq_ignore_ascii_case(needle));
     }
-    haystack.to_lowercase().contains(&needle.to_lowercase())
+    haystack.to_lowercase().contains(needle)
 }
 
 #[derive(Clone)]
@@ -41,11 +95,40 @@ pub enum StoreEvent {
     Cleared,
 }
 
+/// What the broadcast channel carries: a [`StoreEvent`] plus its WebSocket
+/// frame, rendered **once** for all subscribers (#196). Before, every
+/// connected browser's task serialized the same summary itself, so N viewers
+/// meant N identical JSON strings per message. The first subscriber to send
+/// renders it via [`EventFrame::cached_json`]; the others reuse the text. The
+/// wire format stays in `web.rs`, which passes the renderer.
+pub struct EventFrame {
+    pub event: StoreEvent,
+    json: std::sync::OnceLock<String>,
+}
+
+impl EventFrame {
+    fn new(event: StoreEvent) -> Arc<Self> {
+        Arc::new(Self {
+            event,
+            json: std::sync::OnceLock::new(),
+        })
+    }
+
+    /// The rendered frame: `render` runs on the first call only, every later
+    /// call (from any subscriber) returns the same text.
+    pub fn cached_json(&self, render: impl FnOnce(&StoreEvent) -> String) -> &str {
+        self.json.get_or_init(|| render(&self.event))
+    }
+}
+
+/// One broadcast item, shared by all subscribers.
+pub type SharedEvent = Arc<EventFrame>;
+
 /// Thread-safe in-memory message store with broadcast notifications
 #[derive(Clone)]
 pub struct MessageStore {
     inner: Arc<RwLock<StoreInner>>,
-    tx: broadcast::Sender<StoreEvent>,
+    tx: broadcast::Sender<SharedEvent>,
     eviction_notify: Arc<tokio::sync::Notify>,
     eviction_flag: Arc<std::sync::atomic::AtomicBool>,
 }
@@ -322,7 +405,9 @@ impl MessageStore {
         // changed. Sent after the lock is released, an eviction of
         // this very message could reach subscribers before `NewMessage`.
         // `send` never blocks. No receivers is not an error.
-        let _ = self.tx.send(StoreEvent::NewMessage(Box::new(summary)));
+        let _ = self
+            .tx
+            .send(EventFrame::new(StoreEvent::NewMessage(Box::new(summary))));
         drop(inner);
 
         if needs_eviction
@@ -340,7 +425,7 @@ impl MessageStore {
     }
 
     /// Get a broadcast receiver for real-time updates
-    pub fn subscribe(&self) -> broadcast::Receiver<StoreEvent> {
+    pub fn subscribe(&self) -> broadcast::Receiver<SharedEvent> {
         self.tx.subscribe()
     }
 
@@ -419,27 +504,33 @@ impl MessageStore {
             .collect()
     }
 
-    /// Search messages by filter text (matches message type, patient name, facility, etc.)
-    pub async fn search(&self, query: &str, limit: usize) -> Vec<Hl7MessageSummary> {
+    /// Up to `limit` messages matching `query` (all of them if `None`),
+    /// newest first, starting below `before`: only messages older than the
+    /// one with that ID (#197, #198). A cursor instead of an offset, because
+    /// new messages arriving between two requests shift every offset. An
+    /// unknown `before` (evicted meanwhile — and with it everything older
+    /// that isn't a bookmark) gives an empty page rather than restarting
+    /// from the newest.
+    pub async fn older_than(
+        &self,
+        before: Option<&str>,
+        query: Option<&SearchQuery>,
+        limit: usize,
+    ) -> Vec<Hl7MessageSummary> {
         let inner = self.inner.read().await;
+        let end = match before {
+            Some(id) => match inner.order.iter().rposition(|o| o == id) {
+                Some(pos) => pos,
+                None => return Vec::new(),
+            },
+            None => inner.order.len(),
+        };
         inner
             .order
-            .iter()
-            .rev()
+            .range(..end)
+            .rev() // newest first
             .filter_map(|id| inner.messages.get(id))
-            .filter(|e| {
-                let m = &e.message;
-                contains_ignore_ascii_case(&m.message_type, query)
-                    || contains_ignore_ascii_case(&m.sending_facility, query)
-                    || m.patient_name
-                        .as_deref()
-                        .is_some_and(|n| contains_ignore_ascii_case(n, query))
-                    || m.patient_id
-                        .as_deref()
-                        .is_some_and(|n| contains_ignore_ascii_case(n, query))
-                    || contains_ignore_ascii_case(&m.message_control_id, query)
-                    || contains_ignore_ascii_case(&m.source_addr, query)
-            })
+            .filter(|e| query.is_none_or(|q| q.matches(e)))
             .take(limit)
             .map(|e| Hl7MessageSummary::new(&e.message, &e.meta))
             .collect()
@@ -503,7 +594,7 @@ impl MessageStore {
         }
 
         // Moved into the event — nothing else needs it (no clone under the lock).
-        let _ = self.tx.send(event(Box::new(summary)));
+        let _ = self.tx.send(EventFrame::new(event(Box::new(summary))));
         true
     }
 
@@ -567,7 +658,7 @@ impl MessageStore {
         inner.bookmark_count = 0;
         inner.bookmark_bytes = 0;
         info!("Message store cleared");
-        let _ = self.tx.send(StoreEvent::Cleared);
+        let _ = self.tx.send(EventFrame::new(StoreEvent::Cleared));
     }
 
     async fn run_eviction_loop(self) {
@@ -596,9 +687,9 @@ impl MessageStore {
         if !outcome.ids.is_empty() {
             // Sent under the write lock (same pattern as `clear`) so subscribers
             // see the eviction before any later insert/mutation event.
-            let _ = self
-                .tx
-                .send(StoreEvent::Evicted(Arc::new(outcome.ids.clone())));
+            let _ = self.tx.send(EventFrame::new(StoreEvent::Evicted(Arc::new(
+                outcome.ids.clone(),
+            ))));
         }
         if outcome.evicted + outcome.evicted_bookmarks > 0 {
             info!(
@@ -640,6 +731,38 @@ mod tests {
         let mut msg = Hl7Message::new_empty(format!("raw-{id}"), "127.0.0.1:5000".into());
         msg.id = id.to_string();
         msg
+    }
+
+    /// #196: all subscribers share one rendered frame per event — the
+    /// renderer runs once, and every subscriber gets the same text.
+    #[tokio::test]
+    async fn test_event_frame_is_rendered_once_for_all_subscribers() {
+        let store = manual_store(100, 512);
+        let (mut a, mut b, mut c) = (store.subscribe(), store.subscribe(), store.subscribe());
+        store.insert(make_msg("m")).await;
+        let renders = std::sync::atomic::AtomicUsize::new(0);
+        let render = |e: &StoreEvent| {
+            renders.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            match e {
+                StoreEvent::NewMessage(s) => format!("new {}", s.id),
+                _ => "other".into(),
+            }
+        };
+        let (fa, fb, fc) = (
+            a.recv().await.unwrap(),
+            b.recv().await.unwrap(),
+            c.recv().await.unwrap(),
+        );
+        let ta = fa.cached_json(render).to_string();
+        let tb = fb.cached_json(render);
+        let tc = fc.cached_json(render);
+        assert_eq!(renders.load(std::sync::atomic::Ordering::SeqCst), 1);
+        assert_eq!(ta, "new m");
+        assert!(
+            std::ptr::eq(tb, tc),
+            "one shared string, not a copy per subscriber"
+        );
+        assert!(Arc::ptr_eq(&fa, &fb), "one frame per event");
     }
 
     /// Message whose raw payload is `kb` KiB — dominates `estimated_bytes()`.
@@ -755,7 +878,7 @@ mod tests {
         store.toggle_bookmark("b").await;
 
         let event = rx.recv().await.unwrap();
-        match event {
+        match &event.event {
             StoreEvent::BookmarkToggled(summary) => {
                 assert_eq!(summary.id, "b");
                 assert!(summary.bookmarked);
@@ -906,9 +1029,9 @@ mod tests {
         assert_eq!(outcome.evicted, 1);
         assert_eq!(store.count().await, 9);
 
-        match rx.recv().await.unwrap() {
+        match &rx.recv().await.unwrap().event {
             StoreEvent::Evicted(ids) => {
-                assert_eq!(*ids, ["msg-0", "msg-6"]);
+                assert_eq!(**ids, ["msg-0", "msg-6"]);
             }
             _ => panic!("Expected Evicted event"),
         }
@@ -1106,7 +1229,7 @@ mod tests {
             b.await.unwrap();
             let mut last = None;
             while let Ok(ev) = rx.try_recv() {
-                if let StoreEvent::TagsUpdated(s) = ev {
+                if let StoreEvent::TagsUpdated(s) = &ev.event {
                     last = Some(s.tags.clone());
                 }
             }
@@ -1136,7 +1259,7 @@ mod tests {
             store.wait_until_within_limits().await;
             let mut order = Vec::new();
             while let Ok(ev) = rx.try_recv() {
-                match ev {
+                match ev.event {
                     StoreEvent::NewMessage(_) => order.push('N'),
                     StoreEvent::Evicted(_) => order.push('E'),
                     _ => {}
