@@ -122,7 +122,7 @@ This document tracks all milestones and planned features. Each milestone lists i
 
 **Goal:** Rapid testing against Orchestra — send, edit, replay messages directly from the UI.
 
-**Status: Planned** — the [implementation plan](MILESTONE_4_PLAN.md) has the design, the API, the safety rules and the work packages M4-1 … M4-12. The owner's decisions of 2026-11-12 are in its section 11; three questions are still open there.
+**Status: Planned** — the [implementation plan](MILESTONE_4_PLAN.md) has the design, the API, the safety rules and the work packages M4-1 … M4-12. The owner's decisions of 2026-11-12 are in its section 11; one question is still open there.
 
 ### Requirements
 
@@ -154,7 +154,7 @@ This document tracks all milestones and planned features. Each milestone lists i
 - [ ] A template can be filled out in the UI, sent, and the response (ACK/NAK) displayed
 - [ ] Raw HL7 can be edited and sent directly
 - [ ] A message can be sent to a target that requires TLS
-- [ ] Everything Harux sends is visible in the message list with the address that asked for it, and sending can be switched off or limited to listed destinations in `harux.toml`
+- [ ] Sending is off until `harux.toml` switches it on, and can be limited to listed destinations; everything Harux sends is visible in the message list with the address that asked for it
 
 ---
 

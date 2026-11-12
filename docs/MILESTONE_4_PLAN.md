@@ -2,7 +2,8 @@
 
 > **Status:** plan, 2026-11-12. Nothing in it is implemented yet. The owner
 > took the decisions of section 11 on 2026-11-12 and the plan is written to
-> them; three questions that came out of the answers are still open there.
+> them. One question is still open there, and one could not be answered yet;
+> the plan is built so that it does not have to be.
 >
 > **Planning document.** It names files, configuration keys and routes that do
 > not exist yet, so it is not among the documents `tests/doc_paths.rs` checks.
@@ -95,11 +96,12 @@ They become rules in `AGENTS.md` when the code exists.
    (#230). Every change is one the user asked for and the request names.
 3. **Every user chooses where to send; the configuration can only narrow
    it.** By the owner's decision (D2) each user keeps a list of targets of
-   their own, and Harux connects to what a request names. `harux.toml` can
-   switch sending off or limit it to listed destinations, and a wrong value
-   there stops the start. Nothing else stands between a user and a target,
-   so rule 1 carries the weight: every send is a row everyone sees, with the
-   address that asked for it.
+   their own, and Harux connects to what a request names. Sending is off
+   until `harux.toml` switches it on (D11); it can also be limited to listed
+   destinations, and a wrong value there stops the start. Once it is on,
+   nothing else stands between a user and a target, so rule 1 carries the
+   weight: every send is a row everyone sees, with the address that asked
+   for it.
 4. **One of each.** One MLLP framing (`src/mllp.rs`), one parser, one
    validator, one charset table (`src/hl7/charset.rs`), one place that writes
    a field into a message (`src/hl7/compose.rs`). The browser never parses
@@ -338,11 +340,11 @@ useful: nobody wants a notification for every message.
 
 ### 4.7 What a team sees that never sends
 
-With the defaults sending is on: the window gains the **New message** button
-and the **Resend** and **Edit** buttons, and every user's target list starts
-with *This Harux*. With `send.enabled = false` sending is off: no button, no
-rail, and the routes answer `403`. (Whether "on" should be the default is
-question Q3 in section 11.)
+Nothing new. Sending is off by default (D11): no button, no rail, the send
+routes answer `403`, and an update changes nothing for an installation that
+does not ask for it. With `send.enabled = true` in `harux.toml` the window
+gains the **New message** button and the **Resend** and **Edit** buttons, and
+every user's target list starts with *This Harux*.
 
 ---
 
@@ -587,8 +589,10 @@ TLS settings.
 
 ```toml
 [send]
-# Sending from the web UI and the API. false = Harux only receives.
-enabled = true
+# Sending from the web UI and the API. Off unless it is switched on here:
+# with it on, everyone who can open the web UI can send to any destination
+# this server reaches (or to the ones listed in allowed_destinations).
+enabled = false
 # Put Harux's own MLLP listener into every user's target list.
 loopback_target = true
 connect_timeout_secs = 5
@@ -610,12 +614,18 @@ max_concurrent_runs = 4
 # Let users switch the certificate check off for a target of theirs (test
 # systems with self-signed certificates): encrypted, but not verified.
 allow_unverified = false
+# Harux's own certificate, shown to a target that asks the sender for one.
+# Most targets do not; leave it out unless a send fails with that reason.
+# client_cert_file = "certs/harux.pem"
+# client_key_file = "certs/harux.key"
 ```
 
 - Fails closed like the rest (#233): unknown keys, a malformed
-  `allowed_destinations` entry, a `ca_file` that cannot be read or holds no
-  certificate, zero limits and a percentage outside 1–100 stop the start with
-  an error that names the key. "Effective configuration" shows the section.
+  `allowed_destinations` entry, a `ca_file` or client certificate that cannot
+  be read or holds no certificate, a client certificate without its key (or a
+  key that does not belong to it), zero limits and a percentage outside 1–100
+  stop the start with an error that names the key. "Effective configuration"
+  shows the section, never the key.
 - **`allowed_destinations`** is empty by default: any host and port. When it
   has entries, a destination is allowed if its host equals an entry's (names
   without case and trailing dot, IP addresses in canonical form) and its port
@@ -776,23 +786,47 @@ The owner's decision D4: the targets need it. It covers outgoing connections
 only; TLS for the listener (MLLP/S) stays in Milestone 6 and can then use the
 same library.
 
+**Who needs a certificate.** When Harux sends, it is the side that connects,
+like a browser opening a web page: the target shows a certificate and Harux
+checks it. Harux needs no certificate of its own for that. It needs one in
+only two cases: a target asks the sender to show one as well (mutual TLS,
+covered below), or Harux is the side that is connected to — encrypted
+*receiving*, which is the listener and not this milestone.
+
+**What is not known yet** (Q2 in section 11): how the targets' certificates
+are issued, and whether a target asks for one from Harux. The package is
+built so that nobody has to know in advance — each case has its setting, and
+the first real attempt names the case in its failure reason:
+
+| The target's certificate is … | What makes it work |
+|---|---|
+| issued by a CA the Harux server already trusts (its operating system's certificate store — on the Windows server that is where a hospital CA normally is) | nothing; it works as it is |
+| issued by a CA of your own that the server does not know | `send.tls.ca_file` |
+| self-signed, as test systems often are | `send.tls.allow_unverified = true`, then the user switches the check off for that target: encrypted, not verified |
+| fine, but the target also wants a certificate from Harux | `send.tls.client_cert_file` and `client_key_file` |
+
 - **Per target:** TLS on or off, on for a new target. With TLS on, the
   handshake follows the TCP connect and counts into the connect timeout; the
   MLLP exchange then runs inside it, unchanged.
 - **Verification:** the certificate must be valid for the target's host name
-  (or IP address) and chain to a root in the operating system's certificate
-  store — on the Windows server that is where a hospital CA normally is — or
-  to a certificate in `send.tls.ca_file`. A user can switch the check off for
-  a target of theirs only if `send.tls.allow_unverified` is set; the sent
-  message records that it went out unverified, and the row shows it.
+  (or IP address) and chain to a root in the operating system's store or in
+  `ca_file`. A user can switch the check off for a target of theirs only if
+  `allow_unverified` is set; the sent message records that it went out
+  unverified, and the row shows it.
+- **Harux's own certificate** is one for the whole server, set by the
+  administrator, never per user: a private key does not belong in a browser.
+  It is read at start, shown to a target only when the target asks, and
+  never logged or returned by the API.
 - **What a failure looks like:** the delivery fails with a reason a person
-  can act on — `certificate not trusted` (with the issuer), `certificate is
-  for another name`, `no TLS answer — is this a plain MLLP port?`, and, for a
-  plain target that turns out to speak TLS, `the target expects TLS`.
+  can act on, each naming the setting above that answers it —
+  `certificate not trusted` (with the issuer), `certificate is for another
+  name`, `the target asks for a certificate from Harux`, `no TLS answer — is
+  this a plain MLLP port?`, and, for a plain target that turns out to speak
+  TLS, `the target expects TLS`.
 - **The library** is rustls through `tokio-rustls`. It is written in Rust, so
   Harux stays one binary without OpenSSL at run time on every platform.
   `rustls-native-certs` reads the operating system's store; the PEM reader of
-  `rustls-pki-types` reads `ca_file`; the cryptography comes from `ring`,
+  `rustls-pki-types` reads the files; the cryptography comes from `ring`,
   which builds on the three release targets without CMake or NASM.
 - **These are the first new crates since the rule "no new crates without
   explicit instruction".** D4 is that instruction. The package starts by
@@ -800,14 +834,15 @@ same library.
   of the binary before and after, and a clean `cargo audit`. If `ring` or
   `rustls-native-certs` fails that, the alternatives (`aws-lc-rs`,
   `rustls-platform-verifier`) are tried before anything else is built on it.
-- **Not included:** client certificates (mutual TLS) — question Q2 in
-  section 11 — and a choice of protocol versions or cipher suites; the
+- **Not included:** a choice of protocol versions or cipher suites; the
   library's defaults (TLS 1.2 and 1.3) are used.
-- **Tests** run against a TLS server in the test itself, with a small CA and
-  a server certificate for `localhost` kept in `tests/tls/` (static files, no
-  crate to generate them): a trusted certificate, an unknown issuer, a wrong
-  name, the unverified switch with and without `allow_unverified`, a plain
-  server answered with TLS and a TLS server answered in plain.
+- **Tests** run against a TLS server in the test itself, with a small CA, a
+  server certificate for `localhost` and a client certificate kept in
+  `tests/tls/` (static files, no crate to generate them): a trusted
+  certificate, an unknown issuer, a wrong name, the unverified switch with
+  and without `allow_unverified`, a server that asks for a client
+  certificate with and without one configured, a plain server answered with
+  TLS and a TLS server answered in plain.
 
 ---
 
@@ -816,23 +851,26 @@ same library.
 Sending is the first feature with which a user of the web UI can change
 something outside Harux, and Harux has no login. The owner decided that every
 user defines targets of their own (D2) and that production systems may be
-among them (D3). The plan follows that decision and says plainly what it
-means:
+among them (D3), and that sending is off until it is switched on (D11). The
+plan follows these decisions and says plainly what switching it on means:
 
-> With the default configuration, everyone who can open the web UI can make
-> the Harux server connect to any host and port the server can reach, and
-> send an HL7 message there — including a production system.
+> Sending is off by default. Once `send.enabled = true` is set, everyone who
+> can open the web UI can make the Harux server connect to any host and port
+> the server can reach, and send an HL7 message there — including a
+> production system.
 
-What stands against a mistake, and what an administrator can do:
+What stands against a mistake once sending is on, and what an administrator
+can do:
 
 | Risk | Answer |
 |---|---|
-| A test message reaches a **production system** | The button always names the target. A user can mark a target of theirs *ask before sending*; it then asks every time and takes one message per request. Every send is a row everyone sees. An administrator can limit sending to listed destinations (`send.allowed_destinations`) or switch it off (`send.enabled = false`). There is no technical barrier beyond these by default — that is the decision |
-| Harux as a **stepping stone** into the network (connect to any host and port, see whether and what it answers) | Possible with the defaults, for the same reason. `allowed_destinations` narrows it; every entry must name a port or a range. Harux opens no connection on its own: there is no health check that probes targets |
+| A test message reaches a **production system** | The button always names the target. A user can mark a target of theirs *ask before sending*; it then asks every time and takes one message per request. Every send is a row everyone sees. An administrator switches sending on in the first place, and can limit it to listed destinations (`send.allowed_destinations`). Beyond that there is no technical barrier — that is the decision |
+| Harux as a **stepping stone** into the network (connect to any host and port, see whether and what it answers) | Possible once sending is on, for the same reason. `allowed_destinations` narrows it; every entry must name a port or a range. Harux opens no connection on its own: there is no health check that probes targets |
 | **Patient data leaves** towards a system that should not get it | The same two settings are the control. `SECURITY.md` says so in its first lines on sending |
 | **Nobody knows who sent** something | Every send is a row everyone sees, with the requesting address, and a log line. This is the control that always holds |
 | A **second message hidden inside a send** (the MLLP end byte in a draft or an override) | A payload Harux builds must not contain the start or end byte; an override cannot leave its field (5.4). What goes out as one frame is one row |
 | An **unverified TLS connection** | Off unless `send.tls.allow_unverified` is set; then a choice per target, recorded on every sent message and shown in its row (5.10) |
+| **Harux's private key** (if a client certificate is configured) | One for the server, in a file the administrator names; read at start, never logged, never returned by the API, never in a browser (5.10) |
 | A **response that is too large**, written by the target | Read up to 1 MB to find its end, stored up to 64 KB, never part of the list rows or the WebSocket events (5.1) |
 | A **template ID that is a path** (`..`, an encoded `/`) | An ID is looked up in the listing, never joined into a path (5.6) |
 | **Many large requests at once** (previews, sends, imports) | A permit is taken before a body is read; the import is streamed (5.8) |
@@ -841,10 +879,10 @@ What stands against a mistake, and what an administrator can do:
 | **Patient data in the browser** | Drafts made from real messages contain patient data. They stay in the tab by default and are written to the computer only on request. The target list holds addresses only |
 | Content in the **log** | Send log lines carry metadata only |
 
-`SECURITY.md` gets a section on sending that starts with the sentence quoted
+`SECURITY.md` gets a section on sending that starts with the sentences quoted
 above, and the changelog an upgrade note with the same content and the two
-settings. Whether sending should be on or off after an update is question Q3
-in section 11.
+settings. An update alone changes nothing: sending stays off until someone
+switches it on.
 
 ---
 
@@ -867,7 +905,8 @@ after every package, so the team does not have to wait for the tag.
 ### Stage 1 — Send and resend
 
 **M4-1 · Send a stored message, unchanged** (L, backend and the minimum of UI)
-The `[send]` section (switch, limits, `allowed_destinations`, loopback);
+The `[send]` section (the switch, off by default; limits;
+`allowed_destinations`; loopback);
 `mllp_client.rs` over plain TCP; `send.rs` with a run of one stored message;
 `Outbound`, `Delivery`, `truncated`, `set_delivery`, `delivery_updated`;
 accounting; `GET /api/send/config`; `POST /api/send` for one stored message,
@@ -877,17 +916,21 @@ unchanged, to the target the request names; `ConnectInfo`; export direction;
 the detail view show a sent message as sent (direction, target, the chip from
 `delivery`, the Response tab), so `main` never presents a sent message as a
 received one.
-*Done when* `curl -X POST /api/send` resends a stored message to a plain MLLP
-target, the sent message and its response appear in the UI as sent, and with
-`allowed_destinations` set a destination outside it is refused.
+*Done when*, with `send.enabled = true`, `curl -X POST /api/send` resends a
+stored message to a plain MLLP target and the sent message and its response
+appear in the UI as sent; with `allowed_destinations` set a destination
+outside it is refused; and without the switch every send route answers `403`
+and the UI shows nothing new.
 
 **M4-2 · TLS for outgoing connections** (M, backend)
 Everything in 5.10: the build proof for the new crates first, then the
-handshake in `mllp_client.rs`, `[send.tls]`, verification, the failure
-reasons, `tls` on the sent message, the tests with their certificates.
+handshake in `mllp_client.rs`, `[send.tls]`, verification, Harux's own
+certificate for targets that ask for one, the failure reasons, `tls` on the
+sent message, the tests with their certificates.
 *Done when* a stored message is sent over TLS to a target whose certificate
 comes from a CA in `ca_file`, a target with an unknown certificate is refused
-with a reason that names the issuer, and the three release builds are green.
+with a reason that names the issuer, a target that asks for a certificate
+gets the configured one, and the three release builds are green.
 
 **M4-3 · Resend in the UI** (M, frontend)
 The user's target list with its form (name, host, port, TLS, ask before
@@ -992,12 +1035,12 @@ known candidates).
 | Layer | What is tested | Where |
 |---|---|---|
 | Wire | Response in one or many reads; delayed; never; connection closed; refused; not framed; larger than the limit; two messages on one connection; no wait after an ACK-type message | new `tests/send_tcp.rs`, fake receivers on `127.0.0.1:0` like `tests/mllp_tcp.rs` |
-| TLS | A trusted certificate; an unknown issuer; a wrong name; the unverified switch with and without `allow_unverified`; a plain server answered with TLS and the reverse; the same exchange inside TLS as outside | `tests/send_tcp.rs`, certificates in `tests/tls/` |
+| TLS | A trusted certificate; an unknown issuer; a wrong name; the unverified switch with and without `allow_unverified`; a server that asks for a client certificate, with and without one configured; a plain server answered with TLS and the reverse; the same exchange inside TLS as outside | `tests/send_tcp.rs`, certificates in `tests/tls/` |
 | Round trip | Send to Harux's own `mllp::serve`: the sent message is stored before the received one; code `AA`; MSA-2 matches | `tests/send_tcp.rs` |
 | Bytes | Unchanged resend equals the received bytes for UTF-8, Latin-1 and an irreproducible payload; an override keeps every other byte; a pure-ASCII message declared `8859/1` leaves as Latin-1 after an override with `ü`; unmappable character refused | unit tests, `tests/send_tcp.rs` |
 | Compose | Field paths incl. MSH shift, custom delimiters, occurrences, new fields; placeholders and references; line ends. Refused: the start or end byte, a separator or line break in a value, field 0, MSH-1 and MSH-2, a field number above the limit, a changed list of segments | unit tests in `src/hl7/compose.rs` |
 | Fuzz | Mutated responses through the response reader, mutated text through override and placeholder code: no panic, an override is found again by the parser, and the built payload never contains a frame byte | `tests/fuzz_ingest.rs` or a sibling |
-| Limits and config | Any destination without `allowed_destinations`; allowed and refused ones with it (ranges, names vs. addresses, an entry without a port); `enabled = false`; the run limits; every invalid `[send]` and `[send.tls]` value stops the start | `src/config.rs`, `tests/config_startup.rs`, `tests/web_api.rs` |
+| Limits and config | Sending off by default: every send route answers `403`; with it on, any destination without `allowed_destinations`, allowed and refused ones with it (ranges, names vs. addresses, an entry without a port); the run limits; every invalid `[send]` and `[send.tls]` value stops the start, including a client certificate without its key | `src/config.rs`, `tests/config_startup.rs`, `tests/web_api.rs` |
 | Store | `delivery_updated` order and frame; no response text in a summary; a response above 64 KB is cut; bytes exact after a response, and it wakes eviction; eviction and clear with pending messages; a run still sends a message evicted after it began | `src/store.rs`, `tests/alloc_accounting.rs`, `tests/send_tcp.rs` |
 | API | Status codes of 5.8; origin guard on the new routes; `/api/parse` equals the detail JSON, and its positions point at the fields; a template ID with `..` or an encoded `/`; `429` from the permit; export direction | `tests/web_api.rs` (`MockConnectInfo` for the client address) |
 | Templates | Every built-in template parses without a warning once its placeholders are filled in | unit test |
@@ -1038,7 +1081,7 @@ detail header), `docs/ROADMAP.md`, `examples/harux-example.toml`,
 | The editor grows into a framework | A textarea and inputs; the server parses; no syntax-highlighting editor, no editing below field level in this milestone |
 | Mojibake when sending | The byte-for-byte path for unchanged messages, an explicit encoding for drafts, refusal instead of replacement, tests with Latin-1 |
 | The TLS crates: build trouble on one platform, a larger binary, a wider audit surface | The package starts with the build on all three release targets, the binary size before and after, and `cargo audit`; alternatives are named in 5.10 |
-| The targets' certificates are not what the plan assumes | Question Q2 asks before the package starts; `ca_file` and the unverified switch cover a private CA and self-signed test systems |
+| Nobody knows yet how the targets' certificates are issued (Q2) | M4-2 has a setting for each case — a CA file, the unverified switch, a certificate of Harux's own — and a failure reason that names the one that applies (5.10) |
 | A response arrives for a message that is gone | `set_delivery` on a missing entry is a logged no-op |
 | A slow or silent target | Timeouts on connect, handshake, write and response; cancel; the row shows `…` meanwhile |
 | Two people send at once | Runs are independent connections; every row names its requester |
@@ -1064,22 +1107,21 @@ plan recommended; where the decision differs, the plan was rewritten.
 | D8 | Watch without desktop notifications on plain HTTP? | Yes | **Open** — the question was not clear; it is Q1 below |
 | D9 | Import in this milestone? | Optional | **Yes**, M4-10 |
 | D10 | One release at the end, or one per stage? | v0.10.0 after stage 3 | **One release at the end, as v1.0.0** |
+| D11 | Is sending on or off after an update? (It became a question through D2.) | On, as D2 implies; off was named as the cautious choice | **Off for now**, to be looked at again later: `send.enabled = false` by default |
 
 ### Still open
 
-| # | Question | What the plan assumes until it is answered |
+| # | Question | What the plan does until it is answered |
 |---|---|---|
 | Q1 | **Watch (was D8).** A browser shows its own notification window only for pages opened over HTTPS or on `localhost`; for `http://server:8080` it refuses. Harux can always count in the tab's title (`(3) Harux`) and play a sound. Is that enough, or must the notification window work, which means putting the web UI behind HTTPS? | Title counter and sound everywhere; the notification window where the browser allows it. Nothing else in the milestone depends on it |
-| Q2 | **The targets' certificates.** Are they issued by a CA that is in the Windows certificate store of the Harux server, by a private CA (then `ca_file`), or self-signed (then the unverified switch)? And does any target ask the sender for a certificate of its own (mutual TLS)? | The store plus `ca_file`; unverified connections off unless switched on; no client certificate. Mutual TLS would be an addition to M4-2 |
-| Q3 | **Sending on or off after an update.** With D2 every user of the web UI can send anywhere the server reaches. Planned: on by default (`send.enabled = true`), as the decision implies. The cautious alternative is off until the administrator sets it once — one line in `harux.toml`, and other installations of Harux are not surprised by the update | On by default |
+| Q2 | **The targets' certificates.** How are they issued — by a CA the Harux server already trusts, by a private CA, or self-signed — and does a target ask Harux for a certificate of its own? Asked on 2026-11-12; not known yet | Nothing has to be known in advance: M4-2 has a setting for each case and a failure reason that names the one that applies (5.10). Worth asking whoever runs Orchestra before M4-2 is tested against a real target |
 
 ---
 
 ## 12. Not in this milestone
 
-- **TLS for the listener** (MLLP/S) — Milestone 6; it can use the library M4-2
-  brings. **Client certificates** for outgoing connections, unless Q2 says
-  they are needed.
+- **TLS for the listener** (MLLP/S), that is encrypted receiving — Milestone
+  6; it can use the library M4-2 brings.
 - **A shared list of targets** for the team, and any management of targets
   on the server — the rework the owner announced with D2.
 - **ACK rules** — answering `AE`/`AR` or nothing on purpose, to test
