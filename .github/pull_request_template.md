@@ -19,7 +19,8 @@
 ## Component(s) Affected
 
 - [ ] MLLP Server (`mllp.rs`)
-- [ ] HL7 Parser (`hl7/`)
+- [ ] HL7 Parser (`hl7/`) / Validation (`validation.rs`)
+- [ ] Configuration / Logging (`config.rs`, `logging.rs`)
 - [ ] Message Store (`store.rs`)
 - [ ] Web Server / API (`web.rs`)
 - [ ] Web UI (`static/`)
@@ -36,9 +37,11 @@
 ## Checklist
 
 - [ ] `cargo test` passes
+- [ ] `node --test 'tests/js/*.test.mjs'` passes (if `static/` changed)
 - [ ] `cargo clippy -- -D warnings` is clean
 - [ ] `cargo fmt --check` passes
-- [ ] I updated `CHANGELOG.md` under `[Unreleased]` (if user-facing)
+- [ ] I updated `CHANGELOG.md` under `[Unreleased]` in the same commit
+- [ ] I updated the docs (`AGENTS.md`, `README.md`, `docs/`) if behaviour, configuration or layout changed
 - [ ] I added/updated tests for new behavior
 - [ ] I added doc comments for new public types/functions
 

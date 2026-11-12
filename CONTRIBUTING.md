@@ -12,6 +12,7 @@ Thanks for your interest in contributing to Harux! This document explains how to
 cargo build
 cargo test
 cargo clippy -- -D warnings
+node --test 'tests/js/*.test.mjs'   # frontend logic, needs only Node.js
 ```
 
 ## Opening Issues
@@ -24,13 +25,13 @@ For **larger changes** (new features, architectural changes, new dependencies), 
 
 ### Branch Naming
 
-Use descriptive branch names with a prefix:
+Use a type prefix and, where there is one, the issue number:
 
-- `feature/` — New features (e.g. `feature/toml-config`)
-- `fix/` — Bug fixes (e.g. `fix/mllp-framing-timeout`)
-- `docs/` — Documentation only (e.g. `docs/api-examples`)
-- `refactor/` — Code restructuring without behavior change
-- `ci/` — CI/CD changes
+- `feat/<issue>-<name>` — New features (e.g. `feat/27-bookmark-messages`)
+- `fix/<issue>-<name>` — Bug fixes (e.g. `fix/15-eviction-bug`)
+- `docs/<name>` — Documentation only
+- `refactor/<issue>-<name>` — Code restructuring without behavior change
+- `ci/<name>` — CI/CD changes
 
 ### Commit Messages
 
@@ -63,15 +64,16 @@ Examples:
 
 - Add tests for new behavior and bug fixes
 - Unit tests go in the same file as the code (`#[cfg(test)]` module)
-- Integration tests go in `tests/`
-- Run the full suite before submitting: `cargo test`
+- Integration tests go in `tests/` (real TCP in `tests/mllp_tcp.rs`, the real binary in `tests/config_startup.rs`, the REST API in `tests/web_api.rs`)
+- Frontend logic is tested with `node:test` in `tests/js/` — no npm, no dependencies
+- Run the full suite before submitting: `cargo test` and `node --test 'tests/js/*.test.mjs'`
 
 ## Pull Request Process
 
 1. Create your branch from `main`
 2. Make your changes in focused, logical commits
-3. Update `CHANGELOG.md` under `[Unreleased]` if your change is user-facing
-4. Ensure all checks pass: `cargo test && cargo clippy -- -D warnings && cargo fmt --check`
+3. Update `CHANGELOG.md` under `[Unreleased]` in the same commit (features, fixes, refactors — with the issue number)
+4. Ensure all checks pass: `cargo fmt --check && cargo clippy -- -D warnings && cargo test && node --test 'tests/js/*.test.mjs'`
 5. Open a pull request against `main` and fill out the PR template
 6. Link the related issue (e.g. "Closes #42")
 
@@ -88,19 +90,20 @@ PRs will be reviewed as time allows. Small, focused PRs are reviewed faster than
 
 ```
 src/
-├── main.rs          # Entry point, tokio runtime setup
+├── main.rs          # Entry point: config, logging, both servers, shutdown
+├── config.rs        # harux.toml + environment, validated at startup
+├── logging.rs       # Daily log file with retention
 ├── mllp.rs          # MLLP TCP listener, framing, ACK/NACK
-├── store.rs         # In-memory message store with broadcast
-├── web.rs           # Axum REST + WebSocket handlers
-└── hl7/
-    ├── mod.rs       # Module exports
-    ├── parser.rs    # HL7 message parser, delimiter detection
-    └── types.rs     # Core types: Hl7Message, Hl7Segment, etc.
-static/
-├── index.html       # Web UI (embedded at compile time)
-├── app.js           # UI logic
-└── style.css        # Styles
+├── store.rs         # In-memory message store with eviction and broadcast
+├── web.rs           # Axum REST API, WebSocket, export, security headers
+├── dictionary.rs    # Embedded HL7 v2.5.1 field/segment dictionary
+├── validation.rs    # Required segments/fields and datatype checks
+└── hl7/             # Parser, charset decoding, escapes, types, message-type registry
+static/              # Web UI (vanilla JS, embedded at compile time)
+tests/               # Integration tests, JS tests, HL7 fixtures, manual test scripts
 ```
+
+The full annotated layout and the architecture rules are in [`AGENTS.md`](AGENTS.md).
 
 ## HL7 Domain Notes
 
@@ -109,7 +112,7 @@ If you're new to HL7 v2.x messaging:
 - Messages are pipe-delimited (`|`), segments are separated by `\r`
 - The MSH segment is always first and defines the delimiters
 - MLLP framing wraps messages in `0x0B` ... `0x1C 0x0D`
-- The receiver responds with an ACK (`MSA|AA`) or NACK (`MSA|AE`)
+- The receiver responds with an ACK (`MSA|AA`), an error (`MSA|AE`) or a reject (`MSA|AR`)
 
 The [HL7 v2 specification](https://www.hl7.org/implement/standards/product_brief.cfm?product_id=185) is the authoritative reference, but most concepts are well-documented across community resources.
 

@@ -1,5 +1,10 @@
 # Harux UI Redesign — Implementation Brief for Claude Code
 
+> **Historical document.** This records the state and plans at the time it
+> was written; file names, APIs and rules in it may no longer match the code.
+> For current guidance see [`AGENTS.md`](../../AGENTS.md), the [roadmap](../ROADMAP.md) and the
+> [changelog](../../CHANGELOG.md).
+
 **Reference mockup:** `harux-redesigned.html` (in this project, sibling file).
 **Target files:** `static/index.html`, `static/style.css`, `static/app.js`.
 **Constraint:** Keep all existing behavior — WebSocket, `/api/*` endpoints, session persistence, tags, bookmarks, pin-for-diff, validation, source coloring. This is a **visual + IA refactor**, not a feature rewrite.

@@ -1,3 +1,14 @@
+# GEMINI.md
+
+Guidance for Gemini in this repository.
+
+**The project guide is [`AGENTS.md`](AGENTS.md)** — git workflow, CI gate,
+changelog rules, architecture, constraints and source layout. It is the single
+source of truth for every coding agent (#246); this file only adds what is
+specific to Gemini.
+
+@./AGENTS.md
+
 <!-- code-review-graph MCP tools -->
 ## MCP Tools: code-review-graph
 

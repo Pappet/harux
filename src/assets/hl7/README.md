@@ -12,7 +12,7 @@ Contract the code relies on — check these when refreshing or replacing the fil
 
 - **MSH is numbered from `seq 1 = Field Separator`, `seq 2 = Encoding Characters`.**
   The parser inserts a synthetic MSH-1 so MSH fields use HL7 numbering
-  (see the MSH quirk in `CLAUDE.md`). Guarded by
+  (see the MSH quirk in `AGENTS.md`). Guarded by
   `test_msh_dictionary_numbering_contract` and
   `test_msh_shift_dictionary_alignment`.
 - **Within a segment, every `seq >= 1` is unique.** `SegmentDef::field_by_seq`
@@ -24,4 +24,6 @@ Contract the code relies on — check these when refreshing or replacing the fil
 ## `message_types.json` — message-type registry
 
 Used by `src/hl7/message_types.rs` (description and typical segments per
-message type).
+message type). A JSON object keyed by message type (`ADT^A01`, or just `ACK`); 106 entries at the time
+of writing. Editing the file is enough to add or change a type — it is
+compiled in with `include_str!`.

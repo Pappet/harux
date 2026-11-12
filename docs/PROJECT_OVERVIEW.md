@@ -7,8 +7,8 @@ Harux is a high-performance MLLP server with a real-time web UI for inspecting H
 ## Project Status
 
 - **Language:** Rust
-- **Latest Release:** v0.8.0 — HL7 Conformance (audit Phases 0–3)
-- **Next Milestone:** Milestone 4 (Workflow & Testing)
+- **Latest Release:** v0.8.0 — HL7 Conformance (audit Phases 0–3); the `[Unreleased]` section of the [changelog](../CHANGELOG.md) holds the hardening work since then
+- **Scope today:** receive and inspect (Milestones 0–3). Sending, editing and replay (Milestone 4) and persistence (Milestone 5) are planned — see the [roadmap](ROADMAP.md)
 
 ---
 
@@ -16,7 +16,7 @@ Harux is a high-performance MLLP server with a real-time web UI for inspecting H
 
 - **Team:** Integration team (multiple developers simultaneously)
 - **Software:** Orchestra (healthcare integration platform for interface development)
-- **Infrastructure:** Windows Server, access via RDP + browser
+- **Infrastructure:** Windows Server; Harux runs there as a service and the team uses it through the browser (no RDP session needed)
 - **Protocol:** HL7 v2.x over MLLP, FHIR R4 on the horizon
 - **Traffic:** Includes ADT, ORU, ORM, SIU, and MDM message types. MDM with Base64-encoded PDF attachments is daily traffic, not an edge case.
 - **Network:** Hospital internal network. No internet access from the server.
@@ -39,7 +39,7 @@ Harux is a high-performance MLLP server with a real-time web UI for inspecting H
 
 ## Non-Goals
 
-- **No complex visual HL7 editor** — simple raw text editing for testing is provided, but not a full replacement for Orchestra's mapping UI
+- **No complex visual HL7 editor** — simple raw-text editing for testing is planned (Milestone 4), not a replacement for Orchestra's mapping UI
 - **No external database servers** — no PostgreSQL/MSSQL; uses lightweight local SQLite when persistence is needed
 - **No HL7 router** — message routing and transformation stays in Orchestra
 - **No CSS/JS frameworks** — the vanilla SPA approach is intentional for zero-dependency deployment
@@ -71,39 +71,48 @@ Two independent async Tokio tasks share a single `MessageStore` via `Arc<RwLock<
 
 ### MLLP Server (`src/mllp.rs`)
 
-Listens on a TCP port, handles MLLP framing (`0x0B` start, `0x1C 0x0D` end), parses HL7 messages, sends ACKs/NACKs, and inserts the result into the MessageStore.
+Listens on `server.mllp_bind:mllp_port`, handles MLLP framing (`0x0B` start, `0x1C 0x0D` end), decodes the payload per MSH-18 (`src/hl7/charset.rs`), parses it, **stores it, then** sends the ACK/NACK.
 
+- **No frame is lost silently:** decoding and parsing run under `catch_unwind`; a frame that fails to parse — or panics the parser — is stored as a parse-error entry and answered with a NACK.
 - **ACK storm prevention:** incoming messages with `message_type.starts_with("ACK")` are stored but never ACK'd back — prevents infinite ping-pong with Orchestra.
-- **DoS hardening:** 10 MB payload limit, 60s read timeout, 30s write timeout.
-- **Connection limits:** configurable `max_connections` via `harux.toml`.
+- **ACKs** are written in the sender's own delimiters and echo MSH-10 in MSA-2; NACKs use default delimiters and MSA-2 `UNKNOWN`.
+- **Limits:** `mllp.max_message_size_mb` (10 MB) — a larger frame gets an `AR` reject, its first 4 KB are stored as a parse error, and the connection stays usable; 60 s read and 30 s write timeout; `mllp.max_connections` (100) — connections beyond it are closed and counted as rejected.
+- **Robustness:** an `accept()` error (e.g. out of file descriptors) is logged and retried, never fatal; on Ctrl+C or SIGTERM the server stops accepting and waits up to `server.shutdown_timeout_secs` for open connections to drain.
 
 ### Web Server (`src/web.rs`)
 
-An Axum-based HTTP server providing REST API endpoints and a WebSocket endpoint for real-time updates.
+An Axum-based HTTP server on `server.web_bind:web_port` providing REST API endpoints, the export and a WebSocket endpoint for real-time updates. The embedded SPA is served from the binary.
+
+Every request passes a cross-site guard: the `Host` header must be an IP address, `localhost` or a name in `server.allowed_hosts` (blocks DNS rebinding), and on `/ws` and every state-changing request an `Origin` header, if present, must name this server. Responses carry a Content-Security-Policy without inline scripts or styles, `frame-ancestors 'none'` and `X-Content-Type-Options: nosniff`.
 
 ### Message Store (`src/store.rs`)
 
 A thread-safe in-memory buffer with dual eviction:
 
-- **Count limit:** configurable capacity (default 10,000 messages)
-- **Size limit:** configurable memory budget (default 512 MB)
-- **Trigger:** either limit hit → evict oldest 10% of non-bookmarked messages
+- **Count limit:** `store.max_messages` (default 10,000)
+- **Size limit:** `store.max_memory_mb` (default 512 MB) — measured as what the messages really occupy on the heap, including allocator overhead, so the limit bounds real memory
+- **Trigger:** either limit hit → the oldest messages are evicted until both bytes and count are at or below 90 % of their limits
+- **Bookmarks** are skipped by eviction, but only within `store.bookmark_budget_percent` (default 50 %, at most 80 %) of either limit; beyond it the oldest bookmarks go too, so bookmarking can never lift the memory cap
+- **Payload vs. metadata:** each message is an immutable payload plus mutable tags/bookmark, so tagging never copies a message
+- **Change events** (new, tags, bookmark, evicted, cleared) are broadcast to the WebSocket clients in the order the store changed
 - **Rationale:** MDM messages with Base64-encoded attachments can be several MB each; count-only eviction is insufficient.
 
 ### HL7 Parser & Dictionary (`src/hl7/`, `src/dictionary.rs`, `src/validation.rs`)
 
 The parser operates in four passes:
 
-1. **Segment parsing** — extracts delimiters from MSH, splits on `\r`/`\n` and into fields. Repetitions, components, sub-components and escape sequences are derived from each field's raw value on demand with the message's own delimiters (#185).
+1. **Segment parsing** — extracts delimiters from MSH (printable, distinct, no letters or digits), splits on `\r`/`\n` and into fields. Every non-blank line of `raw` is exactly one segment. Repetitions, components, sub-components and escape sequences are derived from each field's raw value on demand with the message's own delimiters (#185); nothing structural is stored twice.
 2. **Dictionary injection** — `inject_descriptions` walks every segment and field, filling `Hl7Segment.description` and `Hl7Field.description` from the embedded v2.5.1 JSON via a single `HashMap::get` per segment.
 3. **Message type lookup** — `message_types::get_message_type_info` resolves the `TYPE^EVENT` string to a human-readable description and a list of typical segments; also builds the `typical_segment_descriptions` map for the UI badges.
-4. **Validation** — `validation::validate_message` applies two layers of checks: (a) rule-based structural checks — universal MSH required fields and per-type required segments/fields for ADT, ORU^R01, ORM^O01, OML^O21, SIU, and MDM; (b) data type checks — `validate_data_types` iterates all fields, looks up each field's `datatype` from the dictionary, and validates NM/DT/TS/SI values using pure char pattern checks. Only the first component of each field is checked to avoid false positives on composite types.
+4. **Validation** — `validation::validate_message` applies two layers of checks: (a) rule-based structural checks — universal MSH required fields and per-type required segments/fields for ADT, ORU^R01, ORM^O01, OML^O21, SIU and MDM, following the v2.5.1 message structures (optional groups and conditional fields such as OBR-2/OBR-3 are not reported); (b) data type checks — `validate_data_types` looks up each field's `datatype` in the dictionary and validates NM/DT/TS/SI values: dates must exist (`chrono`), times must be in range, a TS fraction and offset must have the standard form. The first component of each repetition is checked, so composite types don't raise false positives.
 
 Key source files:
 
-- `hl7/parser.rs` — four-pass parse pipeline and ACK builder
+- `hl7/parser.rs` — four-pass parse pipeline and ACK/NACK/reject builder
+- `hl7/charset.rs` — payload bytes → text per MSH-18, with a `CHARSET_FALLBACK` warning when the declared charset doesn't fit
+- `hl7/escape.rs` — HL7 escape sequences (`\F\`, `\.br\`, …) in both directions
 - `hl7/types.rs` — `Hl7Message`, `Hl7MessageSummary`, `Hl7Segment` (with `description`), `Hl7Field`, `Delimiters`
-- `hl7/message_types.rs` — `OnceLock<HashMap>` registry of 80+ HL7 v2.x message types with descriptions and typical segment lists
+- `hl7/message_types.rs` — `OnceLock<HashMap>` registry loaded from the embedded `src/assets/hl7/message_types.json` (106 message types with descriptions and typical segment lists)
 - `dictionary.rs` — `OnceLock`-based JSON dictionary engine; `inject_descriptions` fills segment + field descriptions; `get_segment_description` used for typical-segment badges
 - `validation.rs` — `ValidationWarning` struct and rule engine; non-blocking (messages stored regardless of warnings)
 - `src/assets/hl7/v2.5.1.json` — embedded dictionary source (segment descriptions + field definitions)
@@ -112,16 +121,24 @@ Key source files:
 
 ### Frontend (`static/`)
 
-Three files, all embedded into the binary at compile time via `rust-embed`:
+Plain files, all embedded into the binary at compile time via `rust-embed`. The JavaScript has no module system; the files share one global `state` object and load in this order:
 
 - `index.html` — HTML structure only
-- `style.css` — All styles (dark theme, CSS variables)
-- `app.js` — All logic (WebSocket, rendering, search, batching)
+- `style.css` — All styles (dark theme, CSS variables); fonts are self-hosted in `static/fonts/`
+- `state.js` — the `state` object (all mutable globals)
+- `util.js` — constants and pure helpers (escaping, formatting)
+- `ws.js` — WebSocket, message ingestion, stats polling
+- `render.js` — message list, health pills, detail-panel tabs
+- `diff.js` — the Diff tab
+- `app.js` — initialisation, UI handlers (`data-action` delegation) and the splitter
+
+The Content-Security-Policy forbids inline scripts, styles and event handlers.
 
 Key behaviors:
 - Messages are batched and rendered at most every 250ms to prevent DOM freeze at high throughput
 - Pause/Live button, Validation Filter, and Bookmarks toggle live in the `.inbox-controls` row; they buffer or filter incoming messages locally.
-- Search is purely client-side via a pre-parsed query cache (bounded at 100 entries). Global shortcut is `Cmd+K`.
+- The browser keeps at most 2,000 messages (plus bookmarked and selected ones); the server may hold more, and a note at the bottom of the list says so. Bookmarked messages are loaded on every (re)load, so they survive a page reload.
+- Search is client-side over the loaded messages, via a pre-parsed query cache (bounded at 100 entries). Global shortcut is `Cmd+K`.
 - Top-bar health pills show connection count, message rate, and error/validation counts.
 - Parse errors are shown with `⚠ PARSE ERROR` in red in the message list and tracked in the health pills.
 - Message list displays a two-line layout: row 1 has type, patient, tags; row 2 has facility, source, segment count, and relative time (e.g., `1m ago`). Sticky time-bucket group headers (`Live`, `Yesterday`, etc.) separate the messages.
@@ -129,7 +146,7 @@ Key behaviors:
 - Message type description displayed in the detail header; "Typical segments" is a checklist card (`.seg-checklist`) with explicit symbols: `✕` (red) = missing required segment, `⚠` (amber) = missing required field, `✓` (blue) = present, blank (grey) = absent.
 - Segment headers have a CSS `::after` tooltip showing the segment description on hover
 - Fields show their dictionary description inline as a `.desc-text` sub-line
-- Segment diff: `diffPinnedMessage` state stores a full message fetched via `/api/messages/{id}`; `renderDiffTab()` builds a field-level two-column table with red/green highlighting (`table-layout: fixed`); optional `diffIgnoreDynamic` toggle hides MSH-7 and MSH-10 rows and shows a count of hidden fields in the summary
+- Segment diff: `diffPinnedMessage` state stores a full message fetched via `/api/messages/{id}`; `renderDiffTab()` pairs segments by name and occurrence (the n-th OBX with the n-th OBX; a segment only one side has shows as added or removed) and builds a field-level two-column table with red/green highlighting (`table-layout: fixed`); optional `diffIgnoreDynamic` toggle hides MSH-7 and MSH-10 rows and shows a count of hidden fields in the summary
 - Detail header is a layered structure: type chip + human title on row 1, optional description on row 2, monospace metadata row (`patient · MRN · control · v · received`) on row 3, plus a tags row. Bookmark and Pin-for-diff are explicit buttons in an actions column.
 - Full keyboard accessibility: list rows, custom interactive elements, and source chips are navigable via `Tab` and actable via `Enter`/`Space`.
 
@@ -137,30 +154,29 @@ Key behaviors:
 
 ## Source Layout
 
-```
-src/
-├── main.rs              # Entry point, tokio::select! over MLLP + Web tasks
-├── config.rs            # Configuration loading (harux.toml + env vars)
-├── mllp.rs              # TCP listener, MLLP framing, ACK/NACK dispatch
-├── store.rs             # In-memory store with broadcast channel, dual eviction
-├── web.rs               # Axum router, REST handlers, WebSocket handler
-├── dictionary.rs        # OnceLock JSON dictionary engine (segment + field descriptions)
-├── validation.rs        # Rule-based HL7 validator, ValidationWarning struct
-└── hl7/
-    ├── mod.rs
-    ├── parser.rs        # Four-pass parse pipeline, delimiter extraction, ACK builder
-    ├── types.rs         # Hl7Message, Hl7MessageSummary, Hl7Segment, Hl7Field, Delimiters
-    └── message_types.rs # OnceLock registry of 80+ message types with descriptions
-src/assets/hl7/
-└── v2.5.1.json          # Embedded HL7 v2.5.1 dictionary (segment + field definitions)
-static/
-├── index.html           # HTML skeleton
-├── style.css            # Dark theme, CSS variables
-└── app.js               # SPA logic (vanilla JS)
-tests/
-├── test.sh              # Linux/macOS functional + load test (netcat, 100 messages)
-└── test.ps1             # Windows functional + load test (.NET TcpClient, 1000 messages)
-```
+The annotated file-by-file layout is maintained in [`AGENTS.md` → Source Layout](../AGENTS.md#source-layout), so it exists in one place only.
+
+---
+
+## Configuration
+
+Built-in defaults → `harux.toml` (next to the binary, then the working directory) → environment variables (`MLLP_PORT`, `WEB_PORT`, `RUST_LOG`). [`examples/harux-example.toml`](../examples/harux-example.toml) lists every key with its default. An unknown key, a wrong type or an impossible value stops the start with an error naming the key.
+
+| Key | Default | Meaning |
+|---|---|---|
+| `server.mllp_port` / `server.web_port` | `2575` / `8080` | Listener ports |
+| `server.mllp_bind` / `server.web_bind` | `0.0.0.0` | Listener addresses (`127.0.0.1` = this machine only, `::` = IPv6 too) |
+| `server.allowed_hosts` | `[]` | DNS names the UI is opened under (IP addresses and `localhost` always work) |
+| `server.shutdown_timeout_secs` | `10` | How long shutdown waits for MLLP connections to drain |
+| `logging.level` | `info` | Log level or `target=level` list; `RUST_LOG` overrides it |
+| `logging.file` | — | Enables file logging: one file per day, `<file>.YYYY-MM-DD` |
+| `logging.max_files` | `14` | Daily log files kept (today's included); `0` keeps all |
+| `store.max_messages` | `10000` | Count limit |
+| `store.max_memory_mb` | `512` | Memory limit |
+| `store.bookmark_budget_percent` | `50` | Share of either limit bookmarks may hold under eviction pressure (max 80) |
+| `mllp.max_message_size_mb` | `10` | Largest accepted frame |
+| `mllp.read_timeout_secs` / `mllp.write_timeout_secs` | `60` / `30` | MLLP timeouts |
+| `mllp.max_connections` | `100` | Concurrent MLLP connections |
 
 ---
 
@@ -168,15 +184,16 @@ tests/
 
 | Method | Endpoint | Description |
 |---|---|---|
-| `GET` | `/api/messages?offset=0&limit=100` | Paginated message list, newest first |
+| `GET` | `/api/messages?offset=0&limit=100&include_bookmarks=true` | Paginated message list, newest first (`limit` capped at 1000); `include_bookmarks` adds every older bookmarked message |
 | `GET` | `/api/messages/{id}` | Full message with all segments and fields |
-| `GET` | `/api/search?q=ADT&limit=100` | Search by type, patient, facility, ID, IP |
-| `GET` | `/api/stats` | Live server stats (messages, connections, errors) |
+| `GET` | `/api/search?q=ADT&limit=100` | Search by type, patient, facility, ID, IP (the UI filters client-side and does not use it yet) |
+| `GET` | `/api/stats` | Live server stats: message counts, store bytes and limit, parse errors, connections |
+| `GET` | `/api/export` | Every stored message as one MLLP-framed `harux-export.hl7`, byte for byte as received, oldest first (streamed) |
 | `POST` | `/api/clear` | Delete all messages from store |
 | `POST` | `/api/messages/{id}/bookmark` | Toggle bookmark on a message |
 | `POST` | `/api/messages/{id}/tags` | Add a tag to a message |
 | `DELETE` | `/api/messages/{id}/tags/{tag}` | Remove a tag from a message |
-| `WS` | `/ws` | Real-time updates: `init`, `new_message`, `lagged` events |
+| `WS` | `/ws` | Real-time updates (events below) |
 
 ### WebSocket Events
 
@@ -184,12 +201,20 @@ tests/
 // On connect
 { "type": "init", "total": 42 }
 
-// On new message
-{ "type": "new_message", "data": { /* Hl7MessageSummary */ } }
+// A message was stored / its tags or bookmark changed
+{ "type": "new_message",      "data": { /* Hl7MessageSummary */ } }
+{ "type": "tags_updated",     "data": { /* Hl7MessageSummary */ } }
+{ "type": "bookmark_toggled", "data": { /* Hl7MessageSummary */ } }
 
-// When client falls behind the broadcast buffer
+// An eviction pass removed these messages / the store was cleared
+{ "type": "evicted", "data": ["<id>", "<id>"] }
+{ "type": "cleared" }
+
+// The client fell behind the broadcast buffer; it reloads the list
 { "type": "lagged", "missed": 12 }
 ```
+
+Events arrive in the order the store changed. State-changing routes are `POST`/`DELETE` so the cross-site guard covers them.
 
 ### Error Handling
 
@@ -197,8 +222,10 @@ tests/
 |---|---|
 | Valid HL7 message | `MSA\|AA` — Application Accept |
 | Unknown message type (e.g. `ZZZ^Z99`) | `MSA\|AA` — type-agnostic acceptance |
-| Missing or malformed MSH segment | `MSA\|AE` — Application Error (NACK) |
-| Payload > 10 MB | Connection closed immediately |
+| Missing or malformed MSH segment (incl. a letter or digit as delimiter) | `MSA\|AE` — Application Error (NACK); stored as a parse error |
+| Payload > `mllp.max_message_size_mb` | `MSA\|AR` — Application Reject; first 4 KB stored as a parse error, connection stays open |
+| Incoming `ACK` message | Stored, no response (prevents ACK storms) |
+| More than `mllp.max_connections` connections | New connection closed, counted as rejected |
 
 ---
 
@@ -207,14 +234,15 @@ tests/
 | Component | Crate / Technology | Version |
 |---|---|---|
 | Async runtime | `tokio` | 1.x |
-| Web framework | `axum` | 0.7 |
-| HTTP middleware | `tower-http` (CORS, static FS) | 0.5 |
+| Web framework | `axum` (with WebSocket) | 0.8 |
 | Serialization | `serde` + `serde_json` | 1.x |
-| Config parsing | `toml` | latest |
-| Timestamps | `chrono` | 0.4 |
+| Config parsing | `toml` | 0.8 |
+| Charset decoding | `encoding_rs` | 0.8 |
+| Timestamps / dates | `chrono` | 0.4 |
 | UUID generation | `uuid` (v4) | 1.x |
-| Logging | `tracing` + `tracing-subscriber` | 0.1/0.3 |
-| Static files | `rust-embed` + `mime_guess` | 8.x/2.x |
+| Logging | `tracing` + `tracing-subscriber` + `tracing-appender` | 0.1 / 0.3 / 0.2 |
+| Static files | `rust-embed` + `mime_guess` | 8.x / 2.x |
+| Streaming export | `futures-core` | 0.3 |
 | Error handling | `anyhow` | 1.x |
 | Frontend | Vanilla JS / HTML / CSS | — |
 
@@ -235,12 +263,17 @@ tests/
 # Unit tests
 cargo test
 
+# Frontend logic (Node.js, no npm)
+node --test 'tests/js/*.test.mjs'
+
 # Functional + load test (Linux/macOS, requires nc)
-./test.sh
+tests/test.sh
 
 # Functional + load test (Windows, no external tools required)
 .\tests\test.ps1
 ```
+
+`cargo test` includes MLLP over real TCP (`tests/mllp_tcp.rs`), the real binary's startup and shutdown (`tests/config_startup.rs`, `tests/accept_errors.rs`), the REST API (`tests/web_api.rs`), the memory accounting (`tests/alloc_accounting.rs`) and a 20,000-input mutation fuzz of the ingest path (`tests/fuzz_ingest.rs`).
 
 Both test scripts send the same set of HL7 messages: three valid types (ADT^A01, ORU^R01, SIU^S12), three error cases, followed by a load test. The PowerShell test uses a persistent TCP connection for load testing (1000 messages). The shell script spawns a new `nc` process per message (100 messages).
 
@@ -248,7 +281,9 @@ Both test scripts send the same set of HL7 messages: three valid types (ADT^A01,
 
 ## Additional References
 
-- [README.md](README.md) — Quick start and feature overview
+- [README.md](../README.md) — Quick start and feature overview
+- [AGENTS.md](../AGENTS.md) — Detailed developer guide: architecture rules, constraints, source layout
+- [SECURITY.md](../SECURITY.md) — Deployment security
 - [ROADMAP.md](ROADMAP.md) — Milestones and planned features
 - [STYLE_GUIDE.md](STYLE_GUIDE.md) — Appearance and functioning rules
-- [CHANGELOG.md](CHANGELOG.md) — Full history of every change
+- [CHANGELOG.md](../CHANGELOG.md) — Full history of every change

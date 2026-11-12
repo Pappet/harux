@@ -1,5 +1,10 @@
 # Harux — Architektur- & Logik-Audit (2026-05-29)
 
+> **Historical document.** This records the state and plans at the time it
+> was written; file names, APIs and rules in it may no longer match the code.
+> For current guidance see [`AGENTS.md`](../AGENTS.md), the [roadmap](ROADMAP.md) and the
+> [changelog](../CHANGELOG.md).
+
 > Ganzheitliches Code-Audit der Codebasis (Backend `src/`, Frontend `static/`,
 > Konfiguration, Tests, Assets). Fokus auf Makroebene, strukturelle Integrität
 > und datei-/modulübergreifende Logik-Risse — bewusst **nicht** auf triviale
