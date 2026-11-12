@@ -333,6 +333,11 @@ struct AckSpec<'a> {
 
 /// Render an [`AckSpec`] as `MSH…\rMSA…`. Every ACK/NACK gets a fresh
 /// 20-character MSH-10 control ID.
+/// Longest MSA-3 text Harux writes, in characters (#218). Parse errors can
+/// quote the start of the frame; senders log NACKs verbatim, so the text is
+/// cut with "…" instead of growing with the input.
+pub const MAX_ACK_TEXT_CHARS: usize = 200;
+
 fn render_ack(spec: &AckSpec) -> String {
     let d = spec.delimiters;
     let f = d.field;
@@ -360,7 +365,16 @@ fn render_ack(spec: &AckSpec) -> String {
     );
     if let Some(text) = spec.text {
         ack.push(f);
-        ack.push_str(&super::escape::encode(text, d));
+        // Cut by characters before escaping, so an escape sequence is never
+        // split and a multi-byte character never is either.
+        let text: Cow<str> = if text.chars().count() > MAX_ACK_TEXT_CHARS {
+            let mut cut: String = text.chars().take(MAX_ACK_TEXT_CHARS - 1).collect();
+            cut.push('…');
+            Cow::Owned(cut)
+        } else {
+            Cow::Borrowed(text)
+        };
+        ack.push_str(&super::escape::encode(&text, d));
     }
     ack
 }
@@ -800,6 +814,23 @@ mod tests {
 
         let default = build_reject(Delimiters::default(), "", "x");
         assert!(default.contains("MSA|AR|UNKNOWN|x"), "{default}");
+    }
+
+    /// #218: a long reason is cut to MAX_ACK_TEXT_CHARS characters (with
+    /// "…"), by characters, before escaping.
+    #[test]
+    fn test_nack_text_is_capped() {
+        let reason = format!("Message does not start with MSH: {}", "ä|".repeat(300));
+        let nack = build_nack(&reason);
+        let parsed = parse_message(&nack, "test").unwrap();
+        let text =
+            crate::hl7::escape::decode(&field(&parsed, "MSA", 3), parsed.delimiters).into_owned();
+        assert_eq!(text.chars().count(), MAX_ACK_TEXT_CHARS);
+        assert!(text.ends_with('…'), "{text}");
+        assert!(reason.starts_with(text.trim_end_matches('…')));
+        // Short texts are untouched.
+        let short = build_nack("short");
+        assert!(short.ends_with("|short"), "{short}");
     }
 
     #[test]

@@ -68,10 +68,11 @@ pub struct Hl7Message {
     #[serde(skip)]
     pub wire: WireForm,
     /// MSH-9.3 message structure identifier, e.g. `"ADT_A01"` or `"ORU_R01"`.
-    /// Exposed through the REST API / WebSocket JSON (visible in the UI's JSON
-    /// tab). Validation does **not** use it yet — `validate_message` dispatches
-    /// on `message_type`; structure-based validation depends on repetition /
-    /// sub-component parsing (#185) and is tracked in #186.
+    /// **Informational only**: exposed in the detail JSON (the UI's JSON tab)
+    /// for the reader. Validation does not use it and is not meant to —
+    /// `validate_message` dispatches on `message_type` (type and trigger
+    /// event), because MSH-9.3 is optional and often missing or wrong in real
+    /// traffic (#186). Kept because removing it would change the API.
     /// `None` when MSH-9 has fewer than three components (common in HL7 v2.3 senders).
     pub message_structure: Option<String>,
 }

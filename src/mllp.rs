@@ -355,8 +355,10 @@ async fn process_frame(
     let reply = if let Some(e) = &msg.parse_error {
         stats.parse_errors.fetch_add(1, Ordering::Relaxed);
         warn!("Parse error from {}: {}", peer, e);
-        // NACK (AE = Application Error)
-        let nack = build_nack("Message parse error");
+        // NACK (AE = Application Error) with the actual reason, so the
+        // sender's log says what was wrong without opening Harux (#218).
+        // `render_ack` escapes it and caps it at MAX_ACK_TEXT_CHARS.
+        let nack = build_nack(&format!("Message parse error: {e}"));
         msg.ack_response = Some(nack.clone());
         msg.ack_code = Some("AE".to_string());
         Some(nack)

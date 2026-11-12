@@ -173,6 +173,11 @@ async fn unparseable_frame_gets_nack_and_is_stored() {
     s.write_all(&frame(b"NOT HL7 AT ALL")).await.unwrap();
     let reply = read_reply(&mut s).await.expect("NACK");
     assert!(msa(&reply).starts_with("MSA|AE|UNKNOWN"), "{reply}");
+    // #218: MSA-3 carries the parser's reason, not only a generic text.
+    assert!(
+        msa(&reply).contains("Message parse error: Message does not start with MSH"),
+        "{reply}"
+    );
     let stored = summaries(&srv.store).await;
     assert_eq!(stored.len(), 1);
     assert!(stored[0].parse_error.is_some());
