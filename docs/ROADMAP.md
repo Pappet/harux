@@ -1,6 +1,8 @@
 # Harux — Roadmap
 
-This document tracks all milestones and planned features. Each milestone lists its tasks, completion status, and acceptance criteria.
+This document tracks all milestones and planned features. Each milestone lists its tasks, completion status, and acceptance criteria. It is the one place for planning facts (current milestone, next work); `AGENTS.md` and the other guides link here instead of repeating them.
+
+**Current state:** Milestones 0–3 are complete. Since v0.8.0 the work has been hardening from the v0.8.0 review (#222–#250, see the `[Unreleased]` changelog). **Next planned:** Milestone 4 (Workflow & Testing).
 
 ---
 
@@ -19,7 +21,7 @@ This document tracks all milestones and planned features. Each milestone lists i
 - [x] Web UI with real-time message list (WebSocket)
 - [x] Segment/field detail view (Parsed, Raw, JSON tabs)
 - [x] Search filter (message type, patient, facility, ID)
-- [x] JSON export
+- [x] JSON export (replaced in #160 by the MLLP-framed `.hl7` export, byte-faithful since #230)
 - [x] Route fix for message detail view (`:id` instead of `{id}`)
 
 ### Acceptance Criteria
@@ -43,12 +45,12 @@ This document tracks all milestones and planned features. Each milestone lists i
 ### Tasks
 
 - [x] **Configuration file** (`harux.toml`) — ports, memory limits, log level, retention configurable
-- [x] **File Logging** — standard rotating log files for operation monitoring
+- [x] **File Logging** — daily log files with retention (`logging.max_files`, #240) and a stdout fallback when the file can't be written (#234)
 - [x] **Portable binary** — single `.exe` without dependencies, xcopy deployment
 - [x] **Backpressure handling** — evict oldest messages when the store is full instead of OOM
 - [x] **Memory Management** — configurable memory budget (e.g. max 512 MB RAM) with automatic eviction
 - [x] **Connection limits** — cap maximum concurrent MLLP connections
-- [x] **Graceful shutdown** — cleanly terminate active connections on service stop
+- [x] **Graceful shutdown** — cleanly terminate active connections on service stop (Ctrl+C, and SIGTERM on Unix since #225)
 
 ### Acceptance Criteria
 
@@ -75,7 +77,7 @@ This document tracks all milestones and planned features. Each milestone lists i
 - [x] **Session-based views** — each developer sees their own filter configuration, scroll position and selection
 - [x] **Color-coded source markers** — messages visually distinguishable by sender system/IP
 - [x] **Message tagging** — manual tagging (e.g. "Bug #1234", "Test scenario A") for attribution
-- [x] **Bookmark/Pin** — mark important messages so they don't get lost in the stream; eviction-protected
+- [x] **Bookmark/Pin** — mark important messages so they don't get lost in the stream; eviction-protected within `store.bookmark_budget_percent` of the store
 
 ### Acceptance Criteria
 
@@ -155,7 +157,7 @@ This document tracks all milestones and planned features. Each milestone lists i
 
 - [ ] **SQLite backend** — optional persistence, enabled via `harux.toml`
 - [ ] **Retention policy** — automatic deletion after X days or X messages
-- [ ] **Extended export** — CSV export, HL7 file export (`.hl7`), filtered exports
+- [ ] **Extended export** — CSV export, filtered exports (the full `.hl7` export of all stored messages exists since #160)
 
 ### Acceptance Criteria
 
@@ -190,7 +192,7 @@ This document tracks all milestones and planned features. Each milestone lists i
 
 **Extended Features**
 - [ ] **Multi-port listener** — multiple MLLP ports simultaneously (test separate Orchestra channels)
-- [ ] **TLS support** — encrypted MLLP connections (MLLP/S)
+- [ ] **TLS support** — encrypted MLLP connections (MLLP/S). Until then, `server.web_bind = "127.0.0.1"` behind a TLS reverse proxy covers the web side (#237)
 - [ ] **ACK configuration** — customizable ACK responses (e.g. always send NAK to test retry logic)
 - [ ] **Regex filter** — extended search with regular expressions
 - [ ] **Dark/Light theme toggle**

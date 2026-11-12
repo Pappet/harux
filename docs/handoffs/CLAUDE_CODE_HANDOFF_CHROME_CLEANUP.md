@@ -1,5 +1,10 @@
 # Harux Chrome Cleanup — Implementation Handoff for Claude Code
 
+> **Historical document.** This records the state and plans at the time it
+> was written; file names, APIs and rules in it may no longer match the code.
+> For current guidance see [`AGENTS.md`](../../AGENTS.md), the [roadmap](../ROADMAP.md) and the
+> [changelog](../../CHANGELOG.md).
+
 **Reference mockup:** `harux-chrome-cleanup.html` (sibling file in this project).
 **Target files:** `static/index.html`, `static/style.css`, `static/app.js`.
 **Scope:** Visual + IA-only refactor. No protocol, API, or storage changes.

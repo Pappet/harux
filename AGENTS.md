@@ -1,15 +1,29 @@
 # AGENTS.md
 
-This file provides guidance to AI coding agents working with this repository.
-For Claude Code specifically, see also `CLAUDE.md`.
+The project guide for AI coding agents (Claude Code, Codex, Gemini, Jules, …)
+and for humans who want the same overview. **This file is the single source of
+truth for agent rules.** `CLAUDE.md` and `GEMINI.md` only point here and add
+what is specific to their tool; `.jules/` holds historical learning notes.
+
+Volatile planning facts (current milestone, next work) live in
+[`docs/ROADMAP.md`](docs/ROADMAP.md), not here.
 
 ---
 
 ## Project Overview
 
-Harux is a single-binary MLLP server with an embedded real-time web UI for inspecting HL7 v2.x messages. It is written in Rust and deployed as a Windows Service on a hospital integration server. Multiple developers use it simultaneously via browser.
+Harux is a single-binary MLLP server with an embedded real-time web UI for
+inspecting HL7 v2.x messages. It is written in Rust and runs as a Windows
+Service on a hospital integration server; several developers use it at the
+same time through their browsers.
 
-**Primary use case:** Receiving, storing, and displaying HL7 v2.x messages from Orchestra (a healthcare integration platform) for development and debugging. MDM messages with Base64-encoded attachments are common daily traffic.
+**Primary use case:** receiving, storing and displaying HL7 v2.x messages from
+Orchestra (a healthcare integration platform) for development and debugging.
+MDM messages with Base64-encoded attachments are common daily traffic.
+
+**Scope today:** receive and inspect. Sending, editing and replay (Milestone 4)
+and persistence (Milestone 5) are planned, not implemented — see the roadmap.
+Do not implement roadmap features unless explicitly asked.
 
 ---
 
@@ -17,210 +31,263 @@ Harux is a single-binary MLLP server with an embedded real-time web UI for inspe
 
 **Never commit directly to `main` or to an unrelated branch.** For every task:
 
-1. **Create a feature branch** from `main` named after the issue (e.g., `feat/27-bookmark-messages`, `fix/15-eviction-bug`).
+1. **Create a feature branch** from `main` named after the issue (e.g. `feat/27-bookmark-messages`, `fix/15-eviction-bug`).
 2. **Make all commits on that branch.**
-3. **Create a Pull Request** to `main` using `gh pr create` when the work is complete and all checks pass.
-4. Include the related issue number in the PR body (e.g., `Closes #27`).
+3. **Open a Pull Request** to `main` when the work is complete and all checks pass.
+4. Include the related issue number in the PR body (e.g. `Closes #27`).
 
 Do not push changes without a dedicated branch and PR — even for small fixes.
 
----
-
-## Build & Verification
-
-Always verify your changes compile and pass tests before considering a task complete.
+## Build & Run
 
 ```bash
+cargo build                    # Debug build
 cargo build --release          # Release build
-cargo test                     # All unit tests must pass
-cargo clippy -- -D warnings    # Zero warnings policy — must pass clean
+cargo run --release            # Run server (MLLP + Web)
+cargo test                     # All Rust tests (unit + integration)
+cargo test <test_name>         # A single test
+cargo clippy -- -D warnings    # Must pass clean before every commit
+node --test 'tests/js/*.test.mjs'   # Frontend logic tests (no npm)
 ```
 
-If any of these three commands fails, the task is not done.
+Environment variables: `MLLP_PORT` (default 2575), `WEB_PORT` (default 8080),
+`RUST_LOG` (log level, overrides `logging.level`). Everything else is set in
+`harux.toml` — see `examples/harux-example.toml` for every key with its
+default. The configuration fails closed: an unknown key, a wrong type or a
+value out of range stops the start with an error naming the key (#233).
+
+Manual MLLP testing: `tests/test.sh` (Linux/macOS, needs `nc`) or
+`.\tests\test.ps1` (Windows) — sends ADT^A01, ORU^R01, SIU^S12 plus error
+cases and a load test.
 
 ## Branch Protection & CI
 
-The `main` branch is protected. Direct pushes are not allowed. 
-All changes must go through a Pull Request and pass an automated CI workflow that runs:
+`main` is protected; every change goes through a Pull Request. The CI workflow
+(`.github/workflows/ci.yml`) runs, and all of these **must pass**:
+
 1. `cargo fmt --check`
 2. `cargo clippy -- -D warnings`
 3. `cargo build`
 4. `cargo test`
+5. `node --test 'tests/js/*.test.mjs'` — frontend logic (e.g. the diff pairing) loaded into `node:vm` with stubbed globals; no npm, no dependencies
 
-Only PRs that pass these checks can be merged. Ensure these run successfully on your local branch before creating a PR.
+A separate workflow (`.github/workflows/audit.yml`) runs `cargo audit` when
+dependencies change and daily; `.cargo/audit.toml` lists ignored advisories,
+each with a reason. Dependabot proposes weekly crate and Actions updates.
 
-## Changelog — Mandatory on Every Commit
+Run these locally before pushing. A task whose build, tests or clippy fail is
+not done.
 
-`CHANGELOG.md` must be updated as part of every commit. Do not push without it.
+## Commit & Changelog Workflow
 
-**Steps:**
+**Before every commit and push**, update `CHANGELOG.md` in the same commit:
 
-1. For features, fixes and refactors: add or update the corresponding `### Added` / `### Fixed` / `### Changed` entry under `## [Unreleased]`, referencing the issue number.
-2. Include `CHANGELOG.md` in the same commit as the change it documents.
+1. For substantive changes (feature, fix, refactor): add or update the `### Added`, `### Fixed`, `### Changed` (or `### Security` / `### Upgrade Notes`) entry in the `[Unreleased]` section, with the issue number (e.g. `(#178)`).
+2. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
+3. There is **no per-commit hash table** — PRs are squash-merged, so branch commit hashes never survive on `main`. Git history is the commit log.
 
-There is no per-commit hash table: PRs are squash-merged, so branch hashes never survive on `main`; git history is the commit log.
+Never create a standalone "update changelog" commit — the entry belongs to the commit it documents.
 
-Never create a standalone "update changelog" commit — it belongs to the commit it documents.
+Commit messages use a type prefix: `feat:`, `fix:`, `docs:`, `refactor:`, `test:`, `ci:`, `chore:`.
 
 ---
 
 ## Architecture
 
-Two async Tokio tasks share a single `MessageStore` via `Arc<RwLock<>>`:
+Harux is an MLLP server with a real-time web UI for inspecting HL7 v2.x messages. Two async Tokio tasks run concurrently via `tokio::select!` in `main.rs`:
 
-```
-HL7 Sender (Orchestra) ──MLLP──▶ mllp.rs ──▶ store.rs ──▶ web.rs ──▶ Browser
-                        ◀──ACK──                         WebSocket
-```
+1. **MLLP Server** (`mllp.rs`) — TCP listener accepting HL7 messages wrapped in MLLP framing (VT `0x0B` start, FS `0x1C` + CR `0x0D` end). Parses each message, stores it, and returns ACK/NACK.
 
-| File | Responsibility |
-|---|---|
-| `src/main.rs` | Entry point, `tokio::select!` over both tasks |
-| `src/mllp.rs` | TCP listener, MLLP framing, ACK/NACK, ACK-storm prevention |
-| `src/store.rs` | In-memory store (`StoredEntry` = immutable payload + mutable metadata), byte-targeted eviction with bookmark budget, broadcast channel |
-| `src/web.rs` | Axum REST API, WebSocket push, static file serving |
-| `src/hl7/parser.rs` | Raw HL7 → `Hl7Message`, delimiter extraction, ACK builder |
-| `src/hl7/types.rs` | All data structures |
-| `static/index.html` | HTML skeleton only |
-| `static/style.css` | Dark theme, CSS variables |
-| `static/state.js` · `util.js` · `ws.js` · `render.js` · `diff.js` · `app.js` | SPA logic (vanilla JS, no framework, no modules — loaded in this order, sharing one global `state`) |
+2. **Web Server** (`web.rs`) — Axum HTTP server serving a REST API and WebSocket endpoint. The SPA frontend (`static/`) is embedded in the binary via `rust-embed`.
 
----
+**Shared state** flows through `MessageStore` (`store.rs`) — an `Arc<RwLock<>>` in-memory store with a `tokio::sync::broadcast` channel that pushes new messages to WebSocket subscribers in real-time. Every `StoreEvent` is sent **while the write lock is held** (`insert`, `mutate_meta`, `evict_now`, `clear`), so the order on the channel is the order in which the store changed (#232) — don't move a `tx.send` after the lock is released.
+
+### Store Capacity & Eviction
+
+Limits are **config-driven** via `StoreConfig` (`src/config.rs`), not hardcoded constants.
+
+- **Count limit:** `store.max_messages` (default `10_000`) — secondary safeguard
+- **Size limit:** `store.max_memory_mb` (default `512` MB) — primary safeguard
+- **Trigger:** either limit hit → background eviction task evicts the oldest messages until **both** bytes and count are at or below 90% of their limits (low watermark, byte-targeted — not a fixed share of the count)
+- **Bookmark protection:** bookmarked messages are skipped during eviction (popped and pushed back to the front in original order) — but only within `store.bookmark_budget_percent` (default 50%, clamped to max 80%) of either limit. Under eviction pressure, bookmarks beyond that budget are evicted oldest-first, so bookmarking can never lift the memory cap. Bookmark count/bytes are tracked incrementally, so checking the budget is O(1). See `StoreInner::evict` in `src/store.rs`
+- **Accounting (#226):** each entry is accounted as `entry_bytes` = `Hl7Message::estimated_bytes()` (every owned buffer by **capacity** plus allocator overhead via `heap_bytes`, including the 56-byte `Hl7Field` structs) + `MessageMeta::estimated_bytes()` + `entry_overhead` (the `Arc`, ID copies, `order` and map slots). `tests/alloc_accounting.rs` (own counting `#[global_allocator]`) fails if the estimate drops below the modeled heap of a real message or exceeds it by more than 5 % — when adding a heap-owning field to `Hl7Message`, count it in `estimated_bytes`. `heap_bytes` models glibc; on Windows it over-counts short strings (safe side). Frames with more than `MAX_FIELDS_PER_MESSAGE` (250,000) fields are stored unparsed. Process RSS can exceed the limit by the transient parse tree of frames in flight (≤ ~22 MB each) plus memory the allocator keeps after eviction. `/api/stats` exposes `store_bytes` / `store_max_bytes`
+- **Payload vs. metadata:** each message is stored as a `StoredEntry` — the immutable `Arc<Hl7Message>` payload, its mutable `MessageMeta` (tags, bookmark) and its cached accounted `bytes`. Never mutate the payload after insert (no `Arc::make_mut`): tag/bookmark changes go through `mutate_meta`, which touches only the metadata, so a held snapshot never forces a deep clone under the write lock (#192). `get_by_id` returns a `MessageSnapshot` that serializes flat (payload fields + `tags`/`bookmarked`)
+- **UI sync:** every eviction pass broadcasts `StoreEvent::Evicted(ids)` → WS `evicted`; `removeEvictedMessages` in `static/ws.js` removes the rows and undoes their counter contributions
+- **Reason:** MDM messages with Base64-encoded attachments can be several MB each; count-only eviction is insufficient for real-world Orchestra traffic
+
+### HL7 Parsing (`src/hl7/`)
+
+- `parser.rs` — Parses raw HL7 text by extracting delimiters from the MSH segment, splitting on `\r`/`\n` into segments and segments into fields. Also builds ACK responses. Delimiters must be printable, distinct and not letters/digits; only leading whitespace is skipped, so every non-blank line of `raw` rebuilds its segment exactly — `tests/fuzz_ingest.rs` checks this, the ACK echo and "no panic" on mutated fixtures (#243).
+- **Field structure (#185):** repetitions (`~`), components (`^`), sub-components (`&`) and escapes (`\F\`, `\.br\`, …) are **derived from `Hl7Field::value` on demand**, using the message's own `Delimiters` (`Hl7Message::delimiters`, also copied into each `Hl7Segment`): `field.repetitions(d)`, `field.leaf(d, rep, comp, sub)` (escape-decoded, `Cow::Borrowed` when nothing to decode), `field.structure(d)`. Nothing structural is stored. The detail JSON gets each structured field's `repetitions` (`[rep][comp][sub]`, decoded) from `Hl7Segment`'s hand-written `Serialize`, plus the message's `delimiters` (`"|^~\\&"`); MSH-1/MSH-2 are never structured. Server-side readers (patient ID/name, datatype validation) use the first repetition / each repetition via these accessors — never `value.split('^')`.
+- `escape.rs` — HL7 escape sequences in both directions: `encode` (ACK MSA-3 text) and `decode` (display/analysis only; `value` and `raw` always stay as received).
+- `types.rs` — Data structures: `Hl7Message`, `Hl7MessageSummary`, `Hl7Segment`, `Hl7Field`, `Delimiters`.
+- `charset.rs` — `decode_payload` turns an MLLP payload's bytes into text before parsing. It reads MSH-18 from the bytes with the parser's own `parse_delimiters` (byte-based) and `msh_split_index`, so there is only one definition of the MSH layout; don't add a second MSH scanner (#188). If the declared charset doesn't fit the bytes, it falls back (Latin-1 declared + UTF-8 bytes → UTF-8; invalid UTF-8 → Windows-1252) and adds a `CHARSET_FALLBACK` validation warning to the message instead of producing silent mojibake.
+- **No duplicate payload copies (#180):** a message's text lives in `Hl7Message::raw` and, per field, in `Hl7Field::value` — nothing else. Segments carry no text of their own (the UI derives segment lines from `raw`, split on `\r`/`\n` skipping blank lines — `segmentLines()` in `static/app.js`, guarded by `test_segments_match_nonblank_raw_lines`); `Hl7Field` stores only `value` — its structure is derived on demand (#185), so even an ED attachment (`^application^pdf^Base64^…`) isn't held twice; dictionary descriptions are `Cow::Borrowed` from the static dictionary, and `typical_segments` / `typical_segment_descriptions` borrow from the static registry. Don't reintroduce per-field/per-segment copies — for MDM payloads each copy is another full Base64 attachment in RAM. The received bytes (#230) are not stored again either: `WireForm` records how to reproduce them from `raw` (UTF-8 as is, other charsets re-encoded); only a payload no encoding reproduces keeps `WireForm::Original`. `raw` is the decoded text untrimmed, including the final segment terminator.
+
+**⚠ MSH field indexing quirk:** MSH-1 is the field separator character itself (`|`). The parser inserts a synthetic `Hl7Field { index: 1, value: "|" }` and shifts all other fields up by 1, so that `get_field_value(msh, 3)` correctly returns Sending Application (HL7 standard). Do not change this logic without understanding it — it will silently break all MSH field extractions. The coupling is guarded by `test_msh_shift_dictionary_alignment` (`src/hl7/parser.rs`) and `test_msh_dictionary_numbering_contract` (`src/dictionary.rs`); if either fails, fix the shift/dictionary mismatch rather than the test.
+
+### MLLP Protocol
+
+- Start: `0x0B` (VT, Vertical Tab)
+- End: `0x1C 0x0D` (FS + CR)
+- Max payload: `mllp.max_message_size_mb` (10 MB) — an over-limit frame is answered with `AR` (`build_reject`), stored as a parse-error entry holding only its first 4 KB, and the rest of the frame is skipped; the connection stays open (#223)
+- **Never lose a frame silently:** decode/parse run under `catch_unwind` (`ingest` in `src/mllp.rs`) — a panic becomes a stored parse error + NACK (#235). Messages are stored *before* the ACK/NACK is written. `active_connections` is maintained by `ConnectionGuard` (drop guard); shutdown waits via `mllp::wait_for_drain` on the count, not on a single `Notify` wake-up (#241). An `accept()` error is logged and retried, never fatal (#224)
+- Covered end to end by `tests/mllp_tcp.rs` (real TCP, ephemeral port via `mllp::serve`)
+- Read timeout: 60s, Write timeout: 30s
+- **ACK/NACK:** `build_ack` / `build_nack` are thin wrappers around `render_ack` (`src/hl7/parser.rs`) — change the MSH/MSA layout there only. ACKs reuse the sender's delimiters (echoed values stay valid) and get a fresh MSH-10; NACKs (unparseable frames) use default delimiters, MSA-2 `UNKNOWN` and an escaped MSA-3 reason
+- **ACK storm prevention:** incoming messages with `message_type.starts_with("ACK")` are stored but never ACK'd back. Violating this rule creates an infinite ACK ping-pong with Orchestra.
+
+### Configuration & Logging
+
+- `src/config.rs` loads built-in defaults → `harux.toml` (next to the binary, then the working directory) → environment variables. Every section has `deny_unknown_fields`; `Config::validate` checks ranges, overlapping listener addresses and `logging.file`. Add new keys to `examples/harux-example.toml` and `harux.toml`, both of which `shipped_config_files_load` parses.
+- Listeners bind `server.mllp_bind` / `server.web_bind` (default `0.0.0.0`; #237). Bind errors name the address and the keys.
+- File logging (`src/logging.rs`): one file per day, `<logging.file>.YYYY-MM-DD`; if it can't be opened, Harux logs to stdout and says so (#234). `logging.max_files` (default 14, `0` = keep all) prunes only files named exactly that way, at startup and hourly (#240) — never use `tracing-appender`'s `max_log_files`, which deletes every file that starts with the log name.
+- Shutdown: Ctrl+C and SIGTERM (Unix) trigger the graceful shutdown; MLLP connections drain for up to `server.shutdown_timeout_secs`.
+
+### Web API Routes
+
+**Cross-site guard (#227):** every request passes `guard_cross_site` (`src/web.rs`): `Host` must be an IP literal, `localhost` or a name in `server.allowed_hosts`; on `/ws` and all non-GET routes an `Origin` header, if present, must name this server. `allowed_hosts` entries are names only (no port/scheme; a trailing dot is ignored) — bad entries are warned about at startup. Keep new state-changing routes non-GET so they stay covered. Tests that build requests with a `Host` header must use an allowed one.
+
+- `GET /api/messages?offset=&limit=&include_bookmarks=` — Paginated message list (newest first; `limit` capped at 1000). `include_bookmarks=true` (also `1` / `yes`) adds every bookmarked message older than the page, in the same order — the UI loads with it so bookmarks survive a reload (#231)
+- `GET /api/messages/{id}` — Full message with segments
+- `GET /api/search?q=&limit=` — Search messages server-side. **Note:** the UI currently filters client-side (`matchesSearch()`); this endpoint exists but is not yet wired into the frontend.
+- `GET /api/stats` — Server statistics
+- `POST /api/messages/{id}/tags` — Add a tag (JSON body `{"tag": "..."}`)
+- `DELETE /api/messages/{id}/tags/{tag}` — Remove a tag
+- `POST /api/messages/{id}/bookmark` — Toggle bookmark
+- `POST /api/clear` — Clear all messages
+- `GET /api/export` — Download every stored message as one MLLP-framed `.hl7` file (the bytes **as received**, oldest first, directly replayable — via `Hl7Message::wire_bytes()`, #230). Exception: an over-limit frame (#223) is stored with only its first 4 KB, so the export contains that truncated frame (it carries a parse error in the UI). **Streamed** (`MllpExportStream` in `src/web.rs`): the store lock is held only to snapshot payload `Arc`s (`payload_snapshot`), large payloads go out zero-copy, small ones are coalesced into ~64 KiB chunks — never build the whole export in memory
+- `WS /ws` — Real-time updates (`init`, `new_message`, `tags_updated`, `bookmark_toggled`, `evicted`, `cleared`, `lagged` events). `evicted` carries the array of IDs removed by an eviction pass; the UI drops those rows and warns when bookmarks were among them
+
+### Frontend (`static/`)
+
+The SPA is split across HTML, CSS, and several JS files (see the full tree in **Source Layout** below), all embedded into the binary at compile time via `rust-embed`. The JS files are plain `<script>` includes with **no module system** — they share a single global `state` object (`state.js`) and must be loaded in dependency order (`state` → `util` → `ws` → `render` → `diff` → `app`).
+
+**Important:** After any change to `static/`, a recompile is required — `rust-embed` bakes the files in at build time. There is no hot-reload.
+
+The frontend is **intentional vanilla JS — no framework**. Do not introduce React, Vue, Svelte, or any build toolchain. The embedded SPA approach is a deliberate architectural decision for zero-dependency deployment.
+
+Key frontend behaviors:
+- Messages are batched and flushed at most every 250ms (prevents DOM freeze at high message rates)
+- When no client-side filters are active, new messages are **prepended** to the list (`prependMessagesToList`); when a filter/search/bookmark filter is active, the list is fully rebuilt (`renderMessageList`)
+- ⏸ Pause/▶ Live button buffers incoming messages without displaying them
+- **Client buffer cap:** `state.messages` (and the paused `pendingMessages` buffer) holds at most `CLIENT_MESSAGE_CAP` (2000, `util.js`) messages **plus** bookmarked and selected ones, which are exempt (bookmarks are bounded server-side by `store.bookmark_budget_percent`). Excess oldest messages are dropped via `trimClientBuffer()` (O(1) early exit when only exempt entries are over the cap) and their rows removed bottom-up via `removeRowsFromList()` — no full rebuild. Dropped messages stay on the server; `updateTruncationNote()` keeps a note at the bottom of the list whenever the server holds more than the view, because filters/search only cover loaded messages (server-side search: #197/#198). The header `total` shows the server total (`state.totalMessagesCount`, from WS `init` / `addMessage` / `pollStats` every 3 s — so it can lag by one poll while paused), not the buffer length
+- **List (re)load (#239):** WS events go through `handleServerEvent()`. While `loadMessages()` waits for the list (on `init` / `lagged`), events are queued in `state.loadQueue` and replayed in order after the snapshot is applied (`new_message` for IDs already loaded is skipped); a newer load supersedes an older one via `state.loadSeq`. Never apply WS events directly to `state.messages` around a load. Covered by `tests/js/load.test.mjs`
+- Search is client-side (filters `messages[]` array via `matchesSearch()`), debounced 300ms
+- Parse errors are shown with `⚠ PARSE ERROR` in red (`var(--error)`) in the message list
 
 ## Critical Knowledge — Read Before Changing Anything
 
-### 1. MSH Field Index Offset
+1. **MSH field index offset.** MSH-1 is the field separator itself; the parser inserts a synthetic MSH-1 and shifts the rest (see *HL7 Parsing* above). Do not "simplify" it — it breaks every MSH field extraction without a compile error.
+2. **ACK storm prevention.** A message whose `message_type` starts with `"ACK"` is stored but never ACK'd (`if msg.message_type.starts_with("ACK")` in `src/mllp.rs`). ACK-of-ACK creates an endless ping-pong with Orchestra.
+3. **MLLP is binary framing, not text.** Extract frame boundaries (`extract_mllp_frame`) on bytes first; only then decode the payload, per MSH-18, with `decode_payload` (`src/hl7/charset.rs`).
+4. **Parse errors are stored, not discarded.** A frame that fails to parse (or panics while parsing) is stored with `parse_error` and `message_type: "UNKNOWN"` and answered with a NACK. Harux is a debugging tool; broken messages are often the important ones.
+5. **Static files are embedded at compile time.** Any change under `static/` needs a rebuild.
+6. **Byte accounting stays exact.** `current_bytes` and the bookmark totals are adjusted on insert, metadata change, eviction and `clear()`; tests assert them against recomputed values — keep the tests, don't relax them.
 
-HL7 standard: MSH-1 is the field separator character (`|`), not the first data field. The parser accounts for this by inserting a synthetic field at index 1 and shifting all parsed fields up by 1:
-
-```rust
-// In parser.rs — parse_segment()
-if name == "MSH" {
-    for field in fields.iter_mut() {
-        field.index += 1;
-    }
-    fields.insert(0, Hl7Field { index: 1, value: sep.to_string(), ... });
-}
-```
-
-**Do not remove or "simplify" this.** It ensures `get_field_value(msh, 3)` correctly returns Sending Application per the HL7 spec. Breaking this silently corrupts all MSH field extractions without a compile error.
-
-### 2. ACK Storm Prevention
-
-Incoming messages whose `message_type` starts with `"ACK"` must never receive an ACK response. ACK-of-ACK creates an infinite ping-pong loop with Orchestra that takes down the connection channel.
-
-The check in `mllp.rs` is intentional and must be preserved:
-
-```rust
-if msg.message_type.starts_with("ACK") {
-    // store but do NOT send ACK
-} else {
-    // send ACK normally
-}
-```
-
-### 3. MLLP Framing
-
-MLLP is not a text protocol. Messages are wrapped in binary control characters:
-
-- **Start:** `0x0B` (VT, Vertical Tab)
-- **End:** `0x1C 0x0D` (FS + CR)
-
-Do not treat accumulated bytes as UTF-8 text until after the frame boundaries are extracted. `String::from_utf8_lossy` is intentional in `extract_mllp_frame`.
-
-### 4. Store Capacity & Eviction
-
-`CLAUDE.md` → *Store Capacity & Eviction* is the authoritative description; in short:
-
-- Limits are config-driven (`StoreConfig`, `harux.toml`): `store.max_messages` (default 10 000, secondary) and `store.max_memory_mb` (default 512 MB, primary — MDM messages with Base64 attachments can be several MB each, so count-only eviction would OOM first).
-- When **either** limit is hit, one eviction pass (`StoreInner::evict`) brings **both** bytes and count down to 90 % of their limits — byte-targeted, not a fixed share of the count.
-- Bookmarks are protected only within `store.bookmark_budget_percent` (default 50 %, max 80 %); older bookmarks beyond it are evicted, so bookmarking can never lift the cap.
-- Each message is a `StoredEntry`: an immutable `Arc<Hl7Message>` payload, its mutable `MessageMeta` (tags, bookmark) and its cached accounted `bytes`. Never mutate the payload after insert; tag/bookmark changes go through `mutate_meta`.
-- Byte accounting must stay exact: `current_bytes` and the bookmark totals are adjusted on insert, metadata mutation, eviction and `clear()`. Tests assert `current_bytes == Σ recomputed entry bytes` — keep them passing rather than relaxing them.
-
-### 5. Static Files Are Compile-Time Embedded
-
-`rust-embed` bakes the contents of `static/` into the binary at compile time. There is no hot-reload. Any change to a file under `static/` requires a recompile to take effect.
-
-### 6. Parse Errors Are Stored, Not Discarded
-
-When a message fails to parse, it is still inserted into the store with `parse_error: Some(error_string)` and `message_type: "UNKNOWN"`. This is intentional — Harux is a debugging tool and broken messages are often the most important ones to inspect. Do not silently discard parse failures.
-
----
-
-## Constraints — What Agents Must Not Change Without Explicit Instructions
+## Constraints — What Not to Change Without Explicit Instructions
 
 | Area | Rule |
 |---|---|
-| Frontend | **No framework.** Vanilla JS only. No React, Vue, Svelte, npm, or build toolchain. |
-| Frontend | **No CSS frameworks.** All styles live in `style.css` with CSS variables. |
-| Parser | No zero-copy / lifetime refactoring. Correctness over performance here. |
-| Store | No `dashmap`. No `mpsc`-channel refactor. The `Arc<RwLock<>>` is intentional for now. |
-| DOM rendering | Keep the 250ms flush batching. New messages prepend on the no-filter hot path; full rebuild only when a filter is active. No virtual DOM, no per-message full rebuilds. |
-| Dependencies | Do not add crates without explicit instruction. Check `Cargo.toml` first. |
-| Eviction | Do not revert to count-only eviction, do not exempt bookmarks from the budget, and do not reintroduce payload mutation (`Arc::make_mut`) for tags/bookmarks. |
-| ACK behavior | Do not ACK incoming ACK messages under any circumstance. |
-
----
+| Frontend | **No framework**, no build toolchain, no npm. Vanilla JS, plain `<script>` files. |
+| CSS | No CSS frameworks; all styles in `static/style.css` with CSS variables. The CSP forbids inline scripts, inline styles and inline event handlers — use `data-action` delegation. |
+| Parser | No zero-copy / lifetime refactoring. Correctness over performance. |
+| Store locking | `Arc<RwLock<>>` is intentional: no `dashmap`, no `mpsc`-channel refactor. |
+| DOM rendering | Keep the 250 ms flush batching. New messages prepend on the no-filter hot path; full rebuild only when a filter is active. No virtual DOM, no per-message full rebuilds. |
+| Dependencies | No new crates without explicit instruction. Check `Cargo.toml` first; prefer what is already in the dependency tree. |
+| Eviction | No count-only eviction, no bookmarks outside the budget, no payload mutation (`Arc::make_mut`) for tags/bookmarks. |
+| ACK behaviour | Never ACK an incoming ACK. |
 
 ## Deployment Context
 
-Agents should make decisions with this context in mind:
-
 - **OS:** Windows Server (primary). The `.exe` runs as a Windows Service via NSSM.
-- **Users:** Multiple developers simultaneously via browser. Not a single-user tool.
-- **Network:** Hospital internal network. No internet access from the server.
-- **Traffic:** HL7 v2.x from Orchestra. Includes ADT, ORU, ORM, SIU, and MDM message types. MDM with Base64-encoded PDF attachments is daily traffic, not an edge case.
-- **Deployment:** Single binary, xcopy-style. No installer, no runtime dependencies, no Docker.
-
----
-
-## Planned Work — Do Not Implement Speculatively
-
-The following features are planned but not yet implemented. Do not add them unless explicitly asked:
-
-- HL7 field dictionary tooltips (Milestone 3)
-- Message type detection and validation (Milestone 3)
-- Segment diff view (Milestone 3)
-- Message replay / editor (Milestone 4)
-- SQLite persistence (Milestone 5)
-- FHIR R4 mapping (Milestone 6)
-
-Full roadmap in `docs/ROADMAP.md`.
-
----
+- **Build pipeline:** GitHub Actions builds Windows, macOS (Apple Silicon) and Linux binaries on every push to `main` and attaches them to releases.
+- **Users:** several developers at the same time via browser — no local setup, no RDP window.
+- **Network:** hospital internal network, no internet access from the server. Network placement is the only access control: there is no authentication and no TLS (`server.mllp_bind` / `server.web_bind`, `server.allowed_hosts`).
+- **Traffic:** HL7 v2.x from Orchestra — ADT, ORU, ORM, SIU, MDM. MDM with Base64-encoded PDF attachments is daily traffic, not an edge case.
+- **Deployment:** single binary, xcopy-style. No installer, no runtime dependencies, no Docker.
 
 ## Testing
 
 ```bash
-# Unit tests
-cargo test
-
-# Functional + load test (Linux/macOS, requires nc)
-./test.sh
-
-# Functional + load test (Windows, no external tools required)
-.\tests\test.ps1
+cargo test                          # unit + integration tests
+node --test 'tests/js/*.test.mjs'   # frontend logic
+tests/test.sh                       # functional + load test, Linux/macOS (needs nc, 100 messages)
+.\tests\test.ps1                    # functional + load test, Windows (persistent TCP, 1000 messages)
 ```
 
-The PowerShell test uses a persistent TCP connection for load testing (1000 messages). The shell script spawns a new `nc` process per message (100 messages) — inherently slower due to process overhead, not server throughput.
-
----
+`tests/test.sh` starts a new `nc` process per message, so its load numbers
+measure process overhead, not server throughput. `tests/fuzz_ingest.rs` runs
+20,000 mutated frames by default; `HARUX_FUZZ_ITERATIONS` changes the count.
 
 ## Common Mistakes to Avoid
 
-- **Changing MSH field indices** without understanding the +1 offset in `parse_segment()`
-- **Removing the ACK-type check** in `mllp.rs` thinking it's dead code
-- **Adding a framework** to `static/` — this breaks the embedded single-binary deployment
-- **Raising store capacity** to 100k messages — OOM risk with large MDM payloads
-- **Forgetting to reset `current_bytes`** when clearing or evicting messages
-- **Treating MLLP as plain TCP text** — always extract frame boundaries first
-- **Only running `cargo build`** without `cargo test` and `cargo clippy -- -D warnings`
+- Changing MSH field indices without understanding the +1 offset in `parse_segment()`
+- Removing the ACK-type check in `src/mllp.rs` as "dead code"
+- Adding a framework or inline handlers to `static/` (breaks the single binary and the CSP)
+- Raising store limits without thinking about MDM payload sizes
+- Forgetting to adjust `current_bytes` when changing insert, eviction or clear
+- Treating MLLP as plain TCP text
+- Running only `cargo build` instead of the full CI list above
+
+---
+
+## Source Layout
+
+```
+src/
+├── main.rs          # Entry point, tokio::select! over MLLP + Web tasks
+├── lib.rs           # Library crate root (re-exports modules for integration tests)
+├── config.rs        # TOML → env → defaults config loading; fails closed: unknown keys, bad values, bad port env → startup error (#233); bind addresses (#237)
+├── logging.rs       # Daily log file: fallible setup with stdout fallback (#234), pruning to logging.max_files by exact name (#240)
+├── mllp.rs          # TCP listener, MLLP framing, ACK/NACK dispatch
+├── store.rs         # In-memory store with broadcast channel, dual eviction
+├── web.rs           # Axum router, REST handlers, WebSocket handler
+├── dictionary.rs    # Embedded HL7 field/segment dictionary (v2.5.1.json)
+├── validation.rs    # Required segment/field + primitive datatype validation
+├── hl7/
+│   ├── mod.rs
+│   ├── charset.rs       # Payload bytes → text per MSH-18, fallback + CHARSET_FALLBACK warning
+│   ├── escape.rs        # HL7 escape sequences: encode (ACK text) / decode (display)
+│   ├── parser.rs        # Raw HL7 → Hl7Message, delimiter extraction, ACK builder
+│   ├── types.rs         # Hl7Message, Hl7MessageSummary, Hl7Segment, Hl7Field, Delimiters
+│   └── message_types.rs # Message-type registry (message_types.json)
+└── assets/hl7/      # Embedded JSON: v2.5.1.json (dictionary), message_types.json
+static/
+├── index.html       # HTML skeleton
+├── style.css        # Dark theme, CSS variables
+├── state.js         # `state` object (all mutable globals)
+├── util.js          # Constants + pure helpers
+├── ws.js            # WebSocket + ingestion + stats polling
+├── render.js        # List, legend, health pills, detail-panel tabs
+├── diff.js          # Diff tab (renderDiffTab + builders)
+├── app.js           # Init + UI handlers (data-action delegation) + splitter
+└── fonts/           # Self-hosted woff2 (Inter, JetBrains Mono)
+tests/
+├── parser_fixtures.rs            # Parser tests against tests/messages/*.hl7 fixtures
+├── mllp_tcp.rs                   # MLLP over real TCP: framing, ACK/NACK, limits, shutdown
+├── fuzz_ingest.rs                # Mutation fuzz of decode → parse → ACK → JSON, no panic + invariants (#243)
+├── config_startup.rs             # Real binary: broken config stops the start; unwritable log, bind addresses
+├── accept_errors.rs              # Real binary under ulimit: accept() errors are not fatal, SIGTERM (Unix)
+├── alloc_accounting.rs           # Counting allocator: estimated_bytes() matches the real heap (#226)
+├── doc_paths.rs                  # Paths named in the docs exist (#246)
+├── web_api.rs                    # Axum REST/handler integration tests
+├── js/                           # node:test tests for static/*.js (diff pairing, list load queue)
+├── benchmark_concurrent_insert.rs # Concurrent store insert benchmark
+├── messages/                     # .hl7 fixtures (valid / errors / unknown_types)
+├── test.sh                       # Linux/macOS functional + load test (netcat)
+└── test.ps1                      # Windows functional + load test (.NET TcpClient, 1000 msg)
+examples/harux-example.toml       # Every configuration key with its default
+harux.toml                        # The shipped configuration (defaults)
+.cargo/audit.toml                 # cargo-audit policy and ignored advisories (with reasons)
+.github/workflows/                # ci.yml (gate), audit.yml, build.yml (releases), release-drafter.yml
+docs/                             # ROADMAP, PROJECT_OVERVIEW, STYLE_GUIDE; handoffs/ and audits are historical
+```
 ---
 
 ## Communication Preferences
 
-When interacting with the user or external systems (like GitHub issues), you MUST provide detailed, structured, and comprehensive explanations. 
+When interacting with the user or external systems (like GitHub issues), you MUST provide detailed, structured, and comprehensive explanations.
 
 Specifically for GitHub issues:
 - **Do not** write short, generic closing comments (e.g., "Fixed bug and pushed").

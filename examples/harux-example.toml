@@ -11,6 +11,7 @@
 # DNS names the web UI is opened under (IP addresses and localhost always work).
 # Other Host headers are refused to block DNS rebinding.
 # allowed_hosts = ["harux.klinik.local"]
+# shutdown_timeout_secs = 10  # how long shutdown waits for MLLP connections
 
 # [logging]
 # level = "info"
@@ -20,8 +21,10 @@
 # [store]
 # max_messages = 10000
 # max_memory_mb = 512
+# bookmark_budget_percent = 50  # share of the limits bookmarks may hold (0-80)
 
 # [mllp]
 # max_message_size_mb = 10
 # read_timeout_secs = 60
 # write_timeout_secs = 30
+# max_connections = 100

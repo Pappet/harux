@@ -1,5 +1,10 @@
 # Harux M4 + M5 — Implementation Handoff for Claude Code
 
+> **Historical document.** This records the state and plans at the time it
+> was written; file names, APIs and rules in it may no longer match the code.
+> For current guidance see [`AGENTS.md`](../../AGENTS.md), the [roadmap](../ROADMAP.md) and the
+> [changelog](../../CHANGELOG.md).
+
 **Reference mockups:** `harux-m4-m5-suggestions.html` (this project, sibling file).
 **Scope:** Milestone 4 (Workflow & Testing) + Milestone 5 (Persistence).
 **Constraint:** Re-use the existing visual language from the M1–M3 redesign (`harux-redesigned.html`). Same CSS variables, same component primitives — health pills, segment cards, monospace meta rows, action buttons. Don't invent new chrome.

@@ -149,10 +149,11 @@ hsl(260, 65%, 60%)  — Indigo      hsl(15,  90%, 58%)  — Coral
 ## 6. Frontend Architecture Rules
 
 - **No frameworks:** Vanilla JavaScript only. No React, Vue, Svelte.
-- **No build toolchain:** No npm, webpack, vite. Write pure `app.js`, `style.css`, `index.html`.
+- **No build toolchain:** No npm, webpack, vite. Plain files only: `index.html`, `style.css` and the `<script>` files `state.js` → `util.js` → `ws.js` → `render.js` → `diff.js` → `app.js` (no module system, one global `state`).
+- **No inline code:** The Content-Security-Policy forbids inline scripts, inline styles and `on…=` attributes. Interactive elements get a `data-action` and are handled by the delegation in `app.js`; values in attributes are escaped with `escAttr`, text with `esc`.
 - **Embedded distribution:** Static files are baked into the binary via `rust-embed`. Changes require recompilation.
 - **DOM batching:** Buffer incoming messages and flush to the DOM every `250ms` to prevent freeze at high throughput.
-- **Client-side filtering:** Search filters the in-memory `messages[]` array directly. Debounce search input at `300ms`.
+- **Client-side filtering:** Search filters the in-memory `messages[]` array (the loaded messages, at most 2,000 plus bookmarked/selected) directly. Debounce search input at `300ms`.
 - **Full message on demand:** The `messages[]` array holds lightweight `Hl7MessageSummary` objects. Any operation that needs segment data (detail view, diff pin) must fetch the full message via `GET /api/messages/{id}`.
 
 ### Tooltip Rules
@@ -202,7 +203,8 @@ The same three-tier logic applies to **typical-segment badges** in the detail vi
 - **Async runtime:** Tokio with `tokio::select!` for concurrent task management.
 - **Web framework:** Axum for HTTP API and WebSocket.
 - **State management:** `Arc<RwLock<T>>` with `tokio::sync::broadcast` for real-time push to WebSocket clients.
-- **Memory safeguards:** Explicit count limits and byte-size limits on stores. Evict oldest 10 % when either limit is hit.
+- **Memory safeguards:** Explicit count and byte limits on the store, measured against what messages really cost on the heap. When either limit is hit, evict the oldest messages until both are at or below 90 %; bookmarks are protected only within their budget.
+- **Configuration:** Every new setting goes into `src/config.rs` (validated, unknown keys rejected), `harux.toml` and `examples/harux-example.toml`.
 - **Logging:** Use the `tracing` crate. Never use `println!`.
 - **File structure:** One responsibility per file (`web.rs` for routing, `store.rs` for state, `parser.rs` for decoding).
 
@@ -241,7 +243,9 @@ refactor/<issue>-<name>   e.g. refactor/30-store-cleanup
 ```bash
 cargo fmt --check
 cargo clippy -- -D warnings
+cargo build
 cargo test
+node --test 'tests/js/*.test.mjs'
 ```
 
-All three must pass. Zero tolerance for warnings.
+All must pass — this is the CI gate (`.github/workflows/ci.yml`). Zero tolerance for warnings.

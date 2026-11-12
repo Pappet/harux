@@ -1,5 +1,10 @@
 # Harux — Security Review Report
 
+> **Historical document.** This records the state and plans at the time it
+> was written; file names, APIs and rules in it may no longer match the code.
+> For current guidance see [`AGENTS.md`](../AGENTS.md), the [roadmap](ROADMAP.md) and the
+> [changelog](../CHANGELOG.md).
+
 **Date:** 2026-03-06
 **Scope:** Full codebase review
 **Reviewer:** Automated security audit (Claude Code)
