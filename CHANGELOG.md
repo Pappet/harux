@@ -10,7 +10,7 @@ and this project follows [Semantic Versioning](https://semver.org/lang/en/).
 ## [Unreleased]
 
 ### Added
-- **Plan for Milestone 4 (Workflow & Testing)** — `docs/MILESTONE_4_PLAN.md` proposes how sending, resending and editing messages become part of the existing window and architecture instead of separate dialogs: one message lifecycle (draft → sent → received), sent messages as rows of the shared list with their response where the ACK is shown, a send policy in `harux.toml` that fails closed, the API, the tests and eleven work packages (M4-1 … M4-11). `docs/design/harux-m4-workbench.html` is the mockup, drawn with the application's stylesheet; `docs/ROADMAP.md` lists the work packages. Planning only: no code or behaviour changes, and the plan's open decisions (its section 11) are the owner's.
+- **Plan for Milestone 4 (Workflow & Testing)** — `docs/MILESTONE_4_PLAN.md` describes how sending, resending and editing messages become part of the existing window and architecture instead of separate dialogs: one message lifecycle (draft → sent → received), sent messages as rows of the shared list with their response where the ACK is shown, a target list for every user, TLS for outgoing connections, a switch and limits in `harux.toml`, the API, the tests and twelve work packages (M4-1 … M4-12), to be released as v1.0.0. `docs/design/harux-m4-workbench.html` is the mockup, drawn with the application's stylesheet; `docs/ROADMAP.md` lists the work packages. Planning only: no code or behaviour changes. The owner's decisions are recorded in the plan's section 11.
 
 ---
 

@@ -87,8 +87,24 @@ body { height: auto; overflow: auto; display: block; padding: 32px 0 60px; }
 .target-option .last.ok { color: var(--success); }
 .target-option .last.bad { color: var(--error); }
 .target-option .guard { color: var(--warning); font-size: 10.5px; font-weight: 600; }
-.send-menu .adhoc { display: flex; gap: 6px; padding: 6px 8px 2px; }
-.send-menu .adhoc input { flex: 1; background: var(--bg-primary); border: 1px solid var(--border); border-radius: 6px; color: var(--text-primary); font-family: var(--font-mono); font-size: 11px; padding: 6px 8px; }
+.send-menu h4 .h4-actions { float: right; text-transform: none; letter-spacing: 0; font-weight: 400; color: var(--accent); }
+.target-option .tls { font-family: var(--font-mono); font-size: 9.5px; font-weight: 600; color: var(--success); border: 1px solid rgba(79,185,138,.4); border-radius: 3px; padding: 0 4px; margin-left: 4px; vertical-align: 1px; }
+/* The user's own target list: a small form in the same menu (decision D2) */
+.target-form { margin: 6px 4px 2px; padding: 8px; border: 1px dashed var(--border); border-radius: 8px; }
+.target-form h4 { margin: 0 2px 6px; }
+.target-form .row { display: flex; align-items: center; gap: 6px; font-size: 11.5px; color: var(--text-secondary); }
+.target-form .row + .row { margin-top: 8px; }
+.target-form input { flex: 1 1 0; min-width: 0; background: var(--bg-primary); border: 1px solid var(--border); border-radius: 6px; color: var(--text-primary); font-family: var(--font-mono); font-size: 11px; padding: 6px 8px; }
+.target-form input.host { flex: 1.6 1 0; }
+.target-form input.port { flex: 0 0 58px; }
+.target-form .spacer { flex: 1; }
+.target-form button { height: 26px; padding: 0 10px; }
+/* Toggle switch (style guide: no native checkboxes) */
+.switch { width: 26px; height: 14px; border-radius: 7px; background: var(--bg-primary); border: 1px solid var(--border); position: relative; flex-shrink: 0; }
+.switch::after { content: ''; position: absolute; top: 1px; left: 1px; width: 10px; height: 10px; border-radius: 50%; background: var(--text-muted); }
+.switch.on { background: rgba(122,162,255,.18); border-color: rgba(122,162,255,.55); }
+.switch.on::after { left: 13px; background: var(--accent); }
+.switch + span { margin-right: 8px; }
 .send-menu hr { border: 0; border-top: 1px solid var(--border); margin: 8px 0; }
 .opt-row { display: flex; align-items: center; gap: 8px; padding: 5px 8px; font-size: 12px; color: var(--text-secondary); }
 .opt-row .radio { width: 10px; height: 10px; border-radius: 50%; border: 1.5px solid var(--text-muted); flex-shrink: 0; }
@@ -321,12 +337,16 @@ const detailReceived = () => `
     </div>
 
     <div class="send-menu" style="top:104px; right:96px">
-        <h4>Send to</h4>
-        <div class="target-option selected"><span class="radio"></span><span class="name">orchestra-test-adt</span><span class="last ok">AA · 42 ms<br>2 min ago</span><span class="addr">orchestra-test.klinik.local:6661</span></div>
-        <div class="target-option"><span class="radio"></span><span class="name">orchestra-test-oru</span><span class="last">not used yet</span><span class="addr">orchestra-test.klinik.local:6662</span></div>
-        <div class="target-option"><span class="radio"></span><span class="name">orchestra-prod-adt <span class="guard">⚠ asks before every send</span></span><span class="last bad">refused<br>yesterday</span><span class="addr">orchestra.klinik.local:6661</span></div>
-        <div class="target-option"><span class="radio"></span><span class="name">This Harux (loopback)</span><span class="last ok">AA · 1 ms</span><span class="addr">127.0.0.1:2575</span></div>
-        <div class="adhoc"><input type="text" placeholder="Other: host:port  (allowed: orchestra-test.klinik.local:6000-6999)"></div>
+        <h4>My targets <span class="h4-actions">Edit · Save to file · Load</span></h4>
+        <div class="target-option selected"><span class="radio"></span><span class="name">orchestra-test-adt <span class="tls">TLS</span></span><span class="last ok">AA · 42 ms<br>2 min ago</span><span class="addr">orchestra-test.klinik.local:6661</span></div>
+        <div class="target-option"><span class="radio"></span><span class="name">orchestra-test-oru <span class="tls">TLS</span></span><span class="last">not used yet</span><span class="addr">orchestra-test.klinik.local:6662</span></div>
+        <div class="target-option"><span class="radio"></span><span class="name">orchestra-prod-adt <span class="tls">TLS</span> <span class="guard">⚠ asks before sending</span></span><span class="last bad">refused<br>yesterday</span><span class="addr">orchestra.klinik.local:6661</span></div>
+        <div class="target-option"><span class="radio"></span><span class="name">This Harux</span><span class="last ok">AA · 1 ms</span><span class="addr">127.0.0.1:2575 · loopback</span></div>
+        <div class="target-form">
+            <h4>Add target</h4>
+            <div class="row"><input type="text" value="orchestra-test-mdm" placeholder="Name"><input type="text" class="host" value="orchestra-test.klinik.local" placeholder="Host"><input type="text" class="port" value="6663" placeholder="Port"></div>
+            <div class="row"><span class="switch on"></span><span>TLS</span><span class="switch"></span><span>Ask before sending</span><span class="spacer"></span><button>Save</button></div>
+        </div>
         <hr>
         <h4>Send as</h4>
         <div class="opt-row selected"><span class="radio"></span>As received <code>byte for byte</code></div>
@@ -347,7 +367,7 @@ const detailDraft = () => `
             <button class="btn-primary">${I.send} Send <kbd class="key">Ctrl ⏎</kbd></button>
         </div>
         <div class="detail-desc">Edit of <span class="origin-link">MSG00042185</span>, received 12:00:41 from 10.4.1.22 · changed since the last send</div>
-        <div class="detail-meta">${meta([['to', 'orchestra-test.klinik.local:6661'], ['encoding', 'ISO-8859-1 (MSH-18)'], ['segments', '5'], ['size', '731 B'], ['sent', '2×']])}</div>
+        <div class="detail-meta">${meta([['to', 'orchestra-test.klinik.local:6661 (TLS)'], ['encoding', 'ISO-8859-1 (MSH-18)'], ['segments', '5'], ['size', '731 B'], ['sent', '2×']])}</div>
     </div>
     ${tabs(['Segments <span class="badge">5</span>', 'Raw', 'Response', 'Diff vs pinned'], 'Segments <span class="badge">5</span>')}
     <div class="detail-content" style="padding:18px 22px">
@@ -383,7 +403,7 @@ const detailSent = () => `
             <button>${I.edit} Edit</button>
         </div>
         <div class="detail-desc">Sent from a draft based on <span class="origin-link">MSG00042185</span> · requested by 10.1.2.17</div>
-        <div class="detail-meta">${meta([['patient', 'Müller, Max'], ['control', 'HX3F9A61C27D0B4E8812'], ['to', 'orchestra-test.klinik.local:6661'], ['sent', '2026-11-12 12:03:10'], ['response', 'AA in 42 ms']])}</div>
+        <div class="detail-meta">${meta([['patient', 'Müller, Max'], ['control', 'HX3F9A61C27D0B4E8812'], ['to', 'orchestra-test.klinik.local:6661 (TLS)'], ['sent', '2026-11-12 12:03:10'], ['response', 'AA in 42 ms']])}</div>
         ${tools()}
     </div>
     ${tabs(['Segments <span class="badge">5</span>', 'Raw', 'Response', 'JSON', 'Diff vs pinned'], 'Response')}

@@ -1,8 +1,8 @@
 # Milestone 4 — Workflow & Testing: implementation plan
 
-> **Status:** proposal, 2026-11-12. Nothing in it is implemented yet. Section 11
-> lists the decisions that are the owner's to make; the plan gives a
-> recommendation for each and is written as if the recommendation were taken.
+> **Status:** plan, 2026-11-12. Nothing in it is implemented yet. The owner
+> took the decisions of section 11 on 2026-11-12 and the plan is written to
+> them; three questions that came out of the answers are still open there.
 >
 > **Planning document.** It names files, configuration keys and routes that do
 > not exist yet, so it is not among the documents `tests/doc_paths.rs` checks.
@@ -37,9 +37,10 @@ pick or write a message ─► send it to Orchestra ─► Orchestra forwards �
 | Test message generator | **Templates** and the editable Segments tab (4.3, 4.4), stage 3 |
 | Auto-refresh trigger / desktop notification | **Watch** (4.6), stage 5 |
 
-The roadmap's three functional acceptance criteria are met after stages 1, 2
-and 3; the fourth, the send policy, with the first work package. Stage 1 alone
-already gives the team one-click replay.
+The roadmap's acceptance criteria for replay, the editor and templates are met
+after stages 1, 2 and 3; the one for TLS with M4-2, and the one about
+visibility and limits with M4-1. Stage 1 alone already gives the team
+one-click replay.
 
 ---
 
@@ -92,9 +93,13 @@ They become rules in `AGENTS.md` when the code exists.
 2. **Unchanged means byte for byte.** Resending a stored message without
    changes sends `Hl7Message::wire_bytes()`, the bytes as they arrived
    (#230). Every change is one the user asked for and the request names.
-3. **Sending fails closed.** Harux connects only to targets and destinations
-   the configuration allows. Without configuration it reaches nothing but its
-   own listener.
+3. **Every user chooses where to send; the configuration can only narrow
+   it.** By the owner's decision (D2) each user keeps a list of targets of
+   their own, and Harux connects to what a request names. `harux.toml` can
+   switch sending off or limit it to listed destinations, and a wrong value
+   there stops the start. Nothing else stands between a user and a target,
+   so rule 1 carries the weight: every send is a row everyone sees, with the
+   address that asked for it.
 4. **One of each.** One MLLP framing (`src/mllp.rs`), one parser, one
    validator, one charset table (`src/hl7/charset.rs`), one place that writes
    a field into a message (`src/hl7/compose.rs`). The browser never parses
@@ -103,13 +108,14 @@ They become rules in `AGENTS.md` when the code exists.
 5. **The payload stays immutable** (#192). What was sent is known at insert
    time and never changes. What comes back later (the response, a timeout)
    lives in the entry's mutable metadata, next to tags and bookmark.
-6. **No new state on the server's disk.** Targets and shared templates are
-   read-only configuration; drafts live in the browser. Saving things on the
+6. **No new state on the server's disk.** Shared templates are a read-only
+   directory; targets and drafts live in the browser. Saving things on the
    server is Milestone 5.
-7. **The existing constraints hold:** no framework, no build step, no new
-   crate, `Arc<RwLock<>>` store, 250 ms flush, prepend on the hot path, rows of
+7. **The existing constraints hold:** no framework, no build step,
+   `Arc<RwLock<>>` store, 250 ms flush, prepend on the hot path, rows of
    61 px, CSP without inline code, never ACK an ACK, the MSH shift only
-   through `msh_split_index`.
+   through `msh_split_index`. No new crate — with one exception the owner
+   decided: TLS for outgoing connections (D4, 5.10).
 
 ---
 
@@ -119,8 +125,8 @@ Used the same way in the UI, the API, the code and the documentation.
 
 | Term | Meaning |
 |---|---|
-| **Target** | A named place to send to, defined in `harux.toml` (`[[send.targets]]`). |
-| **Destination** | A `host:port`. A target has one; a user may type one if the configuration allows it. |
+| **Target** | A named place to send to: host, port, TLS or not. Each user keeps a list of their own in the browser. |
+| **Destination** | A target's `host:port`. `harux.toml` can limit which ones may be used. |
 | **Send** | Write one message to a destination and read the response. |
 | **Resend** | Send a stored message (received or sent) again — the roadmap's "replay". |
 | **Draft** | A message being written. Lives in the browser. |
@@ -191,13 +197,25 @@ The three frames of the mockup show 4.1 – 4.3 and 4.5.
   already describes, and it is the only change to an existing part of the
   window.
 - **One click** on the left part sends to the target used last, in the way
-  used last. The label always names the target. The first use, and every
-  target marked `confirm`, opens the menu instead.
-- **The menu** (the caret) lists the targets with their last result
-  (`AA · 42 ms · 2 min ago`, `refused · yesterday`), an input for another
-  `host:port` if the configuration allows one, and how to send: *as received*
-  (byte for byte), *with a new control ID* (MSH-10), *with a new control ID
-  and the current time* (MSH-10, MSH-7). The choice is remembered per browser.
+  used last. The label always names the target. The first use opens the menu
+  instead, and a target marked *ask before sending* asks first.
+- **The menu** (the caret) lists the user's own targets with the last result
+  this browser saw (`AA · 42 ms · 2 min ago`, `refused · yesterday`) and how
+  to send: *as received* (byte for byte), *with a new control ID* (MSH-10),
+  *with a new control ID and the current time* (MSH-10, MSH-7). The choice is
+  remembered per browser.
+- **My targets** (D2): the same menu has *Add target* and *Edit* — a small
+  form with name, host, port, TLS on or off (on for a new target) and *ask
+  before sending*. Every user keeps a list of their own. It is stored in the
+  browser (`localStorage`; it holds no patient data), nothing about it is
+  stored on the server, and it can be saved to and loaded from a file to pass
+  it to a colleague. *This Harux*, the loopback target, is always in the
+  list. A shared list for the whole team is part of the rework the owner
+  announced, not of this milestone.
+- **Ask before sending** is a mark the user sets on a target of their own,
+  typically a production system (D3). Such a target asks before every send
+  and takes one message per request, never a run. It protects against a slip
+  of one's own hand; the server does not know the mark.
 - **Result:** a toast (`Sent to orchestra-test-adt · AA · 42 ms`), and the sent
   message appears in the list at once with `…`, then with its response code.
 - **Sent message, detail view:** badge `SENT`, the description names the origin
@@ -290,13 +308,14 @@ Segments tab, send.
   messages, and can be cancelled. Its progress is a bar under the list
   (`24 / 50 · 22 AA · 2 AE · avg 38 ms`).
 - Every message of a run is a row. A run is limited in number
-  (`send.max_run_messages`, default 1,000) and in size: its messages together
-  may take at most a quarter of `store.max_memory_mb`, because every one of
-  them is stored again. A run keeps hold of the messages it was asked to
-  send, so eviction during the run cannot take one away before it is sent.
-  Load tests with tens of thousands of messages are not part of this
-  milestone.
-- A target marked `confirm` takes one message per request, never a run.
+  (`send.max_run_messages`, default 1,000) and in size
+  (`send.max_run_store_percent`, default 25: its messages together may take
+  at most that share of `store.max_memory_mb`, because every one of them is
+  stored again). Both are set in `harux.toml` (D7). A run keeps hold of the
+  messages it was asked to send, so eviction during the run cannot take one
+  away before it is sent.
+- A target marked *ask before sending* takes one message per request, never
+  a run.
 - **Import:** an `.hl7` file in the format `/api/export` writes (MLLP frames)
   is loaded into the store as received from `import:<file name>`. From there
   it is resent like anything else. This also carries a set of test messages
@@ -319,10 +338,11 @@ useful: nobody wants a notification for every message.
 
 ### 4.7 What a team sees that never sends
 
-With the defaults (no targets, the loopback target on) the window gains the
-**New message** button and the **Resend** and **Edit** buttons, and the only
-place to send to is Harux itself. With `send.loopback_target = false` and no
-targets, sending is off: no button, no rail, and the routes answer `403`.
+With the defaults sending is on: the window gains the **New message** button
+and the **Resend** and **Edit** buttons, and every user's target list starts
+with *This Harux*. With `send.enabled = false` sending is off: no button, no
+rail, and the routes answer `403`. (Whether "on" should be the default is
+question Q3 in section 11.)
 
 ---
 
@@ -339,10 +359,11 @@ browser ── POST /api/send ──► web.rs ──► send.rs (run) ──►
 ### 5.1 Data model (`src/hl7/types.rs`)
 
 - `Hl7Message` gets `outbound: Option<Box<Outbound>>`. `None` is a received
-  message. `Outbound { target, origin, requested_by, run }` holds the facts of
-  the send that never change: the target's name (or `host:port`), where the
-  message came from (`Resend { message_id }`, `Draft { based_on }`,
-  `Template { name }`), the client's IP address and the run.
+  message. `Outbound { target, tls, origin, requested_by, run }` holds the
+  facts of the send that never change: the name the user gave the target,
+  whether the connection was encrypted and verified, where the message came
+  from (`Resend { message_id }`, `Draft { based_on }`, `Template { name }`),
+  the client's IP address and the run.
 - For a sent message `source_addr` holds the destination (`host:port`) and
   `received_at` the moment the send began. Both names stay as they are, since
   the UI and the API use them everywhere; the meaning is "the peer" and "when
@@ -425,14 +446,15 @@ cut at 64 KB (5.1).
 
 `src/send.rs` is the engine. A **run** is a task that:
 
-1. resolves the target and checks it against the policy (5.7); looks up every
-   stored message the request names and keeps its `Arc`, as the export's
-   `payload_snapshot` does — an unknown ID refuses the whole request, and a
-   message evicted while the run is under way is still sent;
+1. checks the destination the request names against the limits of 5.7; looks
+   up every stored message the request names and keeps its `Arc`, as the
+   export's `payload_snapshot` does — an unknown ID refuses the whole request,
+   and a message evicted while the run is under way is still sent;
 2. for each item: builds the bytes (5.4), parses them into an `Hl7Message`
    with `outbound` set and inserts it as `pending`;
-3. connects if the run has no open connection (`send.connect_timeout_secs`),
-   does the exchange, and records the outcome with `set_delivery`;
+3. connects if the run has no open connection (`send.connect_timeout_secs`;
+   for a TLS target the handshake of 5.10 is part of connecting), does the
+   exchange, and records the outcome with `set_delivery`;
 4. waits `interval_ms` between items, stops on cancel and on shutdown.
 
 - A transport failure (connect, write, timeout, closed) marks the item
@@ -559,52 +581,52 @@ an encoded `/` in the ID finds nothing.
 
 ### 5.7 Configuration (`src/config.rs`)
 
+Targets are not configured here: every user defines their own (D2, 4.2).
+`harux.toml` holds what applies to everyone — the switch, the limits, and the
+TLS settings.
+
 ```toml
 [send]
-# Offer Harux's own MLLP listener as a target. With this off and no targets,
-# sending is disabled altogether.
+# Sending from the web UI and the API. false = Harux only receives.
+enabled = true
+# Put Harux's own MLLP listener into every user's target list.
 loopback_target = true
 connect_timeout_secs = 5
 response_timeout_secs = 30
+# Limits of one run (several messages in one request).
 max_run_messages = 1000
+max_run_store_percent = 25     # share of store.max_memory_mb a run may take
 max_concurrent_runs = 4
-# Destinations users may type themselves: host:port or host:from-to.
-# Empty = only the named targets below can be chosen.
+# Optional: limit where users may send. Empty = any host and port.
+# Entries are host:port or host:from-to.
 # allowed_destinations = ["orchestra-test.klinik.local:6000-6999"]
 # Directory with .hl7 templates for everyone (read only).
 # templates_dir = "templates"
 
-# [[send.targets]]
-# name = "orchestra-test-adt"
-# host = "orchestra-test.klinik.local"
-# port = 6661
-# description = "Orchestra TEST, ADT inbound"
-# confirm = false        # true: one message per request, and ask before each
+[send.tls]
+# Certificates are checked against the operating system's certificate store
+# and, if set, against this file (PEM), e.g. the hospital's own CA.
+# ca_file = "certs/klinik-ca.pem"
+# Let users switch the certificate check off for a target of theirs (test
+# systems with self-signed certificates): encrypted, but not verified.
+allow_unverified = false
 ```
 
-- Fails closed like the rest (#233): unknown keys, duplicate or empty names, a
-  port of 0, a malformed `allowed_destinations` entry and zero limits stop the
-  start with an error that names the key. "Effective configuration" lists the
-  targets.
-- **An `allowed_destinations` entry always names a port or a port range.** A
-  bare host would allow every port on it and turn Harux into a general TCP
-  client for that machine; such an entry stops the start.
-- A typed destination is allowed when its host equals an entry (names without
-  case and trailing dot, IP addresses in canonical form) and its port lies in
-  the entry's range. Nothing is resolved for the check. Named targets are
-  allowed because the administrator wrote them.
-- **A typed destination that equals a named target is that target.** Its
-  `confirm` setting applies; typing the address is not a way around it.
-- **`confirm = true`** means: one message per request, never a run, and the
-  request must carry `confirmed`, which the UI sets after a dialog that names
-  the target. It guards against a slip, not against intent — the API is open
-  to everyone who can reach it, as the rest of Harux is.
+- Fails closed like the rest (#233): unknown keys, a malformed
+  `allowed_destinations` entry, a `ca_file` that cannot be read or holds no
+  certificate, zero limits and a percentage outside 1–100 stop the start with
+  an error that names the key. "Effective configuration" shows the section.
+- **`allowed_destinations`** is empty by default: any host and port. When it
+  has entries, a destination is allowed if its host equals an entry's (names
+  without case and trailing dot, IP addresses in canonical form) and its port
+  lies in the entry's range; nothing is resolved for the check. Every entry
+  names a port or a port range — a bare host is refused at start, since it
+  would allow every port on that machine.
 - The loopback target is the address the MLLP listener is bound to and
   `server.mllp_port`; when the listener is bound to every interface it is
-  `127.0.0.1` for `0.0.0.0` and `::1` for `::`.
+  `127.0.0.1` for `0.0.0.0` and `::1` for `::`. It is always allowed.
 - The largest message that can be sent is `mllp.max_message_size_mb`, the
-  largest that can be received. A run is limited by `max_run_messages` and by
-  a quarter of `store.max_memory_mb` (5.3).
+  largest that can be received.
 - New keys go into `harux.toml` and `examples/harux-example.toml`
   (`shipped_config_files_load`).
 
@@ -615,7 +637,7 @@ covers them (#227).
 
 | Route | Purpose |
 |---|---|
-| `GET /api/send/targets` | Whether sending is on, the targets with their last result, the allowed destination patterns, the limits |
+| `GET /api/send/config` | Whether sending is on, the loopback target, the destination limits, the run limits, whether an unverified TLS connection may be chosen |
 | `POST /api/send` | Start a run (below) |
 | `GET /api/send/runs/{id}` | Progress and result of a run |
 | `POST /api/send/runs/{id}/cancel` | Stop a run |
@@ -631,7 +653,13 @@ covers them (#227).
 ```jsonc
 // POST /api/send
 {
-  "target": "orchestra-test-adt",            // or {"host": "…", "port": 6662}
+  "target": {                                // or "loopback"
+    "name": "orchestra-test-adt",            // the user's label, shown in the list
+    "host": "orchestra-test.klinik.local",
+    "port": 6661,
+    "tls": true,
+    "verify": true                           // false only if send.tls.allow_unverified
+  },
   "items": [{ "message_id": "…" }],          // or [{ "raw": "MSH|…", "charset": "auto",
                                              //        "based_on": "<message id>", "template": "<name>" }]
   "set": { "MSH-10": "{{id}}" },             // optional field overrides, for every item
@@ -639,11 +667,14 @@ covers them (#227).
   "interval_ms": 0,
   "stop_on_nack": false,
   "await_response": true,                    // false: do not wait for an ACK
-  "allow_invalid": false,                    // send text that does not parse
-  "confirmed": false                         // required for targets with confirm = true
+  "allow_invalid": false                     // send text that does not parse
 }
 ```
 
+- **The target travels with the request.** The server keeps no list of
+  targets; the browser sends the entry of the user's own list. The name is a
+  label only (cut to a sensible length, shown in the row); host, port and the
+  TLS choice are what the server acts on and checks.
 - **One message:** the request waits for the outcome and answers `200` with
   the stored ID and the delivery. The exchange itself runs in the run's task,
   so a browser that gives up does not stop a send half-way. A failed delivery
@@ -651,12 +682,12 @@ covers them (#227).
   not.
 - **Several messages:** `202` with the run's ID; the rows report progress over
   the WebSocket, the totals come from `GET /api/send/runs/{id}`.
-- **Refusals:** `400` malformed request or field path · `403` sending off or
-  destination not allowed · `404` unknown target or message · `409` target
-  needs `confirmed`, or a run to a `confirm` target · `413` message or run too
-  large · `422` what 5.4 refuses, text that does not parse (without
-  `allow_invalid`), a `truncated` entry, a reference whose message is gone ·
-  `429` too many runs or too many large requests at once.
+- **Refusals:** `400` malformed request, host or field path · `403` sending
+  off, destination outside `allowed_destinations`, or `verify: false` without
+  `allow_unverified` · `404` unknown message · `413` message or run too large ·
+  `422` what 5.4 refuses, text that does not parse (without `allow_invalid`),
+  a `truncated` entry, a reference whose message is gone · `429` too many runs
+  or too many large requests at once.
 - **Body limits.** axum's default is 2 MB. `/api/send`, `/api/parse` and
   `/api/build` take JSON and get twice `mllp.max_message_size_mb` plus a
   margin: a message inside a JSON string grows by escaping (every `CR` becomes
@@ -692,7 +723,9 @@ ignore unknown fields and events keep working.
 
 Two new files, loaded after `diff.js` and before `app.js`:
 
-- `send.js` — targets, the target menu, resend, runs and their bar, toasts.
+- `send.js` — the user's target list (its form, `localStorage`, save to and
+  load from a file), the target menu, resend, runs and their bar, toasts. A
+  list that cannot be read or written leaves sending usable for the session.
 - `compose.js` — drafts: the rail, the draft header, editable Segments and Raw
   tabs, the calls of 5.5, storage.
 
@@ -737,32 +770,81 @@ the package that adds drafts:
 same container. Every new control is reachable with `Tab` and works with
 Enter and Space, like the rows and chips today.
 
+### 5.10 TLS for outgoing connections (`src/mllp_client.rs`)
+
+The owner's decision D4: the targets need it. It covers outgoing connections
+only; TLS for the listener (MLLP/S) stays in Milestone 6 and can then use the
+same library.
+
+- **Per target:** TLS on or off, on for a new target. With TLS on, the
+  handshake follows the TCP connect and counts into the connect timeout; the
+  MLLP exchange then runs inside it, unchanged.
+- **Verification:** the certificate must be valid for the target's host name
+  (or IP address) and chain to a root in the operating system's certificate
+  store — on the Windows server that is where a hospital CA normally is — or
+  to a certificate in `send.tls.ca_file`. A user can switch the check off for
+  a target of theirs only if `send.tls.allow_unverified` is set; the sent
+  message records that it went out unverified, and the row shows it.
+- **What a failure looks like:** the delivery fails with a reason a person
+  can act on — `certificate not trusted` (with the issuer), `certificate is
+  for another name`, `no TLS answer — is this a plain MLLP port?`, and, for a
+  plain target that turns out to speak TLS, `the target expects TLS`.
+- **The library** is rustls through `tokio-rustls`. It is written in Rust, so
+  Harux stays one binary without OpenSSL at run time on every platform.
+  `rustls-native-certs` reads the operating system's store; the PEM reader of
+  `rustls-pki-types` reads `ca_file`; the cryptography comes from `ring`,
+  which builds on the three release targets without CMake or NASM.
+- **These are the first new crates since the rule "no new crates without
+  explicit instruction".** D4 is that instruction. The package starts by
+  proving the choice: a release build on Windows, macOS and Linux, the size
+  of the binary before and after, and a clean `cargo audit`. If `ring` or
+  `rustls-native-certs` fails that, the alternatives (`aws-lc-rs`,
+  `rustls-platform-verifier`) are tried before anything else is built on it.
+- **Not included:** client certificates (mutual TLS) — question Q2 in
+  section 11 — and a choice of protocol versions or cipher suites; the
+  library's defaults (TLS 1.2 and 1.3) are used.
+- **Tests** run against a TLS server in the test itself, with a small CA and
+  a server certificate for `localhost` kept in `tests/tls/` (static files, no
+  crate to generate them): a trusted certificate, an unknown issuer, a wrong
+  name, the unverified switch with and without `allow_unverified`, a plain
+  server answered with TLS and a TLS server answered in plain.
+
 ---
 
 ## 6. Safety and security
 
 Sending is the first feature with which a user of the web UI can change
-something outside Harux. Harux has no login, so the limits must be in the
-configuration.
+something outside Harux, and Harux has no login. The owner decided that every
+user defines targets of their own (D2) and that production systems may be
+among them (D3). The plan follows that decision and says plainly what it
+means:
+
+> With the default configuration, everyone who can open the web UI can make
+> the Harux server connect to any host and port the server can reach, and
+> send an HL7 message there — including a production system.
+
+What stands against a mistake, and what an administrator can do:
 
 | Risk | Answer |
 |---|---|
-| A test message reaches a **production system** | Only configured targets and allowed destinations can be reached; nothing is configured by default. A target can require confirmation (`confirm = true`): one message per request, never a run, and a typed address that equals it is treated as that target. It is a guard against a slip, not against intent. The button always names the target. |
-| Harux as a **stepping stone** into the network (connect to any host and port, read what answers) | The same allowlist; every typed-destination pattern must name a port or a range. No background connections: there is no health check that probes targets; the last result of a real send is shown instead. |
-| A **second message hidden inside a send** (the MLLP end byte in a draft or an override) | A payload Harux builds must not contain the start or end byte; an override cannot leave its field (5.4). What goes out as one frame is one row. |
-| A **response that is too large**, written by the target | Read up to 1 MB to find its end, stored up to 64 KB, never part of the list rows or the WebSocket events (5.1). |
-| A **template ID that is a path** (`..`, an encoded `/`) | An ID is looked up in the listing, never joined into a path (5.6). |
-| **Many large requests at once** (previews, sends, imports) | A permit is taken before a body is read; the import is streamed (5.8). |
-| **Patient data leaves** towards a system that should not get it | The allowlist is the control. `SECURITY.md` says so. |
-| **Another website** makes the browser send | Send routes are `POST`; `guard_cross_site` refuses foreign origins. |
-| **Flooding** a target | Run size and number of parallel runs are limited; a run can be cancelled; every message is visible. |
-| **Nobody knows who sent** something | Every send is a row everyone sees, with the requesting address, and a log line. |
-| **Patient data in the browser** | Drafts made from real messages contain patient data. They stay in the tab by default and are written to the computer only on request. |
-| Content in the **log** | Send log lines carry metadata only. |
+| A test message reaches a **production system** | The button always names the target. A user can mark a target of theirs *ask before sending*; it then asks every time and takes one message per request. Every send is a row everyone sees. An administrator can limit sending to listed destinations (`send.allowed_destinations`) or switch it off (`send.enabled = false`). There is no technical barrier beyond these by default — that is the decision |
+| Harux as a **stepping stone** into the network (connect to any host and port, see whether and what it answers) | Possible with the defaults, for the same reason. `allowed_destinations` narrows it; every entry must name a port or a range. Harux opens no connection on its own: there is no health check that probes targets |
+| **Patient data leaves** towards a system that should not get it | The same two settings are the control. `SECURITY.md` says so in its first lines on sending |
+| **Nobody knows who sent** something | Every send is a row everyone sees, with the requesting address, and a log line. This is the control that always holds |
+| A **second message hidden inside a send** (the MLLP end byte in a draft or an override) | A payload Harux builds must not contain the start or end byte; an override cannot leave its field (5.4). What goes out as one frame is one row |
+| An **unverified TLS connection** | Off unless `send.tls.allow_unverified` is set; then a choice per target, recorded on every sent message and shown in its row (5.10) |
+| A **response that is too large**, written by the target | Read up to 1 MB to find its end, stored up to 64 KB, never part of the list rows or the WebSocket events (5.1) |
+| A **template ID that is a path** (`..`, an encoded `/`) | An ID is looked up in the listing, never joined into a path (5.6) |
+| **Many large requests at once** (previews, sends, imports) | A permit is taken before a body is read; the import is streamed (5.8) |
+| **Another website** makes the browser send | Send routes are `POST`; `guard_cross_site` refuses foreign origins |
+| **Flooding** a target | Run size and number of parallel runs are limited; a run can be cancelled; every message is visible |
+| **Patient data in the browser** | Drafts made from real messages contain patient data. They stay in the tab by default and are written to the computer only on request. The target list holds addresses only |
+| Content in the **log** | Send log lines carry metadata only |
 
-`SECURITY.md` gets a section on sending, and the changelog an upgrade note:
-after the update Harux can send to itself; any other destination needs an
-entry in `harux.toml`.
+`SECURITY.md` gets a section on sending that starts with the sentence quoted
+above, and the changelog an upgrade note with the same content and the two
+settings. Whether sending should be on or off after an update is question Q3
+in section 11.
 
 ---
 
@@ -774,34 +856,49 @@ target reports unused code, so a package cannot add an engine without a route
 that uses it. Sizes are relative (S, M, L).
 
 ```
-M4-1 ─► M4-2 ─► M4-3 ─► M4-4 ─► M4-5 ─► M4-6 ─► M4-7 ─► M4-8 (v0.10.0)
-          │                       └───► M4-9 ─► M4-10          (v0.10.x)
-          └───► M4-11                                          (v0.10.x)
+M4-1 ─► M4-2 ─► M4-3 ─► M4-4 ─► M4-5 ─► M4-6 ─► M4-7 ─► M4-8 ─┐
+                  │                       └───► M4-9 ─► M4-10 ─┼─► M4-12 (v1.0.0)
+                  └───► M4-11 ─────────────────────────────────┘
 ```
 
-### Stage 1 — Resend
+There is one release, at the end, and it is **v1.0.0** (D10). `main` is usable
+after every package, so the team does not have to wait for the tag.
+
+### Stage 1 — Send and resend
 
 **M4-1 · Send a stored message, unchanged** (L, backend and the minimum of UI)
-`[send]` configuration and policy, including the loopback target;
-`mllp_client.rs`; `send.rs` with a run of one stored message; `Outbound`,
-`Delivery`, `truncated`, `set_delivery`, `delivery_updated`; accounting;
-`GET /api/send/targets`; `POST /api/send` for one stored message, unchanged;
-`ConnectInfo`; export direction; `is:sent` in `SearchQuery`; send counters;
-log lines; `SECURITY.md`, `AGENTS.md`, `docs/PROJECT_OVERVIEW.md`, example
-configuration. The list and the detail view show a sent message as sent
-(direction, target, the chip from `delivery`, the Response tab), so `main`
-never presents a sent message as a received one.
-*Done when* `curl -X POST /api/send` resends a stored message to a configured
-target, the sent message and its response appear in the UI as sent, and a
-destination that is not allowed is refused.
+The `[send]` section (switch, limits, `allowed_destinations`, loopback);
+`mllp_client.rs` over plain TCP; `send.rs` with a run of one stored message;
+`Outbound`, `Delivery`, `truncated`, `set_delivery`, `delivery_updated`;
+accounting; `GET /api/send/config`; `POST /api/send` for one stored message,
+unchanged, to the target the request names; `ConnectInfo`; export direction;
+`is:sent` in `SearchQuery`; send counters; log lines; `SECURITY.md`,
+`AGENTS.md`, `docs/PROJECT_OVERVIEW.md`, example configuration. The list and
+the detail view show a sent message as sent (direction, target, the chip from
+`delivery`, the Response tab), so `main` never presents a sent message as a
+received one.
+*Done when* `curl -X POST /api/send` resends a stored message to a plain MLLP
+target, the sent message and its response appear in the UI as sent, and with
+`allowed_destinations` set a destination outside it is refused.
 
-**M4-2 · Resend in the UI** (M, frontend)
-Target menu and split button; direction filter and `is:` prefixes; target
-chips; `sent` pill; origin links; trace by control ID; tools row.
-*Done when* the roadmap's first criterion holds: a received message is resent
-to a configured target with one click, and the response is shown.
+**M4-2 · TLS for outgoing connections** (M, backend)
+Everything in 5.10: the build proof for the new crates first, then the
+handshake in `mllp_client.rs`, `[send.tls]`, verification, the failure
+reasons, `tls` on the sent message, the tests with their certificates.
+*Done when* a stored message is sent over TLS to a target whose certificate
+comes from a CA in `ca_file`, a target with an unknown certificate is refused
+with a reason that names the issuer, and the three release builds are green.
 
-**M4-3 · Changes on resend** (M)
+**M4-3 · Resend in the UI** (M, frontend)
+The user's target list with its form (name, host, port, TLS, ask before
+sending), stored in the browser, saved to and loaded from a file; target menu
+and split button; direction filter and `is:` prefixes; target chips; `sent`
+pill; origin links; trace by control ID; tools row.
+*Done when* the roadmap's first criterion holds: a user adds a target of
+their own, resends a received message to it with one click, and sees the
+response.
+
+**M4-4 · Changes on resend** (M)
 `src/hl7/compose.rs`: field overrides, placeholders, everything 5.4 refuses;
 the encoding step in `charset.rs`; `set` in `POST /api/send`; the menu's
 "send as" choices; the fuzz test for this code.
@@ -811,7 +908,7 @@ byte or a field separator is refused.
 
 ### Stage 2 — Drafts
 
-**M4-4 · Drafts on the server** (M, backend)
+**M4-5 · Drafts on the server** (M, backend)
 `GET /api/messages/{id}/draft` with references; `POST /api/parse` (preview,
 field write-back, field positions, decoding of a file); `POST /api/build`;
 draft items in `POST /api/send` (line ends, encoding, references,
@@ -821,16 +918,16 @@ detail JSON.
 previewed, changed with `set`, downloaded and sent — a Latin-1 message with
 umlauts and an MDM whose attachment is a reference.
 
-**M4-5 · Drafts in the UI** (L, frontend)
+**M4-6 · Drafts in the UI** (L, frontend)
 `compose.js`: the drafts rail, the draft header, the Raw tab with the field
 status line, a read-only Segments preview with live validation, the Response
 tab with the draft's history, Diff vs pinned, reference chips, tab storage;
 the selection model and the three traps of 5.9; *Edit* on stored messages;
 *New message* (blank, from the clipboard, from a file).
 *Done when* the roadmap's third criterion holds: raw HL7 is edited and sent
-from the browser, for the two messages of M4-4 as well.
+from the browser, for the two messages of M4-5 as well.
 
-**M4-6 · Edit fields** (M)
+**M4-7 · Edit fields** (M)
 Inputs in the Segments tab, written back through `POST /api/parse`; add,
 duplicate and remove segments; `GET /api/dictionary/{segment}` and *show
 empty fields*; quick actions for MSH-7 and MSH-10.
@@ -839,31 +936,23 @@ tab, and both tabs always show the same text.
 
 ### Stage 3 — Templates
 
-**M4-7 · Templates** (S–M)
+**M4-8 · Templates** (S–M)
 Built-in set, `send.templates_dir`, the two routes, the *New message* menu,
 *Save as file*, *Keep on this computer*.
 *Done when* the roadmap's second criterion holds: a template is filled out,
 sent, and the response displayed.
 
-### Release
-
-**M4-8 · Release v0.10.0 "Workflow & Testing"** (S), after stage 3
-`README.md` features, `docs/ROADMAP.md`, the full API and configuration tables
-in `docs/PROJECT_OVERVIEW.md`, upgrade notes, version. Stages 4 and 5 follow
-as v0.10.x. `main` is usable after every package, so the team does not have to
-wait for the tag.
-
 ### Stage 4 — Several messages
 
 **M4-9 · Runs** (M)
-Several items and `repeat` in `POST /api/send`; the size limit and the hold
-on the run's messages; run status and cancel; the run bar; *Resend n
-filtered*; *Repeat* on a draft (which is why it follows M4-5).
+Several items and `repeat` in `POST /api/send`; the two run limits and the
+hold on the run's messages; run status and cancel; the run bar; *Resend n
+filtered*; *Repeat* on a draft (which is why it follows M4-6).
 *Done when* fifty filtered messages are resent in their original order over
 one connection, with progress, can be cancelled, and none is lost to eviction
 while the run is under way.
 
-**M4-10 · Import** (S–M, optional)
+**M4-10 · Import** (S–M)
 The frame splitter moved out of `handle_connection`; `POST /api/import`,
 streamed; *From a file* for framed files.
 *Done when* a file written by `/api/export` can be loaded and resent, and the
@@ -873,7 +962,18 @@ listener's tests in `tests/mllp_tcp.rs` pass unchanged.
 
 **M4-11 · Watch** (S, frontend only)
 The bell, title counter, sound, desktop notification where the browser allows
-it. Independent of the other packages once M4-2 is in.
+it (question Q1 in section 11). Independent of the other packages once M4-3
+is in.
+
+### Release
+
+**M4-12 · Release v1.0.0 "Workflow & Testing"** (S), after all packages
+`README.md` features, `docs/ROADMAP.md`, the full API and configuration tables
+in `docs/PROJECT_OVERVIEW.md`, upgrade notes, version. A major version says
+that the API and the configuration are meant to stay: the package also goes
+through both once more for anything that should be renamed before that
+promise is made (`received_at` and `source_addr` on a sent message are the
+known candidates).
 
 ### Done means, for every package
 
@@ -892,15 +992,16 @@ it. Independent of the other packages once M4-2 is in.
 | Layer | What is tested | Where |
 |---|---|---|
 | Wire | Response in one or many reads; delayed; never; connection closed; refused; not framed; larger than the limit; two messages on one connection; no wait after an ACK-type message | new `tests/send_tcp.rs`, fake receivers on `127.0.0.1:0` like `tests/mllp_tcp.rs` |
+| TLS | A trusted certificate; an unknown issuer; a wrong name; the unverified switch with and without `allow_unverified`; a plain server answered with TLS and the reverse; the same exchange inside TLS as outside | `tests/send_tcp.rs`, certificates in `tests/tls/` |
 | Round trip | Send to Harux's own `mllp::serve`: the sent message is stored before the received one; code `AA`; MSA-2 matches | `tests/send_tcp.rs` |
 | Bytes | Unchanged resend equals the received bytes for UTF-8, Latin-1 and an irreproducible payload; an override keeps every other byte; a pure-ASCII message declared `8859/1` leaves as Latin-1 after an override with `ü`; unmappable character refused | unit tests, `tests/send_tcp.rs` |
 | Compose | Field paths incl. MSH shift, custom delimiters, occurrences, new fields; placeholders and references; line ends. Refused: the start or end byte, a separator or line break in a value, field 0, MSH-1 and MSH-2, a field number above the limit, a changed list of segments | unit tests in `src/hl7/compose.rs` |
 | Fuzz | Mutated responses through the response reader, mutated text through override and placeholder code: no panic, an override is found again by the parser, and the built payload never contains a frame byte | `tests/fuzz_ingest.rs` or a sibling |
-| Policy and config | Allowed and refused destinations, ranges, names vs. addresses, an entry without a port; a typed address equal to a `confirm` target; a run to a `confirm` target; every invalid `[send]` value stops the start | `src/config.rs`, `tests/config_startup.rs`, `tests/web_api.rs` |
+| Limits and config | Any destination without `allowed_destinations`; allowed and refused ones with it (ranges, names vs. addresses, an entry without a port); `enabled = false`; the run limits; every invalid `[send]` and `[send.tls]` value stops the start | `src/config.rs`, `tests/config_startup.rs`, `tests/web_api.rs` |
 | Store | `delivery_updated` order and frame; no response text in a summary; a response above 64 KB is cut; bytes exact after a response, and it wakes eviction; eviction and clear with pending messages; a run still sends a message evicted after it began | `src/store.rs`, `tests/alloc_accounting.rs`, `tests/send_tcp.rs` |
 | API | Status codes of 5.8; origin guard on the new routes; `/api/parse` equals the detail JSON, and its positions point at the fields; a template ID with `..` or an encoded `/`; `429` from the permit; export direction | `tests/web_api.rs` (`MockConnectInfo` for the client address) |
 | Templates | Every built-in template parses without a warning once its placeholders are filled in | unit test |
-| Frontend | Sent rows and the skeleton; `delivery_updated` while a list loads and before the flush; no second row after a send; counters; direction filter and `canPrependOnly`; an open draft survives `cleared`, `evicted` and a reload; a space typed into a draft input; draft storage that fails; the watch matcher | `tests/js/*.test.mjs` |
+| Frontend | The target list: add, change, remove, a reload, storage that fails, a file that is not a list; *ask before sending* refuses a run; sent rows and the skeleton; `delivery_updated` while a list loads and before the flush; no second row after a send; counters; direction filter and `canPrependOnly`; an open draft survives `cleared`, `evicted` and a reload; a space typed into a draft input; draft storage that fails; the watch matcher | `tests/js/*.test.mjs` |
 
 Existing tests and declarations that change with the first package, so that
 nobody is surprised by them: the `AppState` literals in `tests/web_api.rs`
@@ -931,46 +1032,63 @@ detail header), `docs/ROADMAP.md`, `examples/harux-example.toml`,
 
 | Risk | What the plan does about it |
 |---|---|
+| A message goes where it should not (D2, D3) | Section 6: the target is always named, *ask before sending*, every send visible with its requester, and two settings for the administrator |
 | Sent messages crowd the list and the store | Direction filter, remembered per session; a run is limited in number and in size; sent messages are evicted like others. A replayed MDM is stored again — the cost of rule 1 |
 | A draft's attachment is gone when it is sent | The draft holds a reference, not the megabytes; if the original was evicted, the send is refused with that reason and the draft shows it. A bookmark keeps the original |
 | The editor grows into a framework | A textarea and inputs; the server parses; no syntax-highlighting editor, no editing below field level in this milestone |
 | Mojibake when sending | The byte-for-byte path for unchanged messages, an explicit encoding for drafts, refusal instead of replacement, tests with Latin-1 |
+| The TLS crates: build trouble on one platform, a larger binary, a wider audit surface | The package starts with the build on all three release targets, the binary size before and after, and `cargo audit`; alternatives are named in 5.10 |
+| The targets' certificates are not what the plan assumes | Question Q2 asks before the package starts; `ca_file` and the unverified switch cover a private CA and self-signed test systems |
 | A response arrives for a message that is gone | `set_delivery` on a missing entry is a logged no-op |
-| A slow or silent target | Timeouts on connect, write and response; cancel; the row shows `…` meanwhile |
+| A slow or silent target | Timeouts on connect, handshake, write and response; cancel; the row shows `…` meanwhile |
 | Two people send at once | Runs are independent connections; every row names its requester |
-| The scope grows (load tests, TLS, ACK rules, shared editing) | Section 12 |
+| A target list is lost with the browser profile | Save to and load from a file; a shared list comes with the announced rework |
+| The scope grows (load tests, ACK rules, shared editing, TLS for the listener) | Section 12 |
 
 ---
 
-## 11. Decisions for the owner
+## 11. Decisions
 
-The plan assumes the recommendation in each row.
+Taken by the owner on 2026-11-12. "Proposed" is what the first version of this
+plan recommended; where the decision differs, the plan was rewritten.
 
-| # | Question | Recommendation |
+| # | Question | Proposed | Decided |
+|---|---|---|---|
+| D1 | Sent messages in the shared list or in a separate outbox? | Shared list with a direction filter | **As proposed** |
+| D2 | Who defines where Harux may send? | Named targets and patterns in `harux.toml` | **Every user, for now:** a list of their own, made in a small menu. It will be reworked later. `harux.toml` keeps only a switch and an optional limit (4.2, 5.7, 6) |
+| D3 | May production systems be targets? | Yes, if the administrator lists them | **Yes** — it must be possible to test against them. *Ask before sending* is a mark each user sets (4.2) |
+| D4 | TLS for outgoing MLLP? | Not in this milestone | **Yes, it is needed.** In the milestone as M4-2 (5.10) |
+| D5 | Where do templates and drafts live? | Built-in set, a read-only directory, drafts in the browser | **As proposed** |
+| D6 | Loopback target on by default? | Yes | **Yes** |
+| D7 | How large may a run be? | 1,000 messages, a quarter of the store | **Set in `harux.toml`:** `send.max_run_messages`, `send.max_run_store_percent`, with those values as defaults |
+| D8 | Watch without desktop notifications on plain HTTP? | Yes | **Open** — the question was not clear; it is Q1 below |
+| D9 | Import in this milestone? | Optional | **Yes**, M4-10 |
+| D10 | One release at the end, or one per stage? | v0.10.0 after stage 3 | **One release at the end, as v1.0.0** |
+
+### Still open
+
+| # | Question | What the plan assumes until it is answered |
 |---|---|---|
-| D1 | Do sent messages appear in the shared list, or in a separate outbox? | **Shared list** with a direction filter. It is what makes diff, tags, search and "who sent this" work without new code, and it keeps send and result next to each other |
-| D2 | Who defines where Harux may send? | **`harux.toml`**: named targets, plus optional patterns within which users may type a `host:port`. No free entry |
-| D3 | May production systems be targets? | **Yes, if the administrator lists them**, with `confirm = true`: one message per request, never a run, and a question before each. Resending a lost message is a real task; forbidding it would move it to another tool |
-| D4 | TLS for outgoing MLLP? The 2026-05 notes say "yes, by default" | **Not in this milestone.** It needs a TLS crate (`tokio-rustls`) and certificate settings, and belongs with MLLP/S for the listener (Milestone 6). To decide: does any target in use require TLS today? |
-| D5 | Where do templates and drafts live? | **Built-in set, a read-only directory, drafts in the browser.** Nothing is saved on the server before Milestone 5 |
-| D6 | Is the loopback target on by default? | **Yes.** It reaches only Harux's own listener and makes the feature usable and testable without configuration |
-| D7 | How large may a run be? | **1,000 messages** by default and at most a quarter of `store.max_memory_mb`, every one stored. Larger load tests are a later feature |
-| D8 | Watch without desktop notifications on plain HTTP — acceptable? | **Yes**: title counter and sound everywhere, desktop notification behind HTTPS or on `localhost` |
-| D9 | Import (M4-10) in this milestone? | **Optional**, last. Useful until persistence exists; it moves the frame splitter out of the listener's connection loop, which is the reason to decide it separately |
-| D10 | One release at the end, or one per stage? | **`main` is usable after every package; tag v0.10.0 after stage 3**, v0.10.x for stages 4 and 5 (v0.9.0 is the hardening release) |
+| Q1 | **Watch (was D8).** A browser shows its own notification window only for pages opened over HTTPS or on `localhost`; for `http://server:8080` it refuses. Harux can always count in the tab's title (`(3) Harux`) and play a sound. Is that enough, or must the notification window work, which means putting the web UI behind HTTPS? | Title counter and sound everywhere; the notification window where the browser allows it. Nothing else in the milestone depends on it |
+| Q2 | **The targets' certificates.** Are they issued by a CA that is in the Windows certificate store of the Harux server, by a private CA (then `ca_file`), or self-signed (then the unverified switch)? And does any target ask the sender for a certificate of its own (mutual TLS)? | The store plus `ca_file`; unverified connections off unless switched on; no client certificate. Mutual TLS would be an addition to M4-2 |
+| Q3 | **Sending on or off after an update.** With D2 every user of the web UI can send anywhere the server reaches. Planned: on by default (`send.enabled = true`), as the decision implies. The cautious alternative is off until the administrator sets it once — one line in `harux.toml`, and other installations of Harux are not surprised by the update | On by default |
 
 ---
 
 ## 12. Not in this milestone
 
-- **TLS** for outgoing connections (D4).
+- **TLS for the listener** (MLLP/S) — Milestone 6; it can use the library M4-2
+  brings. **Client certificates** for outgoing connections, unless Q2 says
+  they are needed.
+- **A shared list of targets** for the team, and any management of targets
+  on the server — the rework the owner announced with D2.
 - **ACK rules** — answering `AE`/`AR` or nothing on purpose, to test
   Orchestra's retry. It is a testing feature and a natural next step, but it
   changes how Harux receives and needs its own design. It stays in
   Milestone 6.
-- **Saving on the server:** shared templates edited in the UI, saved targets,
-  drafts for the team — Milestone 5.
-- **Load tests** beyond the run limit, replay with the original timing.
+- **Saving on the server:** shared templates edited in the UI, drafts for the
+  team — Milestone 5.
+- **Load tests** beyond the run limits, replay with the original timing.
 - **Anonymizing** messages before sending them to another system.
 - **Editing components and sub-components** in a form; HL7 batch files
   (FHS/BHS); a syntax-highlighting editor.
@@ -984,10 +1102,10 @@ The plan assumes the recommendation in each row.
 |---|---|---|
 | Replay drawer, generator page, editor overlay | One draft in the detail panel, resend from the header | One model instead of three surfaces (section 2) |
 | Replay result "tagged in the inbox" on request | Every sent message is a stored message | Rule 1; diff and search work on sent messages for free |
-| `[targets.*]` with `tls` and `default` | `[[send.targets]]` with `confirm`, plus `allowed_destinations` | Safety first; the "default" is the target each browser used last |
+| `[targets.*]` in `harux.toml`, with `default` | A list per user in the browser; the "default" is the target that browser used last | The owner's decision D2 |
+| Target TLS on by default | TLS for outgoing connections, on for a new target | The owner's decision D4, as in 2026-05 |
 | Health check: connect to every target every 30 s | Last result of a real send | No traffic nobody asked for; some receivers log every connection |
 | CodeMirror 6 | `<textarea>`, inputs, server-side parse | No framework, no build step |
 | Server-sent events for bursts | Rows over the existing WebSocket, totals by polling the run | One live channel |
 | Faker data, front-matter in template files | A handful of placeholders in the text | Visible and predictable |
 | Rule engine for notifications on the server | Watch in the browser | Per-user, no server state |
-| Target TLS on by default | Not in this milestone | New crate; open decision D4 |
