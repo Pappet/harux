@@ -1,6 +1,6 @@
 use crate::config::MllpConfig;
 use crate::hl7::charset::{decode_payload, DecodedPayload};
-use crate::hl7::parser::{build_ack, build_nack, build_reject, parse_message};
+use crate::hl7::parser::{build_ack, build_nack, build_reject, parse_message, AckError};
 use crate::hl7::types::{Hl7Message, WireForm};
 use crate::store::MessageStore;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -355,10 +355,16 @@ async fn process_frame(
     let reply = if let Some(e) = &msg.parse_error {
         stats.parse_errors.fetch_add(1, Ordering::Relaxed);
         warn!("Parse error from {}: {}", peer, e);
-        // NACK (AE = Application Error) with the actual reason, so the
-        // sender's log says what was wrong without opening Harux (#218).
-        // `render_ack` escapes it and caps it at MAX_ACK_TEXT_CHARS.
-        let nack = build_nack(&format!("Message parse error: {e}"));
+        // NACK (AE = Application Error) with the actual reason in MSA-3 and
+        // an ERR segment, so the sender's log says what was wrong without
+        // opening Harux (#218). A parser panic is Harux's fault (207), any
+        // other parse error a structure the message doesn't have (100).
+        let error = if e.starts_with("Internal error") {
+            AckError::InternalError
+        } else {
+            AckError::SegmentSequence
+        };
+        let nack = build_nack(error, &format!("Message parse error: {e}"));
         msg.ack_response = Some(nack.clone());
         msg.ack_code = Some("AE".to_string());
         Some(nack)

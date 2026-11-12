@@ -173,10 +173,19 @@ async fn unparseable_frame_gets_nack_and_is_stored() {
     s.write_all(&frame(b"NOT HL7 AT ALL")).await.unwrap();
     let reply = read_reply(&mut s).await.expect("NACK");
     assert!(msa(&reply).starts_with("MSA|AE|UNKNOWN"), "{reply}");
-    // #218: MSA-3 carries the parser's reason, not only a generic text.
+    // #218: MSA-3 and an ERR segment carry the parser's reason, not only a
+    // generic text.
     assert!(
         msa(&reply).contains("Message parse error: Message does not start with MSH"),
         "{reply}"
+    );
+    let err = reply
+        .split('\r')
+        .find(|seg| seg.starts_with("ERR"))
+        .expect("NACK has an ERR segment");
+    assert!(
+        err.starts_with("ERR|||100^Segment sequence error^HL70357|E||||Message parse error: "),
+        "{err}"
     );
     let stored = summaries(&srv.store).await;
     assert_eq!(stored.len(), 1);
@@ -268,6 +277,12 @@ async fn oversize_frame_is_rejected_visibly_and_connection_survives() {
     for expected in ["MSA|AR|BIG1", "MSA|AR|BIG2", "MSA|AA|SMALL"] {
         let reply = read_reply(&mut s).await.expect(expected);
         assert!(msa(&reply).starts_with(expected), "{reply}");
+        // A reject carries ERR 207 (#218); an ACK has no ERR.
+        assert_eq!(
+            reply.contains("\rERR|||207^Application internal error^HL70357|E"),
+            expected.contains("|AR|"),
+            "{reply}"
+        );
     }
 
     let stored = summaries(&srv.store).await;
