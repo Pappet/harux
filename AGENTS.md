@@ -100,7 +100,7 @@ Harux is an MLLP server with a real-time web UI for inspecting HL7 v2.x messages
 
 2. **Web Server** (`web.rs`) — Axum HTTP server serving a REST API and WebSocket endpoint. The SPA frontend (`static/`) is embedded in the binary via `rust-embed`.
 
-**Shared state** flows through `MessageStore` (`store.rs`) — an `Arc<RwLock<>>` in-memory store with a `tokio::sync::broadcast` channel that pushes new messages to WebSocket subscribers in real-time. Every `StoreEvent` is sent **while the write lock is held** (`insert`, `mutate_meta`, `evict_now`, `clear`), so the order on the channel is the order in which the store changed (#232) — don't move a `tx.send` after the lock is released.
+**Shared state** flows through `MessageStore` (`store.rs`) — an `Arc<RwLock<>>` in-memory store with a `tokio::sync::broadcast` channel that pushes new messages to WebSocket subscribers in real-time. Every `StoreEvent` is sent **while the write lock is held** (`insert`, `mutate_meta`, `evict_now`, `clear`), so the order on the channel is the order in which the store changed (#232) — don't move a `tx.send` after the lock is released. The channel carries `SharedEvent` = `Arc<EventFrame>`: the event plus its WebSocket JSON, rendered once by the first subscriber through `EventFrame::cached_json(ws_event_json)` and reused by every other connected browser (#196). The wire format lives in `ws_event_json` (`src/web.rs`) only.
 
 ### Store Capacity & Eviction
 

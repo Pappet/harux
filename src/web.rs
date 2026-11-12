@@ -562,19 +562,31 @@ async fn ws_handler(ws: WebSocketUpgrade, State(state): State<AppState>) -> impl
     ws.on_upgrade(move |socket| handle_ws(socket, state))
 }
 
-async fn send_ws_event(
-    socket: &mut WebSocket,
-    event_type: &str,
-    data: Option<&impl serde::Serialize>,
-) -> bool {
-    let payload = match data {
-        Some(d) => serde_json::json!({"type": event_type, "data": d}),
-        None => serde_json::json!({"type": event_type}),
-    };
-    socket
-        .send(Message::Text(payload.to_string().into()))
-        .await
-        .is_ok()
+/// A WebSocket event frame: `{"type": …, "data": …}`, `data` omitted when
+/// there is none.
+#[derive(serde::Serialize)]
+struct WsFrame<'a, T: serde::Serialize> {
+    #[serde(rename = "type")]
+    kind: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    data: Option<&'a T>,
+}
+
+fn frame_json<T: serde::Serialize>(kind: &str, data: Option<&T>) -> String {
+    serde_json::to_string(&WsFrame { kind, data }).expect("event frames serialize")
+}
+
+/// The wire format of a store event. Rendered once per event for all
+/// subscribers through [`crate::store::EventFrame::cached_json`] (#196),
+/// directly into a string instead of via a `serde_json::Value` tree.
+pub fn ws_event_json(event: &StoreEvent) -> String {
+    match event {
+        StoreEvent::NewMessage(s) => frame_json("new_message", Some(&**s)),
+        StoreEvent::TagsUpdated(s) => frame_json("tags_updated", Some(&**s)),
+        StoreEvent::BookmarkToggled(s) => frame_json("bookmark_toggled", Some(&**s)),
+        StoreEvent::Evicted(ids) => frame_json("evicted", Some(&**ids)),
+        StoreEvent::Cleared => frame_json::<()>("cleared", None),
+    }
 }
 
 async fn handle_ws(mut socket: WebSocket, state: AppState) {
@@ -595,28 +607,11 @@ async fn handle_ws(mut socket: WebSocket, state: AppState) {
         tokio::select! {
             result = rx.recv() => {
                 match result {
-                    Ok(StoreEvent::NewMessage(summary)) => {
-                        if !send_ws_event(&mut socket, "new_message", Some(&*summary)).await {
-                            break;
-                        }
-                    }
-                    Ok(StoreEvent::TagsUpdated(summary)) => {
-                        if !send_ws_event(&mut socket, "tags_updated", Some(&*summary)).await {
-                            break;
-                        }
-                    }
-                    Ok(StoreEvent::BookmarkToggled(summary)) => {
-                        if !send_ws_event(&mut socket, "bookmark_toggled", Some(&*summary)).await {
-                            break;
-                        }
-                    }
-                    Ok(StoreEvent::Evicted(ids)) => {
-                        if !send_ws_event(&mut socket, "evicted", Some(&*ids)).await {
-                            break;
-                        }
-                    }
-                    Ok(StoreEvent::Cleared) => {
-                        if !send_ws_event(&mut socket, "cleared", None::<&()>).await {
+                    Ok(frame) => {
+                        // Rendered by the first subscriber, reused by the
+                        // rest (#196); only the bytes are copied per socket.
+                        let json = frame.cached_json(ws_event_json);
+                        if socket.send(Message::Text(json.into())).await.is_err() {
                             break;
                         }
                     }
@@ -684,5 +679,51 @@ async fn static_handler(uri: axum::http::Uri) -> impl IntoResponse {
                 None => (StatusCode::NOT_FOUND, "Not found").into_response(),
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod ws_tests {
+    use super::*;
+    use crate::config::StoreConfig;
+    use crate::hl7::parser::parse_message;
+
+    /// #196: the frames keep the shape the UI reads (`static/ws.js`):
+    /// `type` plus `data` (a summary, or the evicted IDs), no `data` for
+    /// `cleared`.
+    #[tokio::test]
+    async fn ws_event_json_keeps_the_wire_format() {
+        let store = MessageStore::new(StoreConfig::default());
+        let mut rx = store.subscribe();
+        let msg = parse_message(
+            "MSH|^~\\&|A|FAC|R|RF|20240101||ADT^A01|C1|P|2.5\rPID|||1||Muster^Max",
+            "127.0.0.1:1",
+        )
+        .unwrap();
+        let id = msg.id.clone();
+        store.insert(msg).await;
+        store.add_tag(&id, "Bug 1".into()).await;
+        store.toggle_bookmark(&id).await;
+        store.clear().await;
+
+        let mut frames = Vec::new();
+        while let Ok(frame) = rx.try_recv() {
+            let json: serde_json::Value =
+                serde_json::from_str(frame.cached_json(ws_event_json)).unwrap();
+            frames.push(json);
+        }
+        let types: Vec<_> = frames.iter().map(|f| f["type"].as_str().unwrap()).collect();
+        assert_eq!(
+            types,
+            ["new_message", "tags_updated", "bookmark_toggled", "cleared"]
+        );
+        assert_eq!(frames[0]["data"]["id"], id.as_str());
+        assert_eq!(frames[0]["data"]["message_type"], "ADT^A01");
+        assert_eq!(frames[1]["data"]["tags"], serde_json::json!(["Bug 1"]));
+        assert_eq!(frames[2]["data"]["bookmarked"], true);
+        assert!(frames[3].get("data").is_none(), "cleared has no data");
+
+        let evicted = ws_event_json(&StoreEvent::Evicted(Arc::new(vec!["a".into(), "b".into()])));
+        assert_eq!(evicted, r#"{"type":"evicted","data":["a","b"]}"#);
     }
 }

@@ -41,11 +41,40 @@ pub enum StoreEvent {
     Cleared,
 }
 
+/// What the broadcast channel carries: a [`StoreEvent`] plus its WebSocket
+/// frame, rendered **once** for all subscribers (#196). Before, every
+/// connected browser's task serialized the same summary itself, so N viewers
+/// meant N identical JSON strings per message. The first subscriber to send
+/// renders it via [`EventFrame::cached_json`]; the others reuse the text. The
+/// wire format stays in `web.rs`, which passes the renderer.
+pub struct EventFrame {
+    pub event: StoreEvent,
+    json: std::sync::OnceLock<String>,
+}
+
+impl EventFrame {
+    fn new(event: StoreEvent) -> Arc<Self> {
+        Arc::new(Self {
+            event,
+            json: std::sync::OnceLock::new(),
+        })
+    }
+
+    /// The rendered frame: `render` runs on the first call only, every later
+    /// call (from any subscriber) returns the same text.
+    pub fn cached_json(&self, render: impl FnOnce(&StoreEvent) -> String) -> &str {
+        self.json.get_or_init(|| render(&self.event))
+    }
+}
+
+/// One broadcast item, shared by all subscribers.
+pub type SharedEvent = Arc<EventFrame>;
+
 /// Thread-safe in-memory message store with broadcast notifications
 #[derive(Clone)]
 pub struct MessageStore {
     inner: Arc<RwLock<StoreInner>>,
-    tx: broadcast::Sender<StoreEvent>,
+    tx: broadcast::Sender<SharedEvent>,
     eviction_notify: Arc<tokio::sync::Notify>,
     eviction_flag: Arc<std::sync::atomic::AtomicBool>,
 }
@@ -322,7 +351,9 @@ impl MessageStore {
         // changed. Sent after the lock is released, an eviction of
         // this very message could reach subscribers before `NewMessage`.
         // `send` never blocks. No receivers is not an error.
-        let _ = self.tx.send(StoreEvent::NewMessage(Box::new(summary)));
+        let _ = self
+            .tx
+            .send(EventFrame::new(StoreEvent::NewMessage(Box::new(summary))));
         drop(inner);
 
         if needs_eviction
@@ -340,7 +371,7 @@ impl MessageStore {
     }
 
     /// Get a broadcast receiver for real-time updates
-    pub fn subscribe(&self) -> broadcast::Receiver<StoreEvent> {
+    pub fn subscribe(&self) -> broadcast::Receiver<SharedEvent> {
         self.tx.subscribe()
     }
 
@@ -503,7 +534,7 @@ impl MessageStore {
         }
 
         // Moved into the event — nothing else needs it (no clone under the lock).
-        let _ = self.tx.send(event(Box::new(summary)));
+        let _ = self.tx.send(EventFrame::new(event(Box::new(summary))));
         true
     }
 
@@ -567,7 +598,7 @@ impl MessageStore {
         inner.bookmark_count = 0;
         inner.bookmark_bytes = 0;
         info!("Message store cleared");
-        let _ = self.tx.send(StoreEvent::Cleared);
+        let _ = self.tx.send(EventFrame::new(StoreEvent::Cleared));
     }
 
     async fn run_eviction_loop(self) {
@@ -596,9 +627,9 @@ impl MessageStore {
         if !outcome.ids.is_empty() {
             // Sent under the write lock (same pattern as `clear`) so subscribers
             // see the eviction before any later insert/mutation event.
-            let _ = self
-                .tx
-                .send(StoreEvent::Evicted(Arc::new(outcome.ids.clone())));
+            let _ = self.tx.send(EventFrame::new(StoreEvent::Evicted(Arc::new(
+                outcome.ids.clone(),
+            ))));
         }
         if outcome.evicted + outcome.evicted_bookmarks > 0 {
             info!(
@@ -640,6 +671,38 @@ mod tests {
         let mut msg = Hl7Message::new_empty(format!("raw-{id}"), "127.0.0.1:5000".into());
         msg.id = id.to_string();
         msg
+    }
+
+    /// #196: all subscribers share one rendered frame per event — the
+    /// renderer runs once, and every subscriber gets the same text.
+    #[tokio::test]
+    async fn test_event_frame_is_rendered_once_for_all_subscribers() {
+        let store = manual_store(100, 512);
+        let (mut a, mut b, mut c) = (store.subscribe(), store.subscribe(), store.subscribe());
+        store.insert(make_msg("m")).await;
+        let renders = std::sync::atomic::AtomicUsize::new(0);
+        let render = |e: &StoreEvent| {
+            renders.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            match e {
+                StoreEvent::NewMessage(s) => format!("new {}", s.id),
+                _ => "other".into(),
+            }
+        };
+        let (fa, fb, fc) = (
+            a.recv().await.unwrap(),
+            b.recv().await.unwrap(),
+            c.recv().await.unwrap(),
+        );
+        let ta = fa.cached_json(render).to_string();
+        let tb = fb.cached_json(render);
+        let tc = fc.cached_json(render);
+        assert_eq!(renders.load(std::sync::atomic::Ordering::SeqCst), 1);
+        assert_eq!(ta, "new m");
+        assert!(
+            std::ptr::eq(tb, tc),
+            "one shared string, not a copy per subscriber"
+        );
+        assert!(Arc::ptr_eq(&fa, &fb), "one frame per event");
     }
 
     /// Message whose raw payload is `kb` KiB — dominates `estimated_bytes()`.
@@ -755,7 +818,7 @@ mod tests {
         store.toggle_bookmark("b").await;
 
         let event = rx.recv().await.unwrap();
-        match event {
+        match &event.event {
             StoreEvent::BookmarkToggled(summary) => {
                 assert_eq!(summary.id, "b");
                 assert!(summary.bookmarked);
@@ -906,9 +969,9 @@ mod tests {
         assert_eq!(outcome.evicted, 1);
         assert_eq!(store.count().await, 9);
 
-        match rx.recv().await.unwrap() {
+        match &rx.recv().await.unwrap().event {
             StoreEvent::Evicted(ids) => {
-                assert_eq!(*ids, ["msg-0", "msg-6"]);
+                assert_eq!(**ids, ["msg-0", "msg-6"]);
             }
             _ => panic!("Expected Evicted event"),
         }
@@ -1106,7 +1169,7 @@ mod tests {
             b.await.unwrap();
             let mut last = None;
             while let Ok(ev) = rx.try_recv() {
-                if let StoreEvent::TagsUpdated(s) = ev {
+                if let StoreEvent::TagsUpdated(s) = &ev.event {
                     last = Some(s.tags.clone());
                 }
             }
@@ -1136,7 +1199,7 @@ mod tests {
             store.wait_until_within_limits().await;
             let mut order = Vec::new();
             while let Ok(ev) = rx.try_recv() {
-                match ev {
+                match ev.event {
                     StoreEvent::NewMessage(_) => order.push('N'),
                     StoreEvent::Evicted(_) => order.push('E'),
                     _ => {}
