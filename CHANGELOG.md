@@ -9,7 +9,11 @@ and this project follows [Semantic Versioning](https://semver.org/lang/en/).
 
 ## [Unreleased]
 
-> Hardens Harux against what it receives and who talks to it: no MLLP frame is lost silently any more (every frame is stored and answered, shutdown waits for frames in flight), the web UI refuses requests made by other sites, `store.max_memory_mb` now bounds real memory instead of an estimate a tenth of it, and the diff and validation no longer report correct or different messages wrongly.
+---
+
+## [0.9.0] – 2026-11-12 – Reliability & Security Hardening
+
+> The fixes from the v0.8.0 review (#222–#250). Hardens Harux against what it receives and who talks to it: no MLLP frame is lost silently any more (every frame is stored and answered, shutdown waits for frames in flight), the web UI refuses requests made by other sites, `store.max_memory_mb` now bounds real memory instead of an estimate a tenth of it, and the diff and validation no longer report correct or different messages wrongly.
 
 ### Upgrade Notes
 - **Harux no longer starts with an invalid `harux.toml`.** Unknown keys (e.g. the `max_size_mb` logging key removed in 0.5) and out-of-range values were silently ignored before; check the error message on the first start after the update. (#233)
@@ -17,6 +21,17 @@ and this project follows [Semantic Versioning](https://semver.org/lang/en/).
 - **Stricter DT/TS validation can add `INVALID_DATATYPE` warnings to traffic that was clean before.** Timestamps must now have 4/6/8/10/12/14 digits, a fraction of 1–4 digits only after the seconds and an offset of exactly `+/-HHMM` on at least a full date; dates must exist. Senders that emit e.g. `+05`, a 5-digit fraction or `2024+0100` will show the warning after the update. This changes only the validation badge: such messages are still stored and ACK'd as before. Check the message list after deploying. (#238)
 - **Daily log files are now pruned: only the last 14 are kept** (`logging.max_files`, today's file included). Before, they were never deleted. Set `max_files = 0` to keep all of them, e.g. if another tool archives the directory. Only files named exactly `<file>.YYYY-MM-DD` are ever deleted. A `max_files` key left over from before 0.5 is accepted again with this meaning. (#240)
 - If users open the UI by DNS name (e.g. `http://harux.klinik.local:8080`), add that name to `server.allowed_hosts` in `harux.toml`; otherwise the browser gets `403 Host not allowed`. IP addresses and `localhost` always work. (#227)
+- **ACK/NACK wire changes** (#218, #223, #266):
+  - A NACK now carries `Message parse error: <reason>` in MSA-3, cut to 80 characters, **and** an ERR segment (ERR-3 `100` or `207` from HL7 table 0357, ERR-4 `E`, ERR-8 the reason). Before, MSA-3 was a fixed `Message parse error` and there was no ERR.
+  - A frame above `mllp.max_message_size_mb` is answered with `AR` and the connection stays open. Before, the connection was closed without a reply.
+  - Replies are encoded in the sender's charset and declare its MSH-18. Before, they were always UTF-8 without MSH-18.
+  - A message is stored before its ACK is written.
+  - Receivers that parse NACKs strictly, or expect UTF-8 replies from a Latin-1 interface, should be checked.
+- **A letter or digit as an HL7 delimiter is now a parse error** and gets a NACK instead of an ACK. Only senders that negotiated such delimiters are affected. (#243)
+- **`GET /api/export` returns the bytes as received.** A Latin-1 message is exported in Latin-1 (not converted to UTF-8), and the final segment terminator is kept. Tools that read the export as UTF-8 text should be checked. (#230)
+- **`GET /api/search` uses the UI filter's semantics** (`has:warnings`/`has:errors`, tags, Unicode case folding), so a REST client can get different hits than before. New query parameters: `before=` on `/api/messages` and `/api/search`, `include_bookmarks=` on `/api/messages`. `before` combined with `offset` or `include_bookmarks` gives `400`. (#197, #198, #231)
+- **New optional configuration keys:** `server.mllp_bind`, `server.web_bind`, `server.allowed_hosts`, `logging.max_files`. All of them are listed in `examples/harux-example.toml`. Only `logging.max_files` changes behaviour by default (see above).
+- **Dependencies updated:** `toml` 0.8 → 1.2, `tower` 0.4 → 0.5, plus minor/patch updates of axum, serde, chrono, uuid, encoding_rs and others (Dependabot, #262–#264). No behaviour change is expected.
 
 ### Security
 - **tokio 1.54.1 and anyhow 1.0.104** — `cargo audit` flagged tokio 1.49.0 (RUSTSEC-2026-0386, `AsyncFd` constructors violate I/O safety) and anyhow 1.0.102 (RUSTSEC-2026-0190, `Error::downcast_mut`) as unsound. Harux calls neither API; both are semver-compatible updates (`cargo update -p tokio -p anyhow`). The remaining warning, `pin-utils` (unmaintained, via hyper), has no fixed release and is ignored with a reason in `.cargo/audit.toml`. (#244)
@@ -435,7 +450,8 @@ and this project follows [Semantic Versioning](https://semver.org/lang/en/).
 
 ---
 
-[Unreleased]: https://github.com/Pappet/harux/compare/v0.8.0...HEAD
+[Unreleased]: https://github.com/Pappet/harux/compare/v0.9.0...HEAD
+[0.9.0]: https://github.com/Pappet/harux/compare/v0.8.0...v0.9.0
 [0.8.0]: https://github.com/Pappet/harux/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/Pappet/harux/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/Pappet/harux/compare/v0.5.0...v0.6.0

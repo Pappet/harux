@@ -7,7 +7,7 @@ Harux is a high-performance MLLP server with a real-time web UI for inspecting H
 ## Project Status
 
 - **Language:** Rust
-- **Latest Release:** v0.8.0 — HL7 Conformance (audit Phases 0–3); the `[Unreleased]` section of the [changelog](../CHANGELOG.md) holds the hardening work since then
+- **Latest Release:** v0.9.0 — Reliability & Security Hardening (audit Phases 0–3, v0.8.0 review); the `[Unreleased]` section of the [changelog](../CHANGELOG.md) holds the hardening work since then
 - **Scope today:** receive and inspect (Milestones 0–3). Sending, editing and replay (Milestone 4) and persistence (Milestone 5) are planned — see the [roadmap](ROADMAP.md)
 
 ---
