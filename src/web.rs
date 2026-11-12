@@ -306,6 +306,9 @@ pub fn create_router(state: AppState) -> Router {
 struct ListParams {
     offset: Option<usize>,
     limit: Option<usize>,
+    /// Page through older history (#198): messages older than this ID,
+    /// newest first. Replaces `offset`, which shifts as messages arrive.
+    before: Option<String>,
     /// Also return every bookmarked message older than the page (#231).
     /// `true`, `1` and `yes` turn it on, so hand-written requests work too.
     include_bookmarks: Option<String>,
@@ -317,6 +320,9 @@ async fn list_messages(
 ) -> impl IntoResponse {
     let offset = params.offset.unwrap_or(0);
     let limit = params.limit.unwrap_or(100).min(1000);
+    if let Some(before) = params.before.as_deref() {
+        return Json(state.store.older_than(Some(before), None, limit).await);
+    }
     let include_bookmarks = matches!(
         params
             .include_bookmarks
@@ -349,6 +355,9 @@ async fn get_message(State(state): State<AppState>, Path(id): Path<String>) -> i
 struct SearchParams {
     q: String,
     limit: Option<usize>,
+    /// Only messages older than this ID (#197): the UI searches the part of
+    /// the store it hasn't loaded, continuing from its last hit.
+    before: Option<String>,
 }
 
 async fn search_messages(
@@ -356,7 +365,11 @@ async fn search_messages(
     Query(params): Query<SearchParams>,
 ) -> impl IntoResponse {
     let limit = params.limit.unwrap_or(100).min(1000);
-    let results = state.store.search(&params.q, limit).await;
+    let query = crate::store::SearchQuery::parse(&params.q);
+    let results = state
+        .store
+        .older_than(params.before.as_deref(), Some(&query), limit)
+        .await;
     Json(results)
 }
 

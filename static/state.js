@@ -61,6 +61,15 @@ const state = {
     loadQueue: [],
     loadSeq: 0,
 
+    // Older history (#198, #197): pages fetched by "Load older" / "Search
+    // older on the server" raise the client cap by `olderLoaded`, so new
+    // live messages don't trim them away at once. `serverSearch` continues a
+    // server search below its last hit while the query stays the same.
+    // All reset on a (re)load and on clear.
+    olderLoaded: 0,
+    olderLoading: false,
+    serverSearch: { query: '', cursor: null, done: false },
+
     // Async request sequencing (#183): each selectMessage / toggleDiffPin
     // call takes a new number; a response is applied only if no newer call
     // started meanwhile, so a slow response can't overwrite a newer choice.

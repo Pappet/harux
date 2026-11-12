@@ -29,6 +29,71 @@ fn contains_ignore_ascii_case(haystack: &str, needle: &str) -> bool {
     haystack.to_lowercase().contains(&needle.to_lowercase())
 }
 
+/// A search query as the UI writes it — parsed like `getParsedQuery` in
+/// `static/util.js`, and matched like `matchesSearch` in `static/render.js`,
+/// so a server search finds what the client filter shows (#197): an optional
+/// `has:warnings` / `has:errors` prefix, then a case-insensitive substring of
+/// the patient name or ID, message type, facility, control ID, source
+/// address or a tag.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SearchQuery {
+    text: String,
+    has_warnings: bool,
+    has_errors: bool,
+}
+
+impl SearchQuery {
+    pub fn parse(query: &str) -> Self {
+        let lower = query.trim().to_lowercase();
+        let (rest, has_warnings, has_errors) = if let Some(r) = lower.strip_prefix("has:warnings") {
+            (r, true, false)
+        } else if let Some(r) = lower.strip_prefix("has:errors") {
+            (r, false, true)
+        } else {
+            (lower.as_str(), false, false)
+        };
+        Self {
+            text: rest.trim().to_string(),
+            has_warnings,
+            has_errors,
+        }
+    }
+
+    fn matches(&self, entry: &StoredEntry) -> bool {
+        let m = &entry.message;
+        let segment_errors = || {
+            m.validation_warnings
+                .iter()
+                .any(|w| w.code == "MISSING_SEGMENT")
+        };
+        if self.has_warnings && m.validation_warnings.is_empty() && !segment_errors() {
+            return false;
+        }
+        if self.has_errors && !segment_errors() {
+            return false;
+        }
+        let q = self.text.as_str();
+        if q.is_empty() {
+            return true;
+        }
+        let opt = |v: &Option<String>| {
+            v.as_deref()
+                .is_some_and(|v| contains_ignore_ascii_case(v, q))
+        };
+        opt(&m.patient_name)
+            || contains_ignore_ascii_case(&m.message_type, q)
+            || contains_ignore_ascii_case(&m.sending_facility, q)
+            || opt(&m.patient_id)
+            || contains_ignore_ascii_case(&m.message_control_id, q)
+            || contains_ignore_ascii_case(&m.source_addr, q)
+            || entry
+                .meta
+                .tags
+                .iter()
+                .any(|t| contains_ignore_ascii_case(t, q))
+    }
+}
+
 #[derive(Clone)]
 #[allow(clippy::large_enum_variant)]
 pub enum StoreEvent {
@@ -450,27 +515,33 @@ impl MessageStore {
             .collect()
     }
 
-    /// Search messages by filter text (matches message type, patient name, facility, etc.)
-    pub async fn search(&self, query: &str, limit: usize) -> Vec<Hl7MessageSummary> {
+    /// Up to `limit` messages matching `query` (all of them if `None`),
+    /// newest first, starting below `before`: only messages older than the
+    /// one with that ID (#197, #198). A cursor instead of an offset, because
+    /// new messages arriving between two requests shift every offset. An
+    /// unknown `before` (evicted meanwhile — and with it everything older
+    /// that isn't a bookmark) gives an empty page rather than restarting
+    /// from the newest.
+    pub async fn older_than(
+        &self,
+        before: Option<&str>,
+        query: Option<&SearchQuery>,
+        limit: usize,
+    ) -> Vec<Hl7MessageSummary> {
         let inner = self.inner.read().await;
+        let end = match before {
+            Some(id) => match inner.order.iter().rposition(|o| o == id) {
+                Some(pos) => pos,
+                None => return Vec::new(),
+            },
+            None => inner.order.len(),
+        };
         inner
             .order
-            .iter()
-            .rev()
+            .range(..end)
+            .rev() // newest first
             .filter_map(|id| inner.messages.get(id))
-            .filter(|e| {
-                let m = &e.message;
-                contains_ignore_ascii_case(&m.message_type, query)
-                    || contains_ignore_ascii_case(&m.sending_facility, query)
-                    || m.patient_name
-                        .as_deref()
-                        .is_some_and(|n| contains_ignore_ascii_case(n, query))
-                    || m.patient_id
-                        .as_deref()
-                        .is_some_and(|n| contains_ignore_ascii_case(n, query))
-                    || contains_ignore_ascii_case(&m.message_control_id, query)
-                    || contains_ignore_ascii_case(&m.source_addr, query)
-            })
+            .filter(|e| query.is_none_or(|q| q.matches(e)))
             .take(limit)
             .map(|e| Hl7MessageSummary::new(&e.message, &e.meta))
             .collect()

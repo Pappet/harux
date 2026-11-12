@@ -746,3 +746,109 @@ async fn list_messages_can_include_older_bookmarks() {
         ["m4", "m3"]
     );
 }
+
+// ── #197 / #198: cursor paging and search like the UI filter ─────────────────
+
+async fn get_json(state: &AppState, uri: &str) -> serde_json::Value {
+    let res = create_router(state.clone())
+        .oneshot(Request::builder().uri(uri).body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK, "{uri}");
+    serde_json::from_slice(&collect_body(res.into_body()).await).unwrap()
+}
+
+fn ids(json: &serde_json::Value) -> Vec<String> {
+    json.as_array()
+        .unwrap()
+        .iter()
+        .map(|m| m["id"].as_str().unwrap().to_string())
+        .collect()
+}
+
+/// Five messages m0 (oldest) … m4 (newest); m1 tagged, m3 with a missing
+/// segment, m2 with a patient name that needs Unicode case folding.
+async fn history_state() -> AppState {
+    let state = make_state();
+    for i in 0..5 {
+        let mut msg = Hl7Message::new_empty(simple_raw(), "127.0.0.1".to_string());
+        msg.id = format!("m{i}");
+        msg.message_type = if i % 2 == 0 { "ADT^A01" } else { "ORU^R01" }.to_string();
+        if i == 2 {
+            msg.patient_name = Some("Müller, Jörg".to_string());
+        }
+        if i == 3 {
+            msg.validation_warnings
+                .push(harux::validation::ValidationWarning {
+                    code: "MISSING_SEGMENT".into(),
+                    message: "PV1 missing".into(),
+                    segment: "PV1".into(),
+                    field: None,
+                });
+        }
+        state.store.insert(msg).await;
+    }
+    state.store.add_tag("m1", "Bug 1234".into()).await;
+    state
+}
+
+#[tokio::test]
+async fn messages_before_a_cursor_page_through_older_history() {
+    let state = history_state().await;
+    assert_eq!(
+        ids(&get_json(&state, "/api/messages?limit=2").await),
+        ["m4", "m3"]
+    );
+    // The next page continues below the oldest message of the last one —
+    // unaffected by messages that arrive in between.
+    let mut late = Hl7Message::new_empty(simple_raw(), "127.0.0.1".to_string());
+    late.id = "late".into();
+    state.store.insert(late).await;
+    assert_eq!(
+        ids(&get_json(&state, "/api/messages?before=m3&limit=2").await),
+        ["m2", "m1"]
+    );
+    assert_eq!(
+        ids(&get_json(&state, "/api/messages?before=m1&limit=2").await),
+        ["m0"]
+    );
+    assert_eq!(
+        ids(&get_json(&state, "/api/messages?before=m0&limit=2").await),
+        Vec::<String>::new()
+    );
+    // An unknown (evicted) cursor gives nothing, not the newest page again.
+    assert_eq!(
+        ids(&get_json(&state, "/api/messages?before=gone&limit=2").await),
+        Vec::<String>::new()
+    );
+}
+
+#[tokio::test]
+async fn search_matches_like_the_ui_filter() {
+    let state = history_state().await;
+    let q = |q: &str| format!("/api/search?q={q}");
+    // Tags, as matchesSearch does.
+    assert_eq!(ids(&get_json(&state, &q("bug%201234")).await), ["m1"]);
+    // Unicode case folding: "MÜLLER" finds "Müller".
+    assert_eq!(ids(&get_json(&state, &q("M%C3%9CLLER")).await), ["m2"]);
+    // has:errors / has:warnings prefixes, with and without a term.
+    assert_eq!(ids(&get_json(&state, &q("has:errors")).await), ["m3"]);
+    assert_eq!(
+        ids(&get_json(&state, &q("has:warnings%20oru")).await),
+        ["m3"]
+    );
+    assert_eq!(
+        ids(&get_json(&state, &q("has:errors%20adt")).await),
+        Vec::<String>::new()
+    );
+    // Newest first, and `before` continues below the last hit.
+    assert_eq!(ids(&get_json(&state, &q("oru")).await), ["m3", "m1"]);
+    assert_eq!(
+        ids(&get_json(&state, &format!("{}&before=m3", q("oru"))).await),
+        ["m1"]
+    );
+    assert_eq!(
+        ids(&get_json(&state, &format!("{}&limit=1", q("adt"))).await),
+        ["m4"]
+    );
+}

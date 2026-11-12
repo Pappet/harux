@@ -453,9 +453,26 @@ function updateTruncationNote() {
         note.className = 'list-truncated-note';
         note.setAttribute('role', 'note');
     }
-    note.textContent = `This view holds the newest ${held.toLocaleString()} of ` +
-        `${total.toLocaleString()} messages. Older messages are kept on the server ` +
-        `but not loaded here — filters and search only cover the loaded ones.`;
+    const text = document.createElement('span');
+    text.className = 'note-text';
+    text.textContent = `This view holds ${held.toLocaleString()} of ${total.toLocaleString()} ` +
+        `messages; the others are kept on the server. Filters and search cover the loaded ones.`;
+    const children = [text];
+    // Reach the rest (#198) or search it (#197) — loads into this view.
+    const button = (action, label) => {
+        const b = document.createElement('button');
+        b.className = 'ctl-btn note-action';
+        b.dataset.action = action;
+        b.textContent = label;
+        b.disabled = state.olderLoading;
+        return b;
+    };
+    children.push(button('load-older', `Load ${OLDER_PAGE_SIZE} older`));
+    const search = state.serverSearch;
+    if (state.searchQuery && !(search.query === state.searchQuery && search.done)) {
+        children.push(button('search-older', 'Search older on the server'));
+    }
+    note.replaceChildren(...children);
     note.classList.remove('hidden');
     if (list.querySelector('.message-row')) {
         if (list.lastElementChild !== note) list.appendChild(note);

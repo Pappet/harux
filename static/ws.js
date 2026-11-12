@@ -84,6 +84,7 @@ function handleServerEvent(data, known = null) {
 function applyCleared() {
     console.info("Server cleared messages via Web UI or API");
     state.messages = [];
+    resetOlderHistory();
     state.pendingMessages = [];
     state.sourceCounts.clear();
     state.seenSources.clear();
@@ -178,7 +179,9 @@ function trimClientBuffer() {
     // O(1): pendingMessages is empty here, so totalBookmarkCount covers
     // messages[] and no scan is needed when nothing is droppable.
     const selectedExempt = state.selectedId && !(state.selectedMessage && state.selectedMessage.bookmarked) ? 1 : 0;
-    let excess = state.messages.length - state.totalBookmarkCount - selectedExempt - CLIENT_MESSAGE_CAP;
+    // Older pages the user loaded (#198) raise the cap by their size.
+    let excess = state.messages.length - state.totalBookmarkCount - selectedExempt
+        - (CLIENT_MESSAGE_CAP + state.olderLoaded);
     if (excess <= 0) return dropped;
 
     for (let i = state.messages.length - 1; i >= 0 && excess > 0; i--) {
@@ -329,8 +332,14 @@ async function loadMessages() {
     if (snapshot) await restoreAfterLoad();
 }
 
+function resetOlderHistory() {
+    state.olderLoaded = 0;
+    state.serverSearch = { query: '', cursor: null, done: false };
+}
+
 function applySnapshot(messages) {
     state.messages = messages;
+    resetOlderHistory();
     // The total normally comes from the WS `init` event / pollStats; make
     // sure it is never below what is actually loaded (e.g. socket not up).
     state.totalMessagesCount = Math.max(state.totalMessagesCount, state.messages.length);
@@ -425,4 +434,100 @@ async function pollStats() {
     } catch (e) {
         console.debug('[pollStats]', e);
     }
+}
+
+// --- Older history (#198) and server search (#197) ---
+
+// The ID below which "Load older" continues: the oldest loaded message that
+// is neither bookmarked, selected nor a server-search hit. Trimming drops the
+// oldest of those first, so every message newer than it is loaded — the
+// exempt ones may sit further back and are deduplicated on merge.
+function historyCursor() {
+    for (let i = state.messages.length - 1; i >= 0; i--) {
+        const m = state.messages[i];
+        if (!m.bookmarked && m.id !== state.selectedId && !m._searchHit) return m.id;
+    }
+    return null;
+}
+
+// Merge `found` (newest first, from the server) into the buffer: skip what
+// is already loaded, keep the list ordered by arrival, count the additions
+// like addMessage does, and raise the cap so they stay. Returns the number
+// of messages added.
+function mergeOlderMessages(found, searchHit) {
+    const known = new Set(state.messages.map(m => m.id));
+    for (const m of state.pendingMessages) known.add(m.id);
+    const added = found.filter(m => !known.has(m.id));
+    if (added.length === 0) return 0;
+    for (const m of added) {
+        if (searchHit) m._searchHit = true;
+        registerSource(m.source_addr);
+        const label = srcLabelFor(m.source_addr);
+        if (label) state.sourceCounts.set(label, (state.sourceCounts.get(label) || 0) + 1);
+        state.totalValidationCount += (m.validation_warning_count || 0) + (m.has_segment_errors ? 1 : 0);
+        if (m.bookmarked) state.totalBookmarkCount++;
+    }
+    // Newest first by arrival. received_at is RFC 3339; Date.parse keeps
+    // millisecond order, and the sort is stable for ties.
+    state.messages = [...state.messages, ...added]
+        .map((m, i) => [Date.parse(m.received_at) || 0, i, m])
+        .sort((a, b) => (b[0] - a[0]) || (a[1] - b[1]))
+        .map(x => x[2]);
+    state.olderLoaded += added.length;
+    renderMessageList();
+    renderSourceLegend();
+    updateHeaderCounters();
+    return added.length;
+}
+
+// GET `url`, unless a list (re)load is running or starts meanwhile — its
+// snapshot replaces the buffer, so an older page fetched against the old
+// one would be merged into the wrong list.
+async function fetchOlder(url) {
+    if (state.loadInProgress || state.olderLoading) return null;
+    const seq = state.loadSeq;
+    state.olderLoading = true;
+    updateTruncationNote();
+    try {
+        const resp = await fetch(url);
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        const list = await resp.json();
+        return seq === state.loadSeq && !state.loadInProgress ? list : null;
+    } catch (e) {
+        console.warn('Could not load older messages:', e);
+        showToast('Could not load older messages');
+        return null;
+    } finally {
+        state.olderLoading = false;
+        updateTruncationNote();
+    }
+}
+
+// "Load older" (#198): the next page below the loaded history.
+async function loadOlderMessages() {
+    const cursor = historyCursor();
+    const url = cursor
+        ? `/api/messages?before=${encodeURIComponent(cursor)}&limit=${OLDER_PAGE_SIZE}`
+        : `/api/messages?limit=${OLDER_PAGE_SIZE}`;
+    const found = await fetchOlder(url);
+    if (found) mergeOlderMessages(found, false);
+}
+
+// "Search older on the server" (#197): the current query over the messages
+// the client hasn't loaded, newest first, continuing below the last hit.
+async function searchOlderOnServer() {
+    const query = state.searchQuery;
+    if (!query) return;
+    if (state.serverSearch.query !== query) state.serverSearch = { query, cursor: null, done: false };
+    if (state.serverSearch.done) return;
+    const cursor = state.serverSearch.cursor || historyCursor();
+    let url = `/api/search?q=${encodeURIComponent(query)}&limit=${OLDER_PAGE_SIZE}`;
+    if (cursor) url += `&before=${encodeURIComponent(cursor)}`;
+    const found = await fetchOlder(url);
+    if (!found || state.searchQuery !== query) return;
+    if (found.length > 0) state.serverSearch.cursor = found[found.length - 1].id;
+    state.serverSearch.done = found.length < OLDER_PAGE_SIZE;
+    const added = mergeOlderMessages(found, true);
+    if (added === 0) updateTruncationNote();
+    if (found.length === 0) showToast('No older matches on the server');
 }
