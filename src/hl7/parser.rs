@@ -23,9 +23,11 @@ pub fn parse_message(raw: &str, source_addr: &str) -> Result<Hl7Message, String>
 
 fn parse_structure(raw: &str, source_addr: &str) -> Result<(Hl7Message, Delimiters), String> {
     // `Hl7Message::raw` keeps the text exactly as received, including the
-    // final segment terminator (#230); parsing works on the trimmed view.
+    // final segment terminator (#230). Parsing skips leading whitespace
+    // only: trimming the end too cut trailing characters off the last
+    // segment's last field, and only off that one (#243).
     let received = raw;
-    let raw = raw.trim();
+    let raw = raw.trim_start();
     if raw.is_empty() {
         return Err("Empty message".into());
     }
@@ -178,6 +180,15 @@ pub(crate) fn parse_delimiters(bytes: &[u8]) -> Result<Delimiters, String> {
             bytes[3]
         ));
     }
+    // A letter or digit right after "MSH" is a damaged header, not a
+    // separator choice: `MSHARM|…` would be split at every `A`, and the ACK,
+    // written in the sender's delimiters, could no longer carry `UNKNOWN`
+    // or the control ID intact (#243).
+    if field_sep.is_ascii_alphanumeric() {
+        return Err(format!(
+            "MSH-1 field separator {field_sep:?} is a letter or digit — the MSH header is damaged"
+        ));
+    }
 
     // MSH-2 must contain exactly 4 printable ASCII chars, each distinct from
     // the field separator and from each other. Violating any rule produces
@@ -189,6 +200,13 @@ pub(crate) fn parse_delimiters(bytes: &[u8]) -> Result<Delimiters, String> {
                 "MSH-2 encoding character {} (0x{:02X}) is not printable ASCII",
                 i + 1,
                 b
+            ));
+        }
+        if b.is_ascii_alphanumeric() {
+            return Err(format!(
+                "MSH-2 encoding character {} {:?} is a letter or digit — the MSH header is damaged",
+                i + 1,
+                b as char
             ));
         }
         if b == bytes[3] {
@@ -548,9 +566,42 @@ mod tests {
         );
     }
 
+    /// #243 (found by tests/fuzz_ingest.rs): a letter or digit where a
+    /// delimiter belongs is a damaged header. Accepting it split `MSHARM|…`
+    /// at every `A`, and the ACK — in those delimiters — lost `UNKNOWN`.
+    #[test]
+    fn alphanumeric_delimiters_are_rejected() {
+        for raw in [
+            "MSHARM|KLINIK|R|Z|2024||ORM^O01|X|P|2.5\r",
+            "MSHU^~\\&|A|B|C|D|2024||ADT^A01||P|2.5\r",
+            "MSH|^~1&|A|B|C|D|2024||ADT^A01|X|P|2.5\r",
+        ] {
+            let err = parse_message(raw, "127.0.0.1:1").unwrap_err();
+            assert!(err.contains("letter or digit"), "{raw:?}: {err}");
+        }
+        // Unusual but legal punctuation still works.
+        let msg = parse_message("MSH#*!@%#A#B#C#D#2024##ADT*A01#X#P#2.5\r", "127.0.0.1:1").unwrap();
+        assert_eq!(msg.message_control_id, "X");
+    }
+
+    /// #243: only leading whitespace is skipped. Trimming the end cut
+    /// trailing characters off the last segment only.
+    #[test]
+    fn last_segment_keeps_trailing_characters() {
+        let raw =
+            "\r\n MSH|^~\\&|A|B|C|D|2024||ADT^A01|X|P|2.5\rPID|1|| \rAL1|1|DA|PENICILLIN \r\n";
+        let msg = parse_message(raw, "127.0.0.1:1").unwrap();
+        assert_eq!(msg.raw, raw, "raw stays as received");
+        let pid = &msg.segments[1];
+        let al1 = &msg.segments[2];
+        assert_eq!(pid.fields.last().unwrap().value, " ");
+        assert_eq!(al1.fields.last().unwrap().value, "PENICILLIN ");
+    }
+
     /// Contract the UI's "copy segment" relies on now that segments carry no
     /// text of their own (#180): segment `i` is the `i`-th non-blank line of
     /// `raw` when split on `\r` / `\n` (see `segmentLines` in static/app.js).
+    /// `tests/fuzz_ingest.rs` checks the same on mutated input (#243).
     #[test]
     fn test_segments_match_nonblank_raw_lines() {
         let raw = "MSH|^~\\&|A|B|C|D|20240101||ADT^A01|1|P|2.5\r\nPID|||1\n\nPV1||I\r";

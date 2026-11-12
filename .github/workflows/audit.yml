@@ -1,0 +1,35 @@
+name: Security Audit
+
+# RustSec advisories for Cargo.lock (#244). Runs when the dependencies or
+# the audit configuration change, and daily, so an advisory published for
+# an unchanged lockfile shows up without a push. Ignored advisories and
+# which warnings fail are configured in .cargo/audit.toml.
+on:
+  push:
+    branches: [main]
+    paths: ['Cargo.toml', 'Cargo.lock', '.cargo/audit.toml', '.github/workflows/audit.yml']
+  pull_request:
+    branches: [main]
+    paths: ['Cargo.toml', 'Cargo.lock', '.cargo/audit.toml', '.github/workflows/audit.yml']
+  schedule:
+    - cron: '17 5 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    name: cargo audit
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install cargo-audit
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-audit
+
+      - name: Audit Cargo.lock
+        run: cargo audit
