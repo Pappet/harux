@@ -1054,6 +1054,77 @@ async fn changed_messages_keep_their_encoding() {
     );
 }
 
+/// A change of MSH-18 changes the bytes with it (#287 review): the receiver
+/// reads the payload by what MSH-18 says, so `UNICODE UTF-8` with `ü` goes
+/// out as UTF-8, and Harux's own copy carries no `CHARSET_FALLBACK`. A
+/// charset Harux cannot write is refused, naming it.
+#[tokio::test]
+async fn a_changed_msh18_changes_the_encoding() {
+    let (addr, mut frames) = acking().await;
+    let store = store();
+    let sender = Sender::new(settings(|_| {}), store.clone());
+    let ascii_latin1 = b"MSH|^~\\&|A|B|||20240101||ADT^A01|L1|P|2.5||||||8859/1\rPID|||1||Muster\r";
+    let id = received(&store, ascii_latin1).await;
+    let set = [("MSH-18", "UNICODE UTF-8"), ("PID-5", "Müller")];
+    sender
+        .send(with_set(to(addr, "t"), &id, &set), CLIENT)
+        .await
+        .unwrap();
+    let wire = frames.recv().await.unwrap();
+    assert!(
+        wire.ends_with("||UNICODE UTF-8\rPID|||1||Müller\r".as_bytes()),
+        "{:?}",
+        String::from_utf8_lossy(&wire)
+    );
+    let decoded = harux::hl7::charset::decode_payload(&wire);
+    assert!(decoded.warning.is_none(), "{:?}", decoded.warning);
+
+    // Back from UTF-8 to Latin-1.
+    let id = received(
+        &store,
+        "MSH|^~\\&|A|B|||20240101||ADT^A01|U1|P|2.5||||||UNICODE UTF-8\rPID|||1||Jörg\r".as_bytes(),
+    )
+    .await;
+    sender
+        .send(
+            with_set(to(addr, "t"), &id, &[("MSH-18", "8859/1")]),
+            CLIENT,
+        )
+        .await
+        .unwrap();
+    assert!(frames
+        .recv()
+        .await
+        .unwrap()
+        .ends_with(b"||8859/1\rPID|||1||J\xf6rg\r"));
+
+    // Emptied: no declaration means UTF-8.
+    let id = received(&store, ascii_latin1).await;
+    sender
+        .send(
+            with_set(to(addr, "t"), &id, &[("MSH-18", ""), ("PID-5", "Müller")]),
+            CLIENT,
+        )
+        .await
+        .unwrap();
+    assert!(frames
+        .recv()
+        .await
+        .unwrap()
+        .ends_with("PID|||1||Müller\r".as_bytes()));
+
+    for cs in ["UNICODE UTF-16", "NO-SUCH-CHARSET"] {
+        let e = sender
+            .send(with_set(to(addr, "t"), &id, &[("MSH-18", cs)]), CLIENT)
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(e, SendError::Unprocessable(ref m) if m.contains(cs)),
+            "{cs}: {e:?}"
+        );
+    }
+}
+
 /// Refusals happen before anything is stored or sent.
 #[tokio::test]
 async fn bad_overrides_store_nothing() {

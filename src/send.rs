@@ -726,6 +726,7 @@ pub fn changed_payload(
     n: usize,
     max_bytes: usize,
 ) -> Result<(Vec<u8>, Vec<String>), SendError> {
+    use crate::hl7::charset;
     use crate::hl7::compose::{self, ComposeError, FieldPath, PlaceholderContext};
     if original.parse_error.is_some() {
         return Err(SendError::Unprocessable(
@@ -750,18 +751,41 @@ pub fn changed_payload(
         })?;
         changes.push(path.to_string());
     }
-    if compose::segment_names(&text, d) != compose::segment_names(&original.raw, d) {
+    // Compared with the parser's own list, so "the same segments" means "as
+    // the parser reads them" (#287 review).
+    if !compose::segment_names(&text, d)
+        .into_iter()
+        .eq(original.segments.iter().map(|s| s.name.as_str()))
+    {
         return Err(SendError::Unprocessable(
             "The changes would alter the message's list of segments".into(),
         ));
     }
-    let bytes = crate::hl7::charset::encode_for_send(
+    let declared_now = charset::declared_charset(text.as_bytes());
+    let bytes = charset::encode_for_send(
         &text,
         &original.wire,
         original.raw.is_ascii(),
         original.charset.as_deref(),
+        declared_now.as_deref(),
     )
     .map_err(SendError::Unprocessable)?;
+    // The receiver must read what the sent row shows: decoded by its own
+    // MSH-18, the bytes give back the text, without a charset warning the
+    // original did not already carry.
+    let check = charset::decode_payload(&bytes);
+    let fell_back =
+        |w: &[crate::validation::ValidationWarning]| w.iter().any(|w| w.code == "CHARSET_FALLBACK");
+    if check.text != text || (check.warning.is_some() && !fell_back(&original.validation_warnings))
+    {
+        return Err(SendError::Unprocessable(format!(
+            "The changed message would not read back as written: {}",
+            check
+                .warning
+                .map(|w| w.message)
+                .unwrap_or_else(|| "its bytes decode to other text".into())
+        )));
+    }
     // One frame on the wire is one stored message (rule 1): a payload Harux
     // builds never carries a frame byte.
     if let Some(b) = bytes.iter().find(|&&b| b == 0x0B || b == 0x1C) {

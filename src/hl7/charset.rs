@@ -191,20 +191,22 @@ fn encoding_for(charset: &str) -> Option<&'static Encoding> {
 /// encoding — it is stored as `WireForm::Utf8` whatever MSH-18 says — so for
 /// it the charset MSH-18 declares is used, else UTF-8: an override that
 /// brings an `ü` into a message declared `8859/1` must leave as Latin-1.
-/// A message whose bytes no encoding reproduces (`WireForm::Original`) can
-/// only be resent unchanged. A character the encoding cannot write is an
+/// When the change gives MSH-18 another charset (`declared_now` differs
+/// from `declared`, the original's), the bytes follow the new declaration
+/// instead: no MSH-18 → UTF-8, a charset Harux cannot write is an error
+/// naming it (#287 review) — the receiver reads the bytes by what MSH-18
+/// says. A message whose bytes no encoding reproduces (`WireForm::Original`)
+/// can only be resent unchanged. A character the encoding cannot write is an
 /// error that names it — never a silent `?` or `&#252;`.
 pub fn encode_for_send(
     text: &str,
     wire: &super::types::WireForm,
     original_is_ascii: bool,
     declared: Option<&str>,
+    declared_now: Option<&str>,
 ) -> Result<Vec<u8>, String> {
     use super::types::WireForm;
     let encoding = match wire {
-        WireForm::Encoded(e) => *e,
-        WireForm::Utf8 if original_is_ascii => declared.and_then(encoding_for).unwrap_or(UTF_8),
-        WireForm::Utf8 => UTF_8,
         WireForm::Original(_) => {
             return Err(
                 "This message's bytes are not valid in its charset (they were kept as \
@@ -212,6 +214,15 @@ pub fn encode_for_send(
                     .into(),
             )
         }
+        _ if declared_now != declared => match declared_now {
+            None => UTF_8,
+            Some(cs) => encoding_for(cs).ok_or_else(|| {
+                format!("MSH-18 {cs:?} is not a charset Harux can write the message in")
+            })?,
+        },
+        WireForm::Encoded(e) => *e,
+        WireForm::Utf8 if original_is_ascii => declared.and_then(encoding_for).unwrap_or(UTF_8),
+        WireForm::Utf8 => UTF_8,
     };
     if encoding == UTF_8 {
         return Ok(text.as_bytes().to_vec());
