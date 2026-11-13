@@ -1458,14 +1458,14 @@ async fn exchange_on(
                 drop(c);
                 match open(&destination, tls.as_deref(), timeouts).await {
                     Ok(c) => c,
-                    Err(d) => return (None, d, true),
+                    Err(d) => return (None, *d, true),
                 }
             }
             Err(e) => return (None, failed(e), true),
         },
         None => match open(&destination, tls.as_deref(), timeouts).await {
             Ok(c) => c,
-            Err(d) => return (None, d, true),
+            Err(d) => return (None, *d, true),
         },
     };
     match connection
@@ -1501,24 +1501,30 @@ async fn open(
     destination: &Destination,
     tls: Option<&TlsContext>,
     timeouts: Timeouts,
-) -> Result<mllp_client::Connection, Delivery> {
+) -> Result<mllp_client::Connection, Box<Delivery>> {
     let started = Instant::now();
     let tls = match destination.transport {
         Transport::Plain => None,
         Transport::Tls | Transport::TlsUnverified => {
             let Some(ctx) = tls else {
-                return Err(Delivery::failed(
+                return Err(Box::new(Delivery::failed(
                     "TLS failed",
                     "TLS is not set up on this server (send.enabled)",
                     None,
-                ));
+                )));
             };
             Some((ctx, destination.transport == Transport::Tls))
         }
     };
     mllp_client::Connection::open(&destination.host, destination.port, timeouts.connect, tls)
         .await
-        .map_err(|e| Delivery::failed(e.reason(), e.detail(), Some(elapsed_ms(started))))
+        .map_err(|e| {
+            Box::new(Delivery::failed(
+                e.reason(),
+                e.detail(),
+                Some(elapsed_ms(started)),
+            ))
+        })
 }
 
 /// The bytes of `original` with the fields of `set` overridden (#275):
