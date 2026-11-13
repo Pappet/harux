@@ -230,3 +230,16 @@ test('the bar escapes what it shows', () => {
     assert.match(html, /Gave up/);
     assert.match(html, /3 failed/);
 });
+
+test('a run that tried every message but lost some says why (#293 review)', () => {
+    const { ctx } = setup();
+    const lossy = running({ state: 'done', done: 5, total: 5, codes: { AA: 3 }, failed: 2, reason: 'No response within send.response_timeout_secs' });
+    const html = ctx.runBarHtml({ what: 'five', status: lossy });
+    assert.match(html, /<span class="mono end bad">Done<\/span>/);
+    assert.match(html, /last failure: No response within send\.response_timeout_secs/);
+    // A clean run shows no reason.
+    const clean = ctx.runBarHtml({ what: 'five', status: running({ state: 'done', done: 5, total: 5, codes: { AA: 5 }, reason: null }) });
+    assert.match(clean, /<span class="mono end ok">Done<\/span>/);
+    assert.ok(!clean.includes('class="reason"'));
+});
+

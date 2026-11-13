@@ -1645,3 +1645,89 @@ async fn one_run_too_many_is_busy_and_shutdown_ends_a_run() {
     assert_eq!(status.state, RunState::Shutdown);
     assert!(sender.wait_for_runs(Duration::from_secs(2)).await);
 }
+
+/// #293 review: after a message written without awaiting an answer (here an
+/// ACK, which is never awaited) the target may still answer it. That late
+/// answer must not become the next message's: such a connection is not
+/// kept.
+#[tokio::test]
+async fn an_answer_nobody_awaited_is_not_read_for_the_next_message() {
+    // A receiver that answers everything — the ACK too, but late: after the
+    // next message was written (the check before the write sees nothing).
+    let connections = Arc::new(AtomicUsize::new(0));
+    let counted = Arc::clone(&connections);
+    let (addr, mut frames) = fake(move |mut s, tx| {
+        counted.fetch_add(1, Ordering::SeqCst);
+        async move {
+            while let Some(payload) = read_frame(&mut s).await {
+                let control = control_id(&payload);
+                let _ = tx.send(payload);
+                if control == "K1" {
+                    tokio::time::sleep(Duration::from_millis(100)).await;
+                }
+                let _ = s.write_all(&ack(&control)).await;
+            }
+        }
+    })
+    .await;
+    let store = store();
+    let ack_id = received(
+        &store,
+        b"MSH|^~\\&|A|B|||20260101||ACK^A01|K1|P|2.5\rMSA|AA|X\r",
+    )
+    .await;
+    let adt_id = received(
+        &store,
+        b"MSH|^~\\&|A|B|||20260101||ADT^A01|D1|P|2.5\rPID|||1\r",
+    )
+    .await;
+    let sender = Sender::new(settings(|_| {}), store.clone());
+    let run = started(
+        sender
+            .start(run_of(to(addr, "t"), &[ack_id, adt_id]), CLIENT)
+            .await
+            .unwrap(),
+    );
+    let status = finished(&sender, &run.id).await;
+    assert_eq!(
+        (status.written, status.codes.get("AA")),
+        (1, Some(&1)),
+        "{status:?}"
+    );
+    for _ in 0..2 {
+        frames.recv().await.unwrap();
+    }
+    let rows = sent_rows(&store).await;
+    let adt = store.get_by_id(&rows[1].id).await.unwrap();
+    let delivery = adt.meta.delivery.as_ref().unwrap();
+    assert_eq!(
+        delivery.control_id_matches,
+        Some(true),
+        "the ADT's own answer, not the late one to the ACK"
+    );
+    assert_eq!(connections.load(Ordering::SeqCst), 2);
+}
+
+/// The registry keeps every run under way and the newest 50 finished ones.
+#[tokio::test]
+async fn finished_runs_are_kept_up_to_a_limit() {
+    let (addr, _frames, _) = counting(false).await;
+    let store = store();
+    let ids = received_many(&store, 2).await;
+    let sender = Sender::new(settings(|_| {}), store.clone());
+    let mut runs = Vec::new();
+    for _ in 0..52 {
+        let run = started(
+            sender
+                .start(run_of(to(addr, "t"), &ids), CLIENT)
+                .await
+                .unwrap(),
+        );
+        finished(&sender, &run.id).await;
+        runs.push(run.id);
+    }
+    assert!(sender.run_status(&runs[0]).is_none(), "the oldest is gone");
+    assert!(sender.run_status(&runs[1]).is_none());
+    assert!(sender.run_status(&runs[2]).is_some());
+    assert_eq!(sender.run_status(&runs[51]).unwrap().state, RunState::Done);
+}

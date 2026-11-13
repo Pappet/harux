@@ -387,7 +387,7 @@ struct Inner {
     stats: SendStats,
     shutdown: watch::Sender<bool>,
     /// Runs under way and the newest finished ones (#280).
-    registry: std::sync::Mutex<std::collections::VecDeque<Arc<RunHandle>>>,
+    registry: std::sync::Mutex<Registry>,
 }
 
 impl Sender {
@@ -809,32 +809,38 @@ impl Sender {
 
     // --- Runs (#280) ---
 
-    /// Put a new run into the registry. Runs under way are always kept;
-    /// of the finished ones the newest [`KEPT_RUNS`].
+    /// Put a new run into the registry, under way.
     fn register(&self, status: RunStatus) -> Arc<RunHandle> {
         let (cancel, _) = watch::channel(false);
         let handle = Arc::new(RunHandle {
+            id: status.id.clone(),
             status: std::sync::Mutex::new(status),
             cancel,
         });
-        let mut runs = lock(&self.inner.registry);
-        runs.push_back(Arc::clone(&handle));
-        let mut finished = runs.iter().filter(|r| !r.status().running()).count();
-        runs.retain(|r| {
-            if finished > KEPT_RUNS && !r.status().running() {
-                finished -= 1;
-                false
-            } else {
-                true
-            }
-        });
+        lock(&self.inner.registry)
+            .running
+            .insert(handle.id.clone(), Arc::clone(&handle));
         handle
     }
 
+    /// Move run `id` to the finished ones, of which the newest
+    /// [`KEPT_RUNS`] are kept (#293 review: O(1), no status taken).
+    fn retire(&self, id: &str) {
+        let mut registry = lock(&self.inner.registry);
+        if let Some(run) = registry.running.remove(id) {
+            registry.finished.push_back(run);
+            if registry.finished.len() > KEPT_RUNS {
+                registry.finished.pop_front();
+            }
+        }
+    }
+
     fn find_run(&self, id: &str) -> Option<Arc<RunHandle>> {
-        lock(&self.inner.registry)
-            .iter()
-            .find(|r| lock(&r.status).id == id)
+        let registry = lock(&self.inner.registry);
+        registry
+            .running
+            .get(id)
+            .or_else(|| registry.finished.iter().find(|r| r.id == id))
             .cloned()
     }
 
@@ -1024,6 +1030,7 @@ impl Sender {
             }
             s.finished_at = Some(chrono::Utc::now());
         });
+        self.retire(&run_id);
         let s = handle.status();
         if s.total > 1 {
             info!(
@@ -1336,6 +1343,8 @@ impl RunStatus {
         }
     }
 
+    /// For callers of the library (the integration tests).
+    #[allow(dead_code)]
     pub fn running(&self) -> bool {
         self.state == RunState::Running
     }
@@ -1364,7 +1373,17 @@ impl RunStatus {
 }
 
 /// A run in the registry: its status, and the switch that cancels it.
+/// The runs the server keeps: every run under way, by ID, and the newest
+/// [`KEPT_RUNS`] finished ones, oldest first.
+#[derive(Default)]
+struct Registry {
+    running: std::collections::HashMap<String, Arc<RunHandle>>,
+    finished: std::collections::VecDeque<Arc<RunHandle>>,
+}
+
 struct RunHandle {
+    /// `status.id`, readable without the lock.
+    id: String,
     status: std::sync::Mutex<RunStatus>,
     cancel: watch::Sender<bool>,
 }
@@ -1477,23 +1496,31 @@ async fn exchange_on(
     }
 }
 
-/// The outcome of an exchange that ended with an answer (or without one
-/// awaited); the connection can take the next message.
+/// The outcome of an exchange that ended with an answer, or without one
+/// awaited. Only after an answer can the connection take the next message:
+/// after a message written without awaiting one (`await_response: false`, an
+/// ACK) the target may still answer it, and that late answer would be read
+/// as the next message's (#293 review) — so that connection is closed.
 fn answered(
     connection: mllp_client::Connection,
     response: Option<Vec<u8>>,
     sent: &Hl7Message,
     started: Instant,
 ) -> (Option<mllp_client::Connection>, Delivery, bool) {
-    let d = match response {
-        None => Delivery {
-            state: DeliveryState::Sent,
-            latency_ms: Some(elapsed_ms(started)),
-            ..Delivery::pending()
-        },
-        Some(response) => read_response(&response, &sent.message_control_id, elapsed_ms(started)),
-    };
-    (Some(connection), d, false)
+    match response {
+        None => {
+            let d = Delivery {
+                state: DeliveryState::Sent,
+                latency_ms: Some(elapsed_ms(started)),
+                ..Delivery::pending()
+            };
+            (None, d, false)
+        }
+        Some(response) => {
+            let d = read_response(&response, &sent.message_control_id, elapsed_ms(started));
+            (Some(connection), d, false)
+        }
+    }
 }
 
 /// Open a connection to `destination`, with TLS if it uses it.

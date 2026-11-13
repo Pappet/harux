@@ -781,7 +781,8 @@ function finishRun(run) {
     const end = RUN_END_TEXT[s.state] || s.state;
     const summary = runSummaryParts(s).map((p) => p.text).join(' · ');
     const ok = s.state === 'done' && !s.failed && runAllAccepted(s);
-    showToast(`${run.what}: ${end} · ${s.done} / ${s.total}${summary ? ' · ' + summary : ''}`, ok ? 'info' : 'error');
+    const why = s.reason && !(s.state === 'done' && !s.failed) ? ` — ${s.reason}` : '';
+    showToast(`${run.what}: ${end} · ${s.done} / ${s.total}${summary ? ' · ' + summary : ''}${why}`, ok ? 'info' : 'error');
     updateRunButton();
     if (run.onEnd) {
         const onEnd = run.onEnd;
@@ -833,10 +834,13 @@ function runBarHtml(run) {
     const running = s.state === 'running';
     const parts = runSummaryParts(s)
         .map((p) => `<span class="mono${p.cls ? ' ' + p.cls : ''}">${esc(p.text)}</span>`).join('');
+    const clean = s.state === 'done' && !s.failed;
     const end = running ? ''
-        : `<span class="mono end ${s.state === 'done' ? 'ok' : 'bad'}">${esc(RUN_END_TEXT[s.state] || s.state)}</span>`;
-    const reason = !running && s.reason && s.state !== 'done'
-        ? `<span class="reason" title="${escAttr(s.reason)}">${esc(s.reason)}</span>` : '';
+        : `<span class="mono end ${clean ? 'ok' : 'bad'}">${esc(RUN_END_TEXT[s.state] || s.state)}</span>`;
+    // Why it stopped early — or, for a run that tried every message, why
+    // some failed (the last failure; #293 review).
+    const reason = !running && s.reason && !clean
+        ? `<span class="reason" title="${escAttr(s.reason)}">${esc(s.state === 'done' ? `last failure: ${s.reason}` : s.reason)}</span>` : '';
     const button = running
         ? `<button class="ctl-btn" data-action="run-cancel"${run.cancelling ? ' aria-disabled="true"' : ''} title="Stop before the next message; the one in flight ends as it would">${run.cancelling ? 'Cancelling…' : 'Cancel'}</button>`
         : '<button class="ctl-btn" data-action="run-close" title="Close" aria-label="Close the run bar">✕</button>';
