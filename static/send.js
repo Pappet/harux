@@ -51,6 +51,7 @@ function writeStored(key, value) {
 function normalizeTarget(raw) {
     if (!raw || typeof raw !== 'object') return null;
     const host = String(raw.host ?? '').trim();
+    if (hostHasPort(host)) return null;
     const port = Number(raw.port);
     if (!host || host.length > 253 || /[\s/]/.test(host)) return null;
     if (!Number.isInteger(port) || port < 1 || port > 65535) return null;
@@ -64,6 +65,12 @@ function normalizeTarget(raw) {
         verify: raw.verify !== false,
         ask: raw.ask === true,
     };
+}
+
+// `name:port` or `1.2.3.4:port` typed into the Host field. An IPv6 address
+// has several colons and is left alone (the server checks hosts anyway).
+function hostHasPort(host) {
+    return /^[^:]+:\d*$/.test(host) || /^\[.*\]:\d*$/.test(host);
 }
 
 // A target list from a file: `{ targets: [...] }` as "Save to file" writes
@@ -123,9 +130,23 @@ function upsertTarget(target) {
     return target;
 }
 
+// Forget the last results of targets that no longer exist (#286 review).
+function pruneTargetResults() {
+    const keep = new Set([LOOPBACK_TARGET_ID, ...state.targets.map((t) => t.id)]);
+    let changed = false;
+    for (const id of Object.keys(state.targetResults)) {
+        if (!keep.has(id)) {
+            delete state.targetResults[id];
+            changed = true;
+        }
+    }
+    if (changed) writeStored(TARGET_RESULTS_KEY, state.targetResults);
+}
+
 function removeTarget(id) {
     state.targets = state.targets.filter((t) => t.id !== id);
     saveTargets();
+    pruneTargetResults();
     if (state.lastTargetId === id) {
         state.lastTargetId = null;
         writeStored(LAST_TARGET_KEY, null);
@@ -265,7 +286,9 @@ function sendActionsHtml(msg) {
     if (!canResend(msg)) return '';
     const target = findTarget(state.lastTargetId);
     const to = target ? `<span class="to">→ ${esc(target.name)}</span>` : '';
-    const busy = state.sending ? ' disabled' : '';
+    // aria-disabled, not disabled: a disabled button drops keyboard focus,
+    // and resendMessage ignores clicks while a send is under way anyway.
+    const busy = state.sending ? ' aria-disabled="true"' : '';
     const open = state.sendMenu ? 'true' : 'false';
     return `<span class="split-btn" id="send-split">
         <button class="ctl-btn" data-action="resend"${busy} title="${target ? `Send this message again to ${escAttr(target.name)}, byte for byte` : 'Choose a target'}">${ICONS.resend}<span class="btn-label">Resend</span>${to}</button><button class="ctl-btn caret" data-action="resend-menu" aria-haspopup="dialog" aria-expanded="${open}" aria-label="Choose target" title="Choose target">${ICONS.chevronDown}</button>
@@ -275,9 +298,18 @@ function sendActionsHtml(msg) {
 function updateSendButtons() {
     const split = document.getElementById('send-split');
     if (!split || !state.selectedMessage) return;
+    // Keep keyboard focus on the button that had it (#286 review).
+    const active = document.activeElement;
+    const focused = active && split.contains && split.contains(active) ? active.dataset.action : null;
     const tmp = document.createElement('div');
     tmp.innerHTML = sendActionsHtml(state.selectedMessage);
-    if (tmp.firstElementChild) split.replaceWith(tmp.firstElementChild);
+    const fresh = tmp.firstElementChild;
+    if (!fresh) return;
+    split.replaceWith(fresh);
+    if (focused) {
+        const again = fresh.querySelector(`[data-action="${focused}"]`);
+        if (again) again.focus();
+    }
 }
 
 // --- The menu ---
@@ -287,8 +319,8 @@ function openSendMenu() {
     const picked = findTarget(state.lastTargetId) || allTargets()[0] || null;
     state.sendMenu = {
         pickedId: picked ? picked.id : null,
-        // No target yet: start with the form.
-        form: state.targets.length === 0 ? emptyTargetForm() : null,
+        // No target at all (not even This Harux): start with the form.
+        form: allTargets().length === 0 ? emptyTargetForm() : null,
     };
     renderSendMenu();
     updateSendButtons();
@@ -414,7 +446,9 @@ function saveTargetForm() {
         ask: f.ask,
     });
     if (!target) {
-        f.error = 'Host and a port from 1 to 65535 are needed';
+        f.error = hostHasPort(String(f.host).trim())
+            ? 'Put the port in the Port field, not after the host'
+            : 'Host and a port from 1 to 65535 are needed';
         renderSendMenu();
         return;
     }
@@ -493,6 +527,7 @@ function loadTargetsFromFile() {
             if (state.targets.length > 0 && !confirm(`Replace your ${state.targets.length} target(s) with the ${targets.length} in ${file.name}?`)) return;
             state.targets = targets;
             saveTargets();
+            pruneTargetResults();
             if (state.sendMenu) {
                 state.sendMenu.pickedId = (allTargets()[0] || {}).id || null;
                 renderSendMenu();

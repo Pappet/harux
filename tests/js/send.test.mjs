@@ -221,3 +221,57 @@ test('direction filter: In + Out, Received, Sent; only In + Out prepends', () =>
     state.directionFilter = 2;
     assert.deepEqual([inbound, outbound, legacy].map(ctx.matchesDirection), [false, true, false]);
 });
+
+// --- #286 review ---
+
+test('newId works without any Web Crypto at all', () => {
+    const { ctx } = setup({ crypto: null });
+    assert.match(ctx.newId(), /^[0-9a-f]{32}$/);
+});
+
+test('target names and addresses are escaped in the menu (lists come from files)', () => {
+    const { ctx } = setup();
+    // esc() needs a real DOM; this escapes the same five characters.
+    const escape = (v) => String(v ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#x27;');
+    ctx.esc = escape;
+    ctx.escAttr = escape;
+    const evil = ctx.normalizeTarget({ id: 'x"><img src=y>', name: '<img src=x onerror=alert(1)>', host: 'h"><b>', port: 1 });
+    assert.ok(evil, 'odd but harmless names are allowed — they are only shown');
+    const html = ctx.targetOptionHtml(evil, false, Date.now());
+    assert.ok(!/<img|<b>/.test(html), html);
+    assert.match(html, /&lt;img src=x onerror=alert\(1\)&gt;/);
+    assert.match(html, /data-target-id="x&quot;&gt;&lt;img src=y&gt;"/);
+});
+
+test('the menu starts with the form only when there is no target at all', () => {
+    const { ctx, state } = setup();
+    ctx.renderSendMenu = () => {};
+    ctx.updateSendButtons = () => {};
+    state.selectedMessage = msg;
+    ctx.openSendMenu();
+    assert.equal(state.sendMenu.form, null, 'This Harux is a target: no empty form');
+    assert.equal(state.sendMenu.pickedId, 'loopback');
+    state.sendConfig = { enabled: true, loopback: null, tls: {} };
+    ctx.openSendMenu();
+    assert.ok(state.sendMenu.form, 'nothing to pick: the form opens');
+});
+
+test('a port typed into the host field is refused with a hint', () => {
+    const { ctx } = setup();
+    for (const bad of ['orchestra.local:6661', '10.0.0.1:2575', '[::1]:2575', 'h:']) {
+        assert.equal(ctx.normalizeTarget({ host: bad, port: 1 }), null, bad);
+        assert.ok(ctx.hostHasPort(bad), bad);
+    }
+    assert.ok(ctx.normalizeTarget({ host: '::1', port: 2575 }), 'IPv6 addresses stay allowed');
+    assert.ok(!ctx.hostHasPort('fe80::1'));
+});
+
+test('results of removed targets are forgotten', () => {
+    const { ctx, state, storage } = setup();
+    const a = ctx.upsertTarget(ctx.normalizeTarget({ host: 'a', port: 1 }));
+    ctx.recordTargetResult(a.id, { state: 'acked', ack_code: 'AA' });
+    ctx.recordTargetResult('loopback', { state: 'acked', ack_code: 'AA' });
+    ctx.removeTarget(a.id);
+    assert.deepEqual(Object.keys(state.targetResults), ['loopback']);
+    assert.ok(!storage.data.get('harux_target_results').includes(a.id));
+});

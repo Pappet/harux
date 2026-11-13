@@ -426,8 +426,9 @@ async function pollStats() {
             parseErrorsPill.classList.toggle('err-pill', stats.parse_errors > 0);
         }
 
-        // sent pill (#274) — hidden while nothing was sent; amber when a send
-        // failed or was rejected.
+        // `out` pill (#274) — every send attempt, as the list shows them;
+        // hidden at 0, amber when a send failed or was rejected. Labelled
+        // "out", not "sent": /api/stats' `sent` counts accepted ones only.
         const sentPill = document.getElementById('pill-sent');
         const sentValue = document.getElementById('pill-sent-value');
         if (sentPill && sentValue) {
@@ -438,7 +439,7 @@ async function pollStats() {
             sentPill.classList.toggle('hidden', total === 0);
             sentPill.classList.toggle('warn-pill', rejected + failed > 0);
             sentValue.textContent = total;
-            sentPill.title = `Messages Harux sent: ${sent} accepted, ${rejected} rejected, ${failed} failed`;
+            sentPill.title = `Messages Harux sent or tried to send: ${sent} accepted, ${rejected} rejected, ${failed} failed`;
         }
         // The server's sending switch changed (a restart with another
         // harux.toml): read its configuration again.

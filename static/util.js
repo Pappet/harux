@@ -80,11 +80,15 @@ const SESSION_STATE_KEY = SESSION_KEY + '_state';
 // it threw while this file loaded and left every `const` below it
 // uninitialized — the search and the detail view failed (#274).
 function newId() {
-    if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
-        return crypto.randomUUID();
-    }
+    const c = typeof crypto !== 'undefined' ? crypto : null;
+    if (c && typeof c.randomUUID === 'function') return c.randomUUID();
     const bytes = new Uint8Array(16);
-    crypto.getRandomValues(bytes); // available without a secure context
+    if (c && typeof c.getRandomValues === 'function') {
+        c.getRandomValues(bytes); // available without a secure context
+    } else {
+        // No Web Crypto at all: these IDs only tell local things apart.
+        for (let i = 0; i < bytes.length; i++) bytes[i] = Math.floor(Math.random() * 256);
+    }
     return Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('');
 }
 
