@@ -451,6 +451,7 @@ function draftTarget(d) {
 // click ("Send anyway") and sent by the second, with `allow_invalid`.
 async function sendDraft(d, target) {
     if (!d || state.sending) return false;
+    await draftWriteChain; // field writes first (#278)
     if (!target) {
         openSendMenu();
         return false;
@@ -517,10 +518,21 @@ async function sendDraft(d, target) {
     }
 }
 
-function sendOpenDraft() {
+async function sendOpenDraft() {
     const d = openDraftObject();
-    if (d) return sendDraft(d, draftTarget(d));
-    return Promise.resolve(false);
+    if (!d) return false;
+    await commitFocusedField();
+    return sendDraft(d, draftTarget(d));
+}
+
+// A field input whose value was typed but not yet written (no `change`
+// yet: Ctrl+Enter while still in it) is written first (#278).
+function commitFocusedField() {
+    const a = document.activeElement;
+    if (a && a.classList && a.classList.contains('field-input') && a.value !== a.dataset.written) {
+        return writeDraftField(a.dataset.fieldPath, a.value);
+    }
+    return draftWriteChain;
 }
 
 // *Save as file*: the bytes a send would write, in the draft's encoding,
@@ -528,6 +540,7 @@ function sendOpenDraft() {
 async function saveDraftAsFile() {
     const d = openDraftObject();
     if (!d) return;
+    await commitFocusedField();
     try {
         const body = { raw: d.raw, charset: d.charset };
         if (d.basedOn) body.based_on = d.basedOn;
@@ -746,8 +759,7 @@ function renderDraftTab(content) {
         renderDiffTab(content, p.data.message);
         return;
     }
-    // Segments: read-only, with the inspector's validation (#277; inputs
-    // come with M4-7).
+    // Segments: field by field (#278), with the inspector's validation.
     if (!p) {
         content.replaceChildren(emptyNote('Reading the draft…'));
         return;
@@ -756,8 +768,409 @@ function renderDraftTab(content) {
         content.replaceChildren(emptyNote(p.error));
         return;
     }
-    // Keys for collapsed segments are per draft, not per preview.
-    renderParsedTab(content, { ...p.data.message, id: `draft-${d.id}` });
+    renderDraftSegmentsTab(content, d, p.data);
+}
+
+// --- Editing field by field (#278) ---
+//
+// Every field is an input. A changed value is written back by the server
+// (`POST /api/parse` with `set`, the code that writes overrides — the
+// browser parses nothing), and the answer is the new text and its preview.
+// The tab is then updated in place — validation, checklist, warning marks —
+// so the input the user moved on to keeps its focus and what was typed.
+// Adding, duplicating and removing a segment cut and insert whole lines at
+// the offsets the server gave (`positions`), then re-render.
+
+const DRAFT_QUICK = {
+    'MSH-7': { value: '{{now}}', label: 'now', badge: 'set when sent' },
+    'MSH-10': { value: '{{id}}', label: 'new ID', badge: 'new for every send' },
+};
+
+// `SEG-n` / `SEG[k]-n` for the field `index` of the segment `seg` that is
+// the `occurrence`-th of its name; null for a name the server's field paths
+// do not take (`~OBX`, `obx`, nine letters).
+function draftFieldPath(name, occurrence, index) {
+    if (!/^[A-Z0-9]{3}$/.test(name)) return null;
+    return occurrence === 1 ? `${name}-${index}` : `${name}[${occurrence}]-${index}`;
+}
+
+// Warnings by field (`PID-5`), for the warning marks. A validation warning
+// names the segment, not which occurrence of it (#291 review), so a missing
+// required field in one OBX marks that field in every OBX — the banner lists
+// the warnings themselves.
+function draftWarningIndex(message) {
+    const fields = new Set();
+    for (const w of message.validation_warnings || []) {
+        if (w.field != null && w.segment) fields.add(`${w.segment}-${w.field}`);
+    }
+    return fields;
+}
+
+function placeholderBadge(path, value) {
+    const quick = DRAFT_QUICK[path];
+    if (quick && value === quick.value) return quick.badge;
+    return /\{\{(?!open\}\})[^}]+\}\}/.test(value || '') ? 'filled in when sent' : '';
+}
+
+function renderDraftSegmentsTab(content, d, data) {
+    const msg = data.message;
+    if (msg.parse_error) {
+        const children = [buildParseErrorEl(msg.parse_error)];
+        children.push(emptyNote('Fields can be edited once the text parses — fix it in the Raw tab.'));
+        content.replaceChildren(...children);
+        return;
+    }
+    const children = [];
+    const top = document.createElement('div');
+    top.className = 'draft-validation';
+    fillDraftValidation(top, msg);
+    children.push(top);
+    const warned = draftWarningIndex(msg);
+    const seen = new Map();
+    msg.segments.forEach((seg, segIdx) => {
+        const occurrence = (seen.get(seg.name) || 0) + 1;
+        seen.set(seg.name, occurrence);
+        children.push(buildDraftSegmentBlock(d, seg, segIdx, occurrence, warned, msg.delimiters));
+    });
+    content.replaceChildren(...children);
+}
+
+// The checklist (missing segments addable with one click) and the banner.
+function fillDraftValidation(container, msg) {
+    const warnings = msg.validation_warnings || [];
+    const missing = {};
+    const fieldWarn = {};
+    for (const w of warnings) {
+        if (w.code === 'MISSING_SEGMENT') missing[w.segment] = w.message;
+        else if (w.code === 'MISSING_FIELD') fieldWarn[w.segment] = true;
+    }
+    const nodes = [];
+    if (msg.typical_segments && msg.typical_segments.length) {
+        const list = buildTypicalChecklist(msg, missing, fieldWarn);
+        for (const pill of list.children) {
+            const name = pill.dataset && pill.dataset.seg;
+            if (!name || !(pill.classList.contains('absent') || pill.classList.contains('missing'))) continue;
+            pill.classList.add('addable');
+            pill.dataset.action = 'draft-add-segment';
+            pill.setAttribute('role', 'button');
+            pill.tabIndex = 0;
+            pill.title = `Add a ${name} segment` + (pill.title ? ` — ${pill.title}` : '');
+            pill.textContent = pill.classList.contains('missing') ? `+ ${name} \u2715` : `+ ${name}`;
+        }
+        nodes.push(list);
+    }
+    if (warnings.length) nodes.push(buildValidationBanner(warnings));
+    container.replaceChildren(...nodes);
+}
+
+function segToolButton(action, label, segIdx, extra = '') {
+    const b = document.createElement('button');
+    b.className = 'seg-tool';
+    b.dataset.action = action;
+    b.dataset.segIdx = String(segIdx);
+    b.textContent = label;
+    if (extra) b.title = extra;
+    return b;
+}
+
+function buildDraftSegmentBlock(d, seg, segIdx, occurrence, warned, delims) {
+    const key = `draft-${d.id}-${segIdx}`;
+    const collapsed = state.collapsedSegments.has(key);
+    const block = document.createElement('div');
+    block.className = collapsed ? 'segment-block collapsed' : 'segment-block';
+    block.dataset.segIdx = String(segIdx);
+
+    const head = document.createElement('div');
+    head.className = 'segment-name';
+    head.dataset.segKey = key;
+    head.setAttribute('role', 'button');
+    head.tabIndex = 0;
+    head.setAttribute('aria-expanded', String(!collapsed));
+    const icon = document.createElement('span');
+    icon.className = 'collapse-icon';
+    icon.innerHTML = collapsed ? ICONS.chevronRight : ICONS.chevronDown;
+    head.appendChild(icon);
+    head.appendChild(document.createTextNode(` ${seg.name} `));
+    head.appendChild(textSpan('field-count', `(${seg.fields.length})`));
+    const tools = document.createElement('span');
+    tools.className = 'seg-tools';
+    const emptyKey = `${seg.name}[${occurrence}]`;
+    const showingEmpty = state.draftShowEmpty.has(emptyKey);
+    tools.appendChild(segToolButton('draft-show-empty', showingEmpty ? 'hide empty fields' : 'show empty fields', segIdx));
+    if (seg.name !== 'MSH') {
+        tools.appendChild(segToolButton('draft-dup-segment', 'duplicate', segIdx, 'Insert a copy of this segment below it'));
+        tools.appendChild(segToolButton('draft-remove-segment', 'remove', segIdx, 'Remove this segment from the draft'));
+    }
+    head.appendChild(tools);
+    block.appendChild(head);
+
+    const table = document.createElement('table');
+    table.className = 'field-table editable';
+    const tbody = document.createElement('tbody');
+    const present = new Map(seg.fields.map((f) => [f.index, f]));
+    const dict = showingEmpty ? state.dictionaryCache.get(seg.name) : null;
+    const highest = Math.max(
+        seg.fields.length ? seg.fields[seg.fields.length - 1].index : 0,
+        dict && dict.fields.length ? dict.fields[dict.fields.length - 1].seq : 0,
+    );
+    const dictBySeq = new Map(dict ? dict.fields.map((f) => [f.seq, f]) : []);
+    for (let index = 1; index <= highest; index++) {
+        const f = present.get(index);
+        const path = draftFieldPath(seg.name, occurrence, index);
+        const label = `${seg.name}-${index}`;
+        const isWarn = warned.has(label);
+        const value = f ? f.value : '';
+        // Empty fields are listed only on request, or when they are missing
+        // and required.
+        if (!value && !showingEmpty && !isWarn) continue;
+        const def = dictBySeq.get(index);
+        const description = (f && f.description) || (def && def.name) || '';
+        const datatype = (f && f.datatype) || (def && def.datatype) || '';
+        tbody.appendChild(buildDraftFieldRow(seg.name, index, path, value, description, datatype, isWarn));
+    }
+    table.appendChild(tbody);
+    block.appendChild(table);
+    return block;
+}
+
+function buildDraftFieldRow(segName, index, path, value, description, datatype, isWarn) {
+    const tr = document.createElement('tr');
+    tr.dataset.label = `${segName}-${index}`;
+    if (isWarn) tr.className = 'warn';
+    const tdIdx = document.createElement('td');
+    tdIdx.className = 'field-idx';
+    tdIdx.appendChild(document.createTextNode(`${segName}-${index}`));
+    if (description || datatype) {
+        const desc = [description, datatype].filter(Boolean).join(' \u00b7 ');
+        tdIdx.appendChild(textSpan('desc-text', desc, desc));
+    }
+    tr.appendChild(tdIdx);
+
+    const tdVal = document.createElement('td');
+    tdVal.className = 'field-edit';
+    const delimiterField = segName === 'MSH' && index <= 2;
+    const tooLong = value.length > DISPLAY_VALUE_MAX;
+    if (delimiterField || !path || tooLong) {
+        // MSH-1/MSH-2 are the delimiters; a very long value (a file's
+        // attachment) would freeze an input (#215).
+        const shown = previewText(value);
+        tdVal.appendChild(textSpan('field-fixed', shown.text));
+        const why = delimiterField ? 'the delimiters — change them in the Raw tab'
+            : !path ? 'this segment name cannot be addressed — edit it in the Raw tab'
+            : `${formatSize(utf8Length(value))} — edit it in the Raw tab`;
+        tdVal.appendChild(textSpan('field-note', why));
+    } else {
+        const input = document.createElement('input');
+        input.type = 'text';
+        input.className = 'field-input';
+        input.value = value;
+        input.spellcheck = false;
+        input.dataset.fieldPath = path;
+        input.dataset.written = value;
+        input.setAttribute('aria-label', `${segName}-${index}${description ? ' ' + description : ''}`);
+        input.addEventListener('change', () => writeDraftField(path, input.value));
+        tdVal.appendChild(input);
+        syncPlaceholderMark(input, path);
+    }
+    tr.appendChild(tdVal);
+
+    const tdQuick = document.createElement('td');
+    tdQuick.className = 'field-quick-cell';
+    const quick = DRAFT_QUICK[`${segName}-${index}`];
+    if (quick && path) {
+        const b = document.createElement('button');
+        b.className = 'field-quick';
+        b.dataset.action = 'draft-quick';
+        b.dataset.path = path;
+        b.dataset.value = quick.value;
+        b.textContent = quick.label;
+        b.title = `Set ${segName}-${index} to ${quick.value}: ${quick.badge}`;
+        tdQuick.appendChild(b);
+    }
+    tr.appendChild(tdQuick);
+    return tr;
+}
+
+// A value with a placeholder is marked, with what it becomes.
+function syncPlaceholderMark(input, path) {
+    const badge = placeholderBadge(path, input.value);
+    input.classList.toggle('auto', !!badge);
+    input.title = badge ? `${input.value}: ${badge}` : '';
+}
+
+// Write `value` into the field `path` of the open draft. Writes are queued,
+// so two quick changes apply in order to the right text.
+let draftWriteChain = Promise.resolve();
+function writeDraftField(path, value) {
+    draftWriteChain = draftWriteChain.then(() => writeDraftFieldNow(path, value)).catch(() => {});
+    return draftWriteChain;
+}
+
+async function writeDraftFieldNow(path, value) {
+    const d = openDraftObject();
+    if (!d) return false;
+    // The text the field is written into: if the draft changed meanwhile
+    // (the Raw tab), the answer would overwrite that change (#291 review).
+    const base = d.raw;
+    let resp;
+    try {
+        resp = await fetch('/api/parse', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ raw: base, set: { [path]: value }, based_on: d.basedOn }),
+        });
+    } catch (e) {
+        showToast(`${path} not written: ` + (e.message || e));
+        revertDraftInput(path);
+        return false;
+    }
+    if (!resp.ok) {
+        showToast(`${path} not written: ${(await resp.text()) || `HTTP ${resp.status}`}`);
+        revertDraftInput(path);
+        return false;
+    }
+    const data = await resp.json();
+    if (state.selectedDraftId !== d.id) return false;
+    if (d.raw !== base) {
+        showToast(`${path} not written: the draft changed meanwhile — write it again`, 'info');
+        revertDraftInput(path);
+        return false;
+    }
+    d.raw = data.raw;
+    if (state.draftSendAnyway === d.id) state.draftSendAnyway = null;
+    saveDrafts();
+    state.draftPreviewSeq++; // an older preview in flight must not win
+    state.draftPreview = { draftId: d.id, raw: d.raw, filled: false, data, error: null };
+    const m = data.message;
+    d.type = m.parse_error ? '' : m.message_type || '';
+    d.title = m.patient_name || m.patient_id || '';
+    renderDraftRail();
+    renderDraftHeader();
+    if (state.activeTab === 'parsed') refreshDraftSegmentsInPlace(path, value, data);
+    return true;
+}
+
+function draftInputFor(path) {
+    const content = document.getElementById('detail-content');
+    if (!content || !content.querySelector) return null;
+    return content.querySelector(`.field-input[data-field-path="${CSS.escape(path)}"]`);
+}
+
+function revertDraftInput(path) {
+    const input = draftInputFor(path);
+    if (input) {
+        input.value = input.dataset.written || '';
+        syncPlaceholderMark(input, path);
+    }
+}
+
+// After a write: the same segments, so only the marks, the checklist and
+// the banner change, and the written input shows what was written — unless
+// it has the focus and the user typed on. Another segment list re-renders.
+function refreshDraftSegmentsInPlace(path, value, data) {
+    const content = document.getElementById('detail-content');
+    const d = openDraftObject();
+    if (!content || !d) return;
+    const blocks = content.querySelectorAll ? content.querySelectorAll('.segment-block') : [];
+    if (blocks.length !== data.message.segments.length || data.message.parse_error) {
+        renderDraftSegmentsTab(content, d, data);
+        return;
+    }
+    const top = content.querySelector('.draft-validation');
+    if (top) fillDraftValidation(top, data.message);
+    const warned = draftWarningIndex(data.message);
+    for (const tr of content.querySelectorAll('tr[data-label]')) {
+        tr.classList.toggle('warn', warned.has(tr.dataset.label));
+    }
+    const input = draftInputFor(path);
+    if (input) {
+        input.dataset.written = value;
+        if (document.activeElement !== input || input.value === value) input.value = value;
+        syncPlaceholderMark(input, path);
+    }
+}
+
+// --- Whole segments, at the server's offsets ---
+
+function draftLines(d) {
+    const p = currentPreview(d);
+    if (!p || p.filled || !p.data || p.data.message.parse_error) {
+        showToast('Wait for the preview of the draft, then try again', 'info');
+        return null;
+    }
+    return p.data;
+}
+
+function replaceDraftText(d, text) {
+    d.raw = text;
+    if (state.draftSendAnyway === d.id) state.draftSendAnyway = null;
+    saveDrafts();
+    renderDraftRail();
+    requestDraftPreview(d, true);
+}
+
+function removeDraftSegment(segIdx) {
+    const d = openDraftObject();
+    const data = d && draftLines(d);
+    const pos = data && data.positions[segIdx];
+    if (!pos || pos.name === 'MSH') return;
+    let { start, end } = pos;
+    // The line and one line end with it.
+    if (d.raw[end] === '\n') end += 1;
+    else if (start > 0 && d.raw[start - 1] === '\n') start -= 1;
+    replaceDraftText(d, d.raw.slice(0, start) + d.raw.slice(end));
+}
+
+function duplicateDraftSegment(segIdx) {
+    const d = openDraftObject();
+    const data = d && draftLines(d);
+    const pos = data && data.positions[segIdx];
+    if (!pos || pos.name === 'MSH') return;
+    const line = d.raw.slice(pos.start, pos.end);
+    replaceDraftText(d, d.raw.slice(0, pos.end) + '\n' + line + d.raw.slice(pos.end));
+}
+
+// A missing segment goes after the last present one that comes before it
+// in the message type's typical order (else after MSH).
+function addDraftSegment(name) {
+    const d = openDraftObject();
+    const data = d && draftLines(d);
+    if (!data || !/^[A-Z0-9]{3}$/.test(name)) return;
+    const order = data.message.typical_segments || [];
+    const rank = order.indexOf(name);
+    let after = data.positions[0];
+    for (const pos of data.positions) {
+        const r = order.indexOf(pos.name);
+        if (r !== -1 && r < rank) after = pos;
+    }
+    if (!after) return;
+    const sep = (data.message.delimiters || '|')[0];
+    replaceDraftText(d, d.raw.slice(0, after.end) + `\n${name}${sep}` + d.raw.slice(after.end));
+}
+
+// *Show empty fields*: the segment's fields from the dictionary.
+async function toggleDraftEmptyFields(segIdx) {
+    const d = openDraftObject();
+    const p = d && currentPreview(d);
+    const seg = p && p.data && p.data.message.segments[segIdx];
+    if (!seg) return;
+    const occurrence = p.data.message.segments.slice(0, segIdx + 1).filter((s) => s.name === seg.name).length;
+    const key = `${seg.name}[${occurrence}]`;
+    if (state.draftShowEmpty.has(key)) {
+        state.draftShowEmpty.delete(key);
+    } else {
+        state.draftShowEmpty.add(key);
+        if (!state.dictionaryCache.has(seg.name)) {
+            try {
+                const resp = await fetch(`/api/dictionary/${encodeURIComponent(seg.name)}`);
+                state.dictionaryCache.set(seg.name, resp.ok ? await resp.json() : { fields: [] });
+            } catch (e) {
+                state.dictionaryCache.set(seg.name, { fields: [] });
+            }
+        }
+    }
+    const content = document.getElementById('detail-content');
+    if (state.activeTab === 'parsed' && state.selectedDraftId === d.id) renderDraftTab(content);
 }
 
 function renderDraftRawTab(content, d) {
@@ -883,6 +1296,16 @@ function handleComposeAction(action, el) {
         case 'draft-keep': if (state.selectedDraftId) toggleKeepDraft(state.selectedDraftId); return true;
         case 'draft-save-file': saveDraftAsFile(); return true;
         case 'draft-edit': editMessage(el.dataset.id); return true;
+        case 'draft-quick': {
+            const input = draftInputFor(el.dataset.path);
+            if (input) { input.value = el.dataset.value; syncPlaceholderMark(input, el.dataset.path); }
+            writeDraftField(el.dataset.path, el.dataset.value);
+            return true;
+        }
+        case 'draft-add-segment': addDraftSegment(el.dataset.seg); return true;
+        case 'draft-dup-segment': duplicateDraftSegment(Number(el.dataset.segIdx)); return true;
+        case 'draft-remove-segment': removeDraftSegment(Number(el.dataset.segIdx)); return true;
+        case 'draft-show-empty': toggleDraftEmptyFields(Number(el.dataset.segIdx)); return true;
         case 'new-message': toggleNewMenu(); return true;
         case 'new-blank': toggleNewMenu(false); newBlankDraft(); return true;
         case 'new-clipboard': toggleNewMenu(false); newDraftFromClipboard(); return true;

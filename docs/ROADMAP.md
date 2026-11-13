@@ -138,7 +138,7 @@ This document tracks all milestones and planned features. Each milestone lists i
 - [ ] **Message editor** — edit raw HL7 in the UI and send
   - [x] M4-5 Drafts on the server: preview, field write-back, building the bytes (#276)
   - [x] M4-6 Drafts in the UI: write or edit a message in the detail panel and send it, validated live (#277)
-  - [ ] M4-7 Edit a draft field by field
+  - [x] M4-7 Edit a draft field by field (#278)
 - [ ] **Test message generator** — templates for common types (ADT^A01, ORM^O01, ORU^R01) with editable fields
   - [ ] M4-8 Built-in templates and a template directory
 - [ ] **Several messages** — resend the filtered messages in order, repeat a draft

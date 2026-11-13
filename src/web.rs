@@ -308,6 +308,7 @@ pub fn create_router(state: AppState) -> Router {
         // Sending (#272) — `403` while `send.enabled` is off.
         .route("/api/send/config", get(send_config))
         .route("/api/messages/{id}/draft", get(message_draft))
+        .route("/api/dictionary/{segment}", get(dictionary_segment))
         // Routes with a message in the body (#276): a body limit above
         // axum's 2 MB default, and a permit before a large body is read.
         .route(
@@ -578,6 +579,40 @@ async fn message_draft(State(state): State<AppState>, Path(id): Path<String>) ->
         )
             .into_response(),
     }
+}
+
+/// `GET /api/dictionary/{segment}` (#278): a segment's fields from the
+/// embedded v2.5.1 dictionary — number, name, datatype — for the draft
+/// editor's *show empty fields*. Reference data only, so not tied to
+/// `send.enabled`. `400` for a name that is not three letters or digits,
+/// `404` for one the dictionary does not know.
+async fn dictionary_segment(Path(segment): Path<String>) -> Response {
+    let name = segment.trim().to_ascii_uppercase();
+    if name.len() != 3 || !name.bytes().all(|b| b.is_ascii_alphanumeric()) {
+        return (
+            StatusCode::BAD_REQUEST,
+            "A segment name has three letters or digits",
+        )
+            .into_response();
+    }
+    let Some(def) = crate::dictionary::get_v251().segments.get(&name) else {
+        return (
+            StatusCode::NOT_FOUND,
+            format!("{name} is not in the v2.5.1 dictionary"),
+        )
+            .into_response();
+    };
+    let mut fields: Vec<_> = def.fields.iter().filter(|f| f.seq >= 1).collect();
+    fields.sort_by_key(|f| f.seq);
+    Json(serde_json::json!({
+        "name": name,
+        "description": def.desc,
+        "fields": fields
+            .iter()
+            .map(|f| serde_json::json!({"seq": f.seq, "name": f.desc, "datatype": f.datatype}))
+            .collect::<Vec<_>>(),
+    }))
+    .into_response()
 }
 
 fn is_json(headers: &axum::http::HeaderMap) -> bool {

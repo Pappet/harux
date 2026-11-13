@@ -104,6 +104,10 @@ const state = {
     draftSendAnyway: null, // id of a broken draft armed for "Send anyway"
     draftStorageWarned: false,
     newMenuOpen: false,
+    // Field-by-field editing (#278): segments showing their empty fields
+    // ("PID[1]"), and the dictionary's field lists by segment name.
+    draftShowEmpty: new Set(),
+    dictionaryCache: new Map(),
 };
 
 // The selected stored message's ID, or null — a view of `selection`.
