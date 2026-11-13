@@ -71,6 +71,8 @@ function handleServerEvent(data, known = null) {
         updateMessageTags(data.data);
     } else if (data.type === 'bookmark_toggled') {
         updateMessageBookmark(data.data);
+    } else if (data.type === 'delivery_updated') {
+        updateMessageDelivery(data.data);
     } else if (data.type === 'evicted') {
         removeEvictedMessages(data.data);
     } else if (data.type === 'cleared') {
@@ -150,6 +152,18 @@ function updateMessageBookmark(summary) {
     updateHeaderCounters();
 }
 
+// A sent message's outcome arrived (#272). It can come within the 250 ms
+// before its row is flushed, so the summary is updated wherever the client
+// holds it, like tags. The event carries no response text: an open detail
+// panel fetches the message again.
+function updateMessageDelivery(summary) {
+    for (const m of [...state.messages, ...state.pendingMessages]) {
+        if (m.id === summary.id) m.delivery = summary.delivery;
+    }
+    patchRow(summary.id, { delivery: summary.delivery });
+    if (state.selectedId === summary.id) selectMessage(summary.id);
+}
+
 // Undo a message's contribution to the incremental client counters — the
 // inverse of what addMessage adds. Used when a message leaves the client
 // buffer (server eviction or client-side cap). `totalMessagesCount` is the
@@ -158,7 +172,7 @@ function forgetMessageCounters(m) {
     state.totalValidationCount = Math.max(0,
         state.totalValidationCount - (m.validation_warning_count || 0) - (m.has_segment_errors ? 1 : 0));
     if (m.bookmarked) state.totalBookmarkCount = Math.max(0, state.totalBookmarkCount - 1);
-    const label = srcLabelFor(m.source_addr);
+    const label = srcLabelFor(sourceKeyOf(m));
     if (label) {
         const n = (state.sourceCounts.get(label) || 0) - 1;
         if (n > 0) state.sourceCounts.set(label, n);
@@ -246,10 +260,10 @@ function removeEvictedMessages(ids) {
 // Buffer incoming messages, flush at most every 250 ms (prevents DOM freeze at high message rates)
 function addMessage(summary) {
     state.pendingMessages.unshift(summary);
-    registerSource(summary.source_addr);
+    registerSource(sourceKeyOf(summary));
     // Keep the source-counts cache current — avoids re-iterating messages[]
     // on every renderSourceLegend call.
-    const label = srcLabelFor(summary.source_addr);
+    const label = srcLabelFor(sourceKeyOf(summary));
     if (label) state.sourceCounts.set(label, (state.sourceCounts.get(label) || 0) + 1);
     state.totalMessagesCount++;
     state.totalValidationCount += (summary.validation_warning_count || 0) + (summary.has_segment_errors ? 1 : 0);
@@ -260,9 +274,12 @@ function addMessage(summary) {
     if (state.pendingMessages.length > CLIENT_MESSAGE_CAP) {
         forgetMessageCounters(state.pendingMessages.pop());
     }
-    const now = Date.now();
-    state.rateWindow.push(now);
-    state.lastMessageReceivedAt = now;
+    // `rate` and `last` count received messages only (#272).
+    if (summary.direction !== 'out') {
+        const now = Date.now();
+        state.rateWindow.push(now);
+        state.lastMessageReceivedAt = now;
+    }
     if (!state.paused) {
         scheduleRender();
     }
@@ -350,7 +367,7 @@ function applySnapshot(messages) {
     state.totalBookmarkCount = 0;
     state.seenSources.clear();
     for (const m of state.messages) {
-        registerSource(m.source_addr);
+        registerSource(sourceKeyOf(m));
         state.totalValidationCount += (m.validation_warning_count || 0) + (m.has_segment_errors ? 1 : 0);
         if (m.bookmarked) state.totalBookmarkCount++;
     }
@@ -461,8 +478,8 @@ function mergeOlderMessages(found, searchHit) {
     if (added.length === 0) return 0;
     for (const m of added) {
         if (searchHit) m._searchHit = true;
-        registerSource(m.source_addr);
-        const label = srcLabelFor(m.source_addr);
+        registerSource(sourceKeyOf(m));
+        const label = srcLabelFor(sourceKeyOf(m));
         if (label) state.sourceCounts.set(label, (state.sourceCounts.get(label) || 0) + 1);
         state.totalValidationCount += (m.validation_warning_count || 0) + (m.has_segment_errors ? 1 : 0);
         if (m.bookmarked) state.totalBookmarkCount++;

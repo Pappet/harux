@@ -44,6 +44,18 @@ Harux is an **inspection and debugging tool** — not a production message broke
 - **PHI exposure**: Messages displayed in the Web UI may contain patient data. Limit browser access to authorized personnel.
 - **No persistent storage** (currently): Messages are held in memory only and are lost on restart. This limits exposure but does not eliminate it while the service is running. Data leaves memory in two ways: the export (`/api/export`) writes every stored message to a file on the user's machine, and the log (stdout, and with `logging.file` the daily log files, kept for `logging.max_files` days) records connections and parse errors, which can quote the start of a broken message.
 
+## Sending
+
+**Sending is off by default.** Once `send.enabled = true` is set in `harux.toml`, everyone who can open the web UI can make the Harux server connect to any host and port the server can reach, and send an HL7 message there — including a production system.
+
+What stands against a mistake once it is on:
+
+- **`send.allowed_destinations`** limits where users may send: entries are `host:port` or `host:from-to` (an entry without a port is refused at start, since it would allow every port on that host). Names are compared as written, nothing is resolved for the check. This is also the control against using Harux as a stepping stone into the network, and against patient data reaching a system that should not get it.
+- **Every send is visible:** the sent message is stored before Harux connects, as a row everyone sees, with the destination and the address of the client that asked for it, and a log line (metadata only, never content). Behind a reverse proxy that address is the proxy's.
+- Send routes are `POST` and covered by the cross-site guard; the number of sends at a time is limited (`send.max_concurrent_runs`).
+- A response is read up to 1 MB and stored up to 64 KB; it never travels in list rows or WebSocket events.
+- Outgoing connections are unencrypted for now; TLS for them is the next work package.
+
 ## Hardening Measures (Built-in)
 
 - Cross-site protection for the Web UI: requests with an unknown `Host` (DNS rebinding) and cross-origin WebSocket or state-changing requests are refused; names other than IP addresses and `localhost` must be listed in `server.allowed_hosts`
@@ -55,5 +67,6 @@ Harux is an **inspection and debugging tool** — not a production message broke
 - Every frame is stored and answered — a parser panic becomes a stored parse error and a NACK, not a dropped connection; the ingest path is fuzz-tested in CI (`tests/fuzz_ingest.rs`)
 - In-memory store bounded by real memory use (`store.max_memory_mb`) with automatic eviction
 - A broken configuration stops the start instead of running on defaults
+- Sending is off unless `send.enabled` is set, and can be limited to `send.allowed_destinations`
 - Graceful shutdown on `Ctrl+C` and SIGTERM (Unix)
 - Dependencies checked against RustSec advisories daily (`cargo audit`), Dependabot updates

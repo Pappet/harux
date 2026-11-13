@@ -135,6 +135,7 @@
         <div class="detail-panel">
             <div class="detail-header" id="detail-header">
                 <div class="detail-title-line">
+                    <span id="detail-direction" class="detail-direction hidden" title="A message Harux sent">SENT</span>
                     <span id="detail-type" class="detail-type hidden"></span>
                     <span id="detail-title" class="detail-title">Select a message</span>
                 </div>
@@ -149,7 +150,7 @@
                     Segments <span class="badge hidden" id="tab-segments-badge">0</span>
                 </button>
                 <button class="detail-tab" data-tab="raw">Raw</button>
-                <button class="detail-tab" data-tab="ack">ACK</button>
+                <button class="detail-tab" id="tab-btn-ack" data-tab="ack">ACK</button>
                 <button class="detail-tab" data-tab="json">JSON</button>
                 <button class="detail-tab diff-tab hidden" id="tab-btn-diff" data-tab="diff">
                     <svg class="i-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>

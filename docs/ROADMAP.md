@@ -131,7 +131,7 @@ This document tracks all milestones and planned features. Each milestone lists i
 ### Tasks
 
 - [ ] **Message replay** — resend stored messages to a configurable target address/port (MLLP client, over TLS where the target needs it)
-  - [ ] M4-1 Send a stored message, unchanged: MLLP client, switch and limits in `harux.toml`, sent messages and their responses in the store and shown as sent
+  - [x] M4-1 Send a stored message, unchanged (#272): MLLP client, switch and limits in `harux.toml`, sent messages and their responses in the store and shown as sent
   - [ ] M4-2 TLS for outgoing connections
   - [ ] M4-3 Resend in the UI: a target list for every user, one-click resend, direction filter
   - [ ] M4-4 Changes on resend: new control ID, current time, field overrides

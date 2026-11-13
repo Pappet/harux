@@ -13,14 +13,18 @@
 //! Besides "no panic", each input is checked for:
 //! - the ACK parses, and its MSA-2 echoes MSH-10 (`UNKNOWN` when empty);
 //! - each segment rebuilds its non-blank line of `raw` exactly;
-//! - the bytes the export gives back (`wire_bytes`) are the bytes received.
+//! - the bytes the export gives back (`wire_bytes`) are the bytes received;
+//! - read as the response to a send (#272), the bytes give an outcome
+//!   without a panic, and an acknowledgement always carries its code.
 //!
 //! `HARUX_FUZZ_ITERATIONS` raises the count for a longer local run, and
 //! `HARUX_FUZZ_SEED` picks another sequence.
 
 use harux::hl7::charset::decode_payload;
 use harux::hl7::parser::{build_ack, build_nack, parse_message, AckError};
-use harux::hl7::types::{Hl7Message, Hl7MessageSummary, MessageMeta};
+use harux::hl7::types::{
+    DeliveryState, Hl7Message, Hl7MessageSummary, MessageMeta, MAX_STORED_RESPONSE_BYTES,
+};
 use harux::mllp::ingest;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 
@@ -212,6 +216,21 @@ fn check(payload: &[u8]) -> Result<(), String> {
     if let Some(e) = &stored.parse_error {
         return Err(format!(
             "parse_message succeeded, ingest stored a parse error: {e}"
+        ));
+    }
+    // The same bytes as the response to a send (#272): read without a
+    // panic, an acknowledgement always has its code, the stored text is cut.
+    let d = harux::send::read_response(payload, "C1", 1);
+    if d.response
+        .as_ref()
+        .is_none_or(|r| r.len() > MAX_STORED_RESPONSE_BYTES)
+    {
+        return Err("response not kept, or kept above the limit".into());
+    }
+    if (d.state == DeliveryState::Acked) != d.ack_code.is_some() {
+        return Err(format!(
+            "state {:?} with ack code {:?}",
+            d.state, d.ack_code
         ));
     }
     Ok(())

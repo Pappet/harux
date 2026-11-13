@@ -581,6 +581,10 @@ async fn export_is_byte_identical_to_what_was_received() {
         mllp_port: 0,
         max_connections: 1,
         allowed_hosts: std::sync::Arc::new(Vec::new()),
+        sender: harux::send::Sender::new(
+            harux::send::SendSettings::from_config(&harux::config::Config::default()).unwrap(),
+            srv.store.clone(),
+        ),
     });
     let res = app
         .oneshot(

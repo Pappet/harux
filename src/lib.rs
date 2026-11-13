@@ -3,6 +3,8 @@ pub mod dictionary;
 pub mod hl7;
 pub mod logging;
 pub mod mllp;
+pub mod mllp_client;
+pub mod send;
 pub mod store;
 pub mod validation;
 pub mod web;

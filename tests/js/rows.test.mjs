@@ -17,6 +17,13 @@ function setup() {
         document: { createElement: (tag) => { const el = new El(); el.tagName = tag.toUpperCase(); return el; } },
         WeakMap, Set, Map,
         getSourceColor: () => '#4fb98a',
+        TARGET_PREFIX: '→ ',
+        sourceKeyOf: (m) => (m.direction === 'out' ? `→ ${m.target}` : m.source_addr || ''),
+        srcLabelFor: (key) => key || '',
+        deliveryChip: (d) => (d && d.state === 'acked'
+            ? { cls: `msg-ack ${d.ack_code.toLowerCase()}`, text: d.ack_code, title: '' }
+            : { cls: 'msg-ack pending', text: '…', title: '' }),
+        formatLatency: (ms) => (typeof ms === 'number' ? `${ms} ms` : ''),
         rowTimeLabel: () => '3s ago',
         ackChipClass: (code) => `msg-ack ${code.toLowerCase()}`,
     };
@@ -91,4 +98,37 @@ test('a parse error row shows the marker and keeps the reason as title', () => {
     assert.equal(type.textContent, '⚠ PARSE ERROR');
     assert.equal(type.title, 'Message does not start with MSH');
     assert.equal(row.children[1].children[0].lastElementChild.textContent, '—', 'no ACK: placeholder chip');
+});
+
+test('a sent row: arrow, target instead of source, chip from the delivery, no sender colour (#272)', () => {
+    const { ctx } = setup();
+    const sent = {
+        id: 's1', direction: 'out', target: 'orchestra-test', message_type: 'ADT^A01', patient_name: 'Muster, Max',
+        sending_facility: 'KLINIK', source_addr: '10.4.1.9:6661', segment_count: 4, tags: [],
+        delivery: { state: 'pending' },
+    };
+    const row = ctx.buildMessageRow(sent);
+    assert.ok(cls(row).includes('outbound'));
+    const [bar, body] = row.children;
+    assert.equal(bar.style.background, undefined, 'the dashed bar comes from style.css');
+    const [row1, row2] = body.children;
+    assert.equal(row1.children[0].textContent, '↑ ADT^A01');
+    assert.equal(row1.lastElementChild.textContent, '…');
+    assert.equal(row2.children[2].textContent, '→ orchestra-test');
+    assert.equal(row2.children[2].title, 'Sent to 10.4.1.9:6661');
+
+    // The outcome replaces the chip and adds the round-trip time.
+    const list = { querySelector: () => row };
+    ctx.document.getElementById = () => list;
+    ctx.CSS = { escape: (v) => v };
+    row.querySelector = (sel) => {
+        const c = sel.replace(/^\./, '');
+        const walk = (el) => el.classList.contains(c) ? el : el.children.map(walk).find(Boolean) || null;
+        return walk(row);
+    };
+    ctx.patchRow('s1', { delivery: { state: 'acked', ack_code: 'AA', latency_ms: 42 } });
+    assert.deepEqual(row1.children.map((c) => c.textContent).slice(-2), ['AA', '42 ms']);
+    ctx.patchRow('s1', { delivery: { state: 'acked', ack_code: 'AE', latency_ms: 7 } });
+    assert.deepEqual(row1.children.map((c) => cls(c)[0]), ['msg-type', 'msg-patient', 'msg-ack', 'msg-latency']);
+    assert.equal(row1.children[2].textContent, 'AE');
 });

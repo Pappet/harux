@@ -21,9 +21,11 @@ same time through their browsers.
 Orchestra (a healthcare integration platform) for development and debugging.
 MDM messages with Base64-encoded attachments are common daily traffic.
 
-**Scope today:** receive and inspect. Sending, editing and replay (Milestone 4)
-and persistence (Milestone 5) are planned, not implemented — see the roadmap.
-Do not implement roadmap features unless explicitly asked.
+**Scope today:** receive and inspect, plus — off by default — resending a
+stored message unchanged (Milestone 4, M4-1). The rest of Milestone 4
+(TLS, editing, templates, runs) and persistence (Milestone 5) are planned —
+see the roadmap and `docs/MILESTONE_4_PLAN.md`. Do not implement roadmap
+features unless explicitly asked.
 
 ---
 
@@ -137,6 +139,19 @@ Limits are **config-driven** via `StoreConfig` (`src/config.rs`), not hardcoded 
 - **ACK/NACK:** `build_ack` / `build_nack` / `build_reject` are thin wrappers around `render_ack` (`src/hl7/parser.rs`) — change the MSH/MSA/ERR layout there only. ACKs reuse the sender's delimiters (echoed values stay valid) and get a fresh MSH-10; NACKs (unparseable frames) use default delimiters and MSA-2 `UNKNOWN`. A NACK or reject carries the reason in MSA-3 (cut to 80 characters, the v2.5 length) **and** an ERR segment: ERR-3 from HL7 table 0357 (`100` Segment sequence error for parse errors, `207` Application internal error for a parser panic or an oversized frame — `AckError`), ERR-4 `E`, ERR-8 the reason (cut to 250, marker `...`). All text is escaped (#218). Replies are written in the sender's charset (`reply_bytes` in `src/mllp.rs`, from `WireForm`) and declare it in MSH-18 unless the payload needed a `CHARSET_FALLBACK` (`reply_charset`); text Harux writes itself into a reply must stay ASCII so it fits any charset
 - **ACK storm prevention:** incoming messages with `message_type.starts_with("ACK")` are stored but never ACK'd back. Violating this rule creates an infinite ACK ping-pong with Orchestra.
 
+### Sending (`src/send.rs`, `src/mllp_client.rs`)
+
+Off unless `send.enabled = true` (#272): every send route answers `403` and the UI shows nothing new. `POST /api/send` resends one stored message to the destination the request names; the server keeps no list of targets (each user keeps theirs in the browser). The rules:
+
+1. **Everything Harux sends, or tries to send, is stored — before it connects** (`MessageStore::insert_sent`, delivery `pending`). A refused or timed-out send is a row too, and whatever the destination forwards because of the send is listed after it. Don't move the insert after the connect.
+2. **Unchanged means byte for byte:** an unchanged resend writes `wire_bytes()` (#230), borrowed from the stored sent message (`Arc`), never a re-encoding of `raw`.
+3. **Every send ends with an outcome** via `set_delivery` (`mutate_meta`, broadcast `delivery_updated` under the lock, #232): a response, a transport failure, shutdown, or a panic in the exchange task. No row stays `pending`.
+4. **The payload stays immutable** (#192): the outcome and the response live in `MessageMeta::delivery`, accounted like tags (`set_delivery` wakes eviction — a response can push the store over its limit). `ack_code` / `ack_response` keep meaning "what Harux wrote back" and stay empty on a sent message.
+5. **No response text in summaries:** `Hl7MessageSummary` gets `direction`, `target`, `origin_id`, a small `delivery` — the response (cut at 64 KB) is in the detail JSON only.
+6. **A destination is never shown as a sender:** the UI keys sent messages by `sourceKeyOf(msg)` (`→ target`), not by `source_addr` — rail, counters, bar colour and highlight. `rate` / `last` count received messages only.
+7. **No store lock across network I/O**; the exchange runs in its own task, limited by `send.max_concurrent_runs`. Log lines carry metadata only, never content.
+8. `allowed_destinations` compares normalized hosts (`config::normalize_host`) and never resolves names. An over-limit entry (`truncated`, #223) cannot be resent; a parse error only with `allow_invalid`. `POST /api/send` refuses unknown fields so an unsupported option never silently sends the message unchanged.
+
 ### Configuration & Logging
 
 - `src/config.rs` loads built-in defaults → `harux.toml` (next to the binary, then the working directory) → environment variables. Every section has `deny_unknown_fields`; `Config::validate` checks ranges, overlapping listener addresses and `logging.file`. Add new keys to `examples/harux-example.toml` and `harux.toml`, both of which `shipped_config_files_load` parses.
@@ -156,8 +171,9 @@ Limits are **config-driven** via `StoreConfig` (`src/config.rs`), not hardcoded 
 - `DELETE /api/messages/{id}/tags/{tag}` — Remove a tag
 - `POST /api/messages/{id}/bookmark` — Toggle bookmark
 - `POST /api/clear` — Clear all messages
-- `GET /api/export` — Download every stored message as one MLLP-framed `.hl7` file (the bytes **as received**, oldest first, directly replayable — via `Hl7Message::wire_bytes()`, #230). Exception: an over-limit frame (#223) is stored with only its first 4 KB, so the export contains that truncated frame (it carries a parse error in the UI). **Streamed** (`MllpExportStream` in `src/web.rs`): the store lock is held only to snapshot payload `Arc`s (`payload_snapshot`), large payloads go out zero-copy, small ones are coalesced into ~64 KiB chunks — never build the whole export in memory
-- `WS /ws` — Real-time updates (`init`, `new_message`, `tags_updated`, `bookmark_toggled`, `evicted`, `cleared`, `lagged` events). `evicted` carries the array of IDs removed by an eviction pass; the UI drops those rows and warns when bookmarks were among them
+- `GET /api/send/config`, `POST /api/send` — Sending (#272), see *Sending* above; `403` while `send.enabled` is off
+- `GET /api/export?direction=in|out|all` — Default `in` (received messages, as before #272). Download every stored message as one MLLP-framed `.hl7` file (the bytes **as received**, oldest first, directly replayable — via `Hl7Message::wire_bytes()`, #230). Exception: an over-limit frame (#223) is stored with only its first 4 KB, so the export contains that truncated frame (it carries a parse error in the UI). **Streamed** (`MllpExportStream` in `src/web.rs`): the store lock is held only to snapshot payload `Arc`s (`payload_snapshot`), large payloads go out zero-copy, small ones are coalesced into ~64 KiB chunks — never build the whole export in memory
+- `WS /ws` — Real-time updates (`init`, `new_message`, `tags_updated`, `bookmark_toggled`, `delivery_updated`, `evicted`, `cleared`, `lagged` events). `evicted` carries the array of IDs removed by an eviction pass; the UI drops those rows and warns when bookmarks were among them
 
 ### Frontend (`static/`)
 
@@ -233,6 +249,8 @@ measure process overhead, not server throughput. `tests/fuzz_ingest.rs` runs
 - Forgetting to adjust `current_bytes` when changing insert, eviction or clear
 - Treating MLLP as plain TCP text
 - Running only `cargo build` instead of the full CI list above
+- Storing a sent message after connecting, or adding the response text to `Hl7MessageSummary` (#272)
+- Keying a sent message by `source_addr` in the UI (it is the destination, not a sender)
 
 ---
 
@@ -245,6 +263,8 @@ src/
 ├── config.rs        # TOML → env → defaults config loading; fails closed: unknown keys, bad values, bad port env → startup error (#233); bind addresses (#237)
 ├── logging.rs       # Daily log file: fallible setup with stdout fallback (#234), pruning to logging.max_files by exact name (#240)
 ├── mllp.rs          # TCP listener, MLLP framing, ACK/NACK dispatch
+├── mllp_client.rs   # Sending side of MLLP: connect, one exchange, response limits (#272)
+├── send.rs          # Sending engine: checks, store-before-connect, outcome, /api/send request types (#272)
 ├── store.rs         # In-memory store with broadcast channel, dual eviction
 ├── web.rs           # Axum router, REST handlers, WebSocket handler
 ├── dictionary.rs    # Embedded HL7 field/segment dictionary (v2.5.1.json)
@@ -270,6 +290,7 @@ static/
 tests/
 ├── parser_fixtures.rs            # Parser tests against tests/messages/*.hl7 fixtures
 ├── mllp_tcp.rs                   # MLLP over real TCP: framing, ACK/NACK, limits, shutdown
+├── send_tcp.rs                   # Sending over real TCP: fake receivers, round trip to Harux, bytes on the wire (#272)
 ├── fuzz_ingest.rs                # Mutation fuzz of decode → parse → ACK → JSON, no panic + invariants (#243)
 ├── config_startup.rs             # Real binary: broken config stops the start; unwritable log, bind addresses
 ├── accept_errors.rs              # Real binary under ulimit: accept() errors are not fatal, SIGTERM (Unix)

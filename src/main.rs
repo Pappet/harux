@@ -3,6 +3,8 @@ mod dictionary;
 mod hl7;
 mod logging;
 mod mllp;
+mod mllp_client;
+mod send;
 mod store;
 mod validation;
 mod web;
@@ -89,6 +91,9 @@ async fn main() -> anyhow::Result<()> {
 
     let store = MessageStore::new(config.store.clone());
     let stats = MllpStats::new();
+    // Validated with the configuration, so this cannot fail here.
+    let send_settings = send::SendSettings::from_config(&config).map_err(|e| anyhow::anyhow!(e))?;
+    let sender = send::Sender::new(send_settings, store.clone());
 
     {
         let title = format!("  Harux v{}  ", env!("CARGO_PKG_VERSION"));
@@ -118,6 +123,17 @@ async fn main() -> anyhow::Result<()> {
         None => info!("No harux.toml found — using defaults and environment variables"),
     }
     info!("Effective configuration:\n{}", config);
+    if config.send.enabled {
+        warn!(
+            "Sending is ON (send.enabled): everyone who can open the web UI can make this \
+             server send HL7 messages to {}",
+            if config.send.allowed_destinations.is_empty() {
+                "any host and port it reaches"
+            } else {
+                "the destinations in send.allowed_destinations"
+            }
+        );
+    }
     for problem in web::allowed_hosts_problems(&config.server.allowed_hosts) {
         warn!(
             "server.allowed_hosts: {problem}; this entry never matches, and browsers \
@@ -148,6 +164,7 @@ async fn main() -> anyhow::Result<()> {
         mllp_port,
         max_connections: config.mllp.max_connections,
         allowed_hosts: std::sync::Arc::new(config.server.allowed_hosts.clone()),
+        sender: sender.clone(),
     };
     let app = create_router(app_state);
     let listener = tokio::net::TcpListener::bind(web_addr).await.map_err(|e| {
@@ -155,12 +172,17 @@ async fn main() -> anyhow::Result<()> {
     })?;
     let web_shutdown = shutdown_rx.clone();
     let web_handle = tokio::spawn(async move {
-        if let Err(e) = axum::serve(listener, app)
-            .with_graceful_shutdown(async move {
-                let mut rx = web_shutdown;
-                let _ = rx.changed().await;
-            })
-            .await
+        // With the client's address (`ConnectInfo`): a sent message records
+        // who asked for it (#272).
+        if let Err(e) = axum::serve(
+            listener,
+            app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+        )
+        .with_graceful_shutdown(async move {
+            let mut rx = web_shutdown;
+            let _ = rx.changed().await;
+        })
+        .await
         {
             warn!("Web server error: {}", e);
         }
@@ -186,6 +208,8 @@ async fn main() -> anyhow::Result<()> {
     }
 
     let _ = shutdown_tx.send(true);
+    // Runs under way record `shutdown` as their outcome and end.
+    sender.shutdown();
 
     // Wait for active MLLP connections to drain — for the count to reach
     // zero, not for a single (possibly stale) notification (#241).
@@ -204,6 +228,13 @@ async fn main() -> anyhow::Result<()> {
                 stats.active_connections.load(Ordering::SeqCst)
             );
         }
+    }
+
+    if !sender
+        .wait_for_runs(std::time::Duration::from_secs(1))
+        .await
+    {
+        warn!("A send was still recording its outcome at shutdown");
     }
 
     info!("Harux stopped.");
