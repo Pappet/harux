@@ -15,7 +15,9 @@
 //! - each segment rebuilds its non-blank line of `raw` exactly;
 //! - the bytes the export gives back (`wire_bytes`) are the bytes received;
 //! - read as the response to a send (#272), the bytes give an outcome
-//!   without a panic, and an acknowledgement always carries its code.
+//!   without a panic, and an acknowledgement always carries its code;
+//! - resent with a new MSH-10 (#275), the payload never carries an MLLP
+//!   frame byte and the parser finds the override again.
 //!
 //! `HARUX_FUZZ_ITERATIONS` raises the count for a longer local run, and
 //! `HARUX_FUZZ_SEED` picks another sequence.
@@ -232,6 +234,23 @@ fn check(payload: &[u8]) -> Result<(), String> {
             "state {:?} with ack code {:?}",
             d.state, d.ack_code
         ));
+    }
+    // The same message resent with a change (#275): no panic; a built
+    // payload never carries an MLLP frame byte, and the override is found
+    // again when the payload is read like a received frame.
+    let stored = ingest(payload, "fuzz");
+    let set = std::collections::BTreeMap::from([("MSH-10".to_string(), "FUZZ{{n}}".to_string())]);
+    if let Ok((bytes, _)) = harux::send::changed_payload(&stored, &set, 7, usize::MAX) {
+        if bytes.iter().any(|&b| b == 0x0B || b == 0x1C) {
+            return Err("a changed payload carries an MLLP frame byte".into());
+        }
+        let again = ingest(&bytes, "fuzz");
+        if again.parse_error.is_none() && again.message_control_id != "FUZZ7" {
+            return Err(format!(
+                "override not found again: MSH-10 = {:?}",
+                again.message_control_id
+            ));
+        }
     }
     Ok(())
 }

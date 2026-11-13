@@ -272,6 +272,7 @@ fn request(target: TargetRequest, id: &str) -> SendRequest {
         }],
         await_response: true,
         allow_invalid: false,
+        set: Default::default(),
     }
 }
 
@@ -923,4 +924,233 @@ mod tls {
         let d = send(&quick, &store, to(tls_port, "plain")).await;
         assert_eq!(d.error.as_deref(), Some("expects TLS"), "{d:?}");
     }
+}
+
+// ── Changes on resend (#275) ──────────────────────────────────────────────
+
+fn with_set(target: TargetRequest, id: &str, set: &[(&str, &str)]) -> SendRequest {
+    let mut r = request(target, id);
+    r.set = set
+        .iter()
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .collect();
+    r
+}
+
+/// A new control ID and the current time; every other byte as received.
+#[tokio::test]
+async fn new_control_id_and_time_change_nothing_else() {
+    let (addr, mut frames) = acking().await;
+    let store = store();
+    let sender = Sender::new(settings(|_| {}), store.clone());
+    let original = "MSH|^~\\&|KIS|KLINIK|ORCH|RZ|20240101120000||ADT^A01|ORIG1|P|2.5\r\nEVN|A01|20240101\rPID|||1||Müller^Jörg\r";
+    let id = received(&store, original.as_bytes()).await;
+    let result = sender
+        .send(
+            with_set(
+                to(addr, "t"),
+                &id,
+                &[("MSH-10", "{{id}}"), ("MSH-7", "{{now}}")],
+            ),
+            CLIENT,
+        )
+        .await
+        .unwrap();
+    assert_eq!(result.delivery.state, DeliveryState::Acked);
+    assert_eq!(
+        result.delivery.control_id_matches,
+        Some(true),
+        "MSA-2 echoes the new ID"
+    );
+
+    let wire = String::from_utf8(frames.recv().await.unwrap()).unwrap();
+    let fields: Vec<&str> = wire.split('|').collect();
+    let (new_time, new_id) = (fields[6], fields[9]);
+    assert_eq!(new_id.len(), 20);
+    assert_ne!(new_id, "ORIG1");
+    assert_eq!(new_time.len(), 14);
+    assert_eq!(
+        wire,
+        original
+            .replace("20240101120000", new_time)
+            .replace("ORIG1", new_id),
+        "only MSH-7 and MSH-10 differ; CR LF, CR and the terminator stay"
+    );
+
+    let sent = store.get_by_id(&result.id).await.unwrap();
+    assert_eq!(sent.message.message_control_id, new_id);
+    let json = serde_json::to_value(&sent).unwrap();
+    assert_eq!(
+        json["outbound"]["origin"]["changes"],
+        serde_json::json!(["MSH-10", "MSH-7"])
+    );
+    assert_eq!(json["outbound"]["origin"]["message_id"], id.as_str());
+}
+
+/// A pure-ASCII message declared 8859/1 leaves as Latin-1 after an override
+/// with `ü`; a character Latin-1 can't write is refused, naming it.
+#[tokio::test]
+async fn changed_messages_keep_their_encoding() {
+    let (addr, mut frames) = acking().await;
+    let store = store();
+    let sender = Sender::new(settings(|_| {}), store.clone());
+    let ascii_latin1 = b"MSH|^~\\&|A|B|||20240101||ADT^A01|L1|P|2.5||||||8859/1\rPID|||1||Muster\r";
+    let id = received(&store, ascii_latin1).await;
+    sender
+        .send(
+            with_set(to(addr, "t"), &id, &[("PID-5", "Müller^Jörg")]),
+            CLIENT,
+        )
+        .await
+        .unwrap();
+    let wire = frames.recv().await.unwrap();
+    assert!(
+        wire.ends_with(b"PID|||1||M\xfcller^J\xf6rg\r"),
+        "{:?}",
+        String::from_utf8_lossy(&wire)
+    );
+
+    let e = sender
+        .send(with_set(to(addr, "t"), &id, &[("PID-5", "Ωmega")]), CLIENT)
+        .await
+        .unwrap_err();
+    let SendError::Unprocessable(why) = e else {
+        panic!("{e:?}")
+    };
+    assert!(why.contains("'Ω'") && why.contains("U+03A9"), "{why}");
+
+    // A UTF-8 message stays UTF-8.
+    let id = received(
+        &store,
+        "MSH|^~\\&|A|B|||20240101||ADT^A01|U1|P|2.5\rPID|||1||Jörg\r".as_bytes(),
+    )
+    .await;
+    sender
+        .send(with_set(to(addr, "t"), &id, &[("PID-5", "Ωmega")]), CLIENT)
+        .await
+        .unwrap();
+    assert!(frames
+        .recv()
+        .await
+        .unwrap()
+        .ends_with("PID|||1||Ωmega\r".as_bytes()));
+
+    // Bytes no encoding reproduces can only go out unchanged.
+    let id = received(
+        &store,
+        b"MSH|^~\\&|A|B|||20240101||ADT^A01|O1|P|2.5||||||BIG-5\rPID|||1||\x81\x20\r",
+    )
+    .await;
+    let e = sender
+        .send(
+            with_set(to(addr, "t"), &id, &[("MSH-10", "{{id}}")]),
+            CLIENT,
+        )
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(e, SendError::Unprocessable(ref m) if m.contains("unchanged")),
+        "{e:?}"
+    );
+}
+
+/// Refusals happen before anything is stored or sent.
+#[tokio::test]
+async fn bad_overrides_store_nothing() {
+    let (addr, _) = acking().await;
+    let store = store();
+    let sender = Sender::new(settings(|_| {}), store.clone());
+    let id = received(
+        &store,
+        b"MSH|^~\\&|A|B|||20240101||ADT^A01|C1|P|2.5\rPID|||1\r",
+    )
+    .await;
+    let broken = received(&store, b"NOT HL7").await;
+    let before = store.count().await;
+    for (set, bad_request) in [
+        (("MSH-1", "#"), true),
+        (("MSH-2", "x"), true),
+        (("PID-0", "x"), true),
+        (("PID-1001", "x"), true),
+        (("PID-5", "a|b"), false),
+        (("PID-5", "a\rPV1|"), false),
+        (("PID-5", "x\u{1c}\r"), false),
+        (("PV1-2", "I"), false),
+    ] {
+        let e = sender
+            .send(with_set(to(addr, "t"), &id, &[set]), CLIENT)
+            .await
+            .unwrap_err();
+        assert_eq!(
+            matches!(e, SendError::BadRequest(_)),
+            bad_request,
+            "{set:?}: {e:?}"
+        );
+    }
+    let mut anyway = with_set(to(addr, "t"), &broken, &[("MSH-10", "x")]);
+    anyway.allow_invalid = true;
+    assert!(matches!(
+        sender.send(anyway, CLIENT).await,
+        Err(SendError::Unprocessable(_))
+    ));
+    assert_eq!(store.count().await, before);
+}
+
+/// Round trip: a resend with a new control ID to Harux itself is stored
+/// under that ID on both sides, so tracing it finds one exchange.
+#[tokio::test]
+async fn changed_round_trip_to_harux_itself() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let store = store();
+    let (_shutdown, rx) = tokio::sync::watch::channel(false);
+    tokio::spawn(mllp::serve(
+        listener,
+        store.clone(),
+        MllpStats::new(),
+        rx,
+        MllpConfig::default(),
+    ));
+    let sender = Sender::new(
+        settings(|c| {
+            c.server.mllp_bind = IpAddr::V4(Ipv4Addr::LOCALHOST);
+            c.server.mllp_port = addr.port();
+        }),
+        store.clone(),
+    );
+    let original = received(
+        &store,
+        b"MSH|^~\\&|A|B|||20240101||ADT^A01|SAME|P|2.5\rPID|||1\r",
+    )
+    .await;
+    let result = sender
+        .send(
+            with_set(
+                TargetRequest::Named("loopback".into()),
+                &original,
+                &[("MSH-10", "{{id}}")],
+            ),
+            CLIENT,
+        )
+        .await
+        .unwrap();
+    assert_eq!(result.delivery.control_id_matches, Some(true));
+    let sent_id = store
+        .get_by_id(&result.id)
+        .await
+        .unwrap()
+        .message
+        .message_control_id
+        .clone();
+    let with_new_id: Vec<_> = summaries(&store)
+        .await
+        .into_iter()
+        .filter(|s| s.message_control_id == sent_id)
+        .map(|s| s.direction)
+        .collect();
+    assert_eq!(
+        with_new_id,
+        [Direction::Out, Direction::In],
+        "the send and what the target stored"
+    );
 }

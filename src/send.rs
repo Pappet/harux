@@ -106,6 +106,12 @@ pub struct SendRequest {
     /// Send a stored message that did not parse, as it was received.
     #[serde(default)]
     pub allow_invalid: bool,
+    /// Field overrides (#275): `{"MSH-10": "{{id}}", "MSH-7": "{{now}}"}`.
+    /// Values are a field's raw text and may use placeholders (`{{now}}`,
+    /// `{{today}}`, `{{id}}`, `{{n}}`, `{{rand:N}}`). Empty or missing: the
+    /// message goes out byte for byte as received.
+    #[serde(default)]
+    pub set: std::collections::BTreeMap<String, String>,
 }
 
 fn yes() -> bool {
@@ -367,13 +373,25 @@ impl Sender {
             )));
         }
 
+        // Unchanged: the stored message itself — its bytes are the same
+        // (`wire` is copied), so the parse is too. Changed: the overrides
+        // written into its text, encoded like the original, then decoded
+        // and parsed like a received frame (#275).
+        let (mut msg, changes) = if request.set.is_empty() {
+            ((*original).clone(), Vec::new())
+        } else {
+            self.changed_message(
+                &original,
+                &request.set,
+                &destination.display(),
+                request.allow_invalid,
+            )?
+        };
+
         let permit = Arc::clone(&self.inner.runs)
             .try_acquire_owned()
             .map_err(|_| SendError::Busy)?;
 
-        // The sent message is the stored one with the facts of this send:
-        // its bytes are the same (`wire` is copied), so the parse is too.
-        let mut msg = (*original).clone();
         msg.id = uuid::Uuid::new_v4().to_string();
         msg.received_at = chrono::Utc::now();
         msg.source_addr = destination.display();
@@ -384,6 +402,7 @@ impl Sender {
             transport: destination.transport,
             origin: Origin::Resend {
                 message_id: original.id.clone(),
+                changes,
             },
             requested_by: requested_by.to_canonical().to_string(),
             run: uuid::Uuid::new_v4().to_string(),
@@ -403,6 +422,28 @@ impl Sender {
             // store calls around it.
             SendError::Unprocessable(format!("Internal error while sending: {e}"))
         })
+    }
+
+    /// `original` with the fields of `set` overridden (#275), decoded and
+    /// parsed like a received frame. See [`changed_payload`].
+    fn changed_message(
+        &self,
+        original: &Hl7Message,
+        set: &std::collections::BTreeMap<String, String>,
+        peer: &str,
+        allow_invalid: bool,
+    ) -> Result<(Hl7Message, Vec<String>), SendError> {
+        let (bytes, changes) =
+            changed_payload(original, set, 1, self.inner.settings.max_message_bytes)?;
+        let msg = crate::mllp::ingest(&bytes, peer);
+        if let Some(e) = &msg.parse_error {
+            if !allow_invalid {
+                return Err(SendError::Unprocessable(format!(
+                    "After the changes the message does not parse: {e}"
+                )));
+            }
+        }
+        Ok((msg, changes))
     }
 
     /// Check the request's target against the configuration.
@@ -670,6 +711,72 @@ async fn exchange_one(
         }
         Err(e) => failed(e),
     }
+}
+
+/// The bytes of `original` with the fields of `set` overridden (#275):
+/// placeholders filled in (`n` is the message's position in its run), each
+/// value written into its field (`hl7::compose`), the list of segments
+/// unchanged, the text encoded as the original arrived
+/// (`charset::encode_for_send`), no MLLP frame byte in the result, at most
+/// `max_bytes`. Returns the payload and the fields that were set. Public for
+/// `tests/fuzz_ingest.rs`.
+pub fn changed_payload(
+    original: &Hl7Message,
+    set: &std::collections::BTreeMap<String, String>,
+    n: usize,
+    max_bytes: usize,
+) -> Result<(Vec<u8>, Vec<String>), SendError> {
+    use crate::hl7::compose::{self, ComposeError, FieldPath, PlaceholderContext};
+    if original.parse_error.is_some() {
+        return Err(SendError::Unprocessable(
+            "A message that did not parse can only be resent unchanged".into(),
+        ));
+    }
+    let ctx = PlaceholderContext {
+        n,
+        now: chrono::Local::now(),
+    };
+    let d = original.delimiters;
+    let mut text = original.raw.clone();
+    let mut changes = Vec::with_capacity(set.len());
+    for (path, value) in set {
+        let path = FieldPath::parse(path).map_err(|e| SendError::BadRequest(e.to_string()))?;
+        let value = compose::fill_placeholders(value, &ctx);
+        text = compose::set_field(&text, d, &path, &value).map_err(|e| match e {
+            ComposeError::BadPath(m) => SendError::BadRequest(m),
+            ComposeError::MissingSegment(m) | ComposeError::BadValue(m) => {
+                SendError::Unprocessable(m)
+            }
+        })?;
+        changes.push(path.to_string());
+    }
+    if compose::segment_names(&text, d) != compose::segment_names(&original.raw, d) {
+        return Err(SendError::Unprocessable(
+            "The changes would alter the message's list of segments".into(),
+        ));
+    }
+    let bytes = crate::hl7::charset::encode_for_send(
+        &text,
+        &original.wire,
+        original.raw.is_ascii(),
+        original.charset.as_deref(),
+    )
+    .map_err(SendError::Unprocessable)?;
+    // One frame on the wire is one stored message (rule 1): a payload Harux
+    // builds never carries a frame byte.
+    if let Some(b) = bytes.iter().find(|&&b| b == 0x0B || b == 0x1C) {
+        return Err(SendError::Unprocessable(format!(
+            "The message contains the MLLP {} byte (0x{b:02X}); a changed message cannot carry it",
+            if *b == 0x0B { "start" } else { "end" }
+        )));
+    }
+    if bytes.len() > max_bytes {
+        return Err(SendError::TooLarge(format!(
+            "The changed message ({} KB) is larger than mllp.max_message_size_mb",
+            bytes.len() / 1024
+        )));
+    }
+    Ok((bytes, changes))
 }
 
 /// What a response says: decoded per MSH-18 and parsed like a received

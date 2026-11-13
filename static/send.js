@@ -11,6 +11,19 @@
 const TARGETS_KEY = 'harux_targets';
 const TARGET_RESULTS_KEY = 'harux_target_results';
 const LAST_TARGET_KEY = 'harux_last_target';
+const SEND_AS_KEY = 'harux_send_as';
+
+// How a resend goes out (#275): byte for byte, or with fields set through
+// the server's overrides. Remembered per browser for the one-click resend.
+const SEND_AS = {
+    unchanged: { label: 'As received', code: 'byte for byte', set: {} },
+    new_id: { label: 'With a new control ID', code: 'MSH-10', set: { 'MSH-10': '{{id}}' } },
+    new_id_time: {
+        label: 'With a new control ID and the current time',
+        code: 'MSH-10, MSH-7',
+        set: { 'MSH-10': '{{id}}', 'MSH-7': '{{now}}' },
+    },
+};
 const LOOPBACK_TARGET_ID = 'loopback';
 const MAX_TARGETS = 200;
 const MAX_TARGET_NAME = 64;
@@ -97,6 +110,8 @@ function loadTargets() {
     state.targetResults = results && typeof results === 'object' ? results : {};
     const last = readStored(LAST_TARGET_KEY, null);
     state.lastTargetId = typeof last === 'string' ? last : null;
+    const sendAs = readStored(SEND_AS_KEY, 'unchanged');
+    state.sendAs = Object.hasOwn(SEND_AS, sendAs) ? sendAs : 'unchanged';
 }
 
 function saveTargets() {
@@ -225,8 +240,14 @@ function applySendingUi() {
 // Send `msg` to `target`: asks first for a target marked *ask before
 // sending* (decision D3) and for a message that did not parse. The sent
 // message appears over the WebSocket; this only reports the outcome.
-async function resendMessage(msg, target) {
+async function resendMessage(msg, target, sendAs = state.sendAs) {
     if (!msg || !target || state.sending) return false;
+    const way = SEND_AS[sendAs] || SEND_AS.unchanged;
+    const changes = Object.keys(way.set).length > 0;
+    if (changes && msg.parse_error) {
+        showToast('A message that did not parse can only be resent as received');
+        return false;
+    }
     if (target.ask && !confirm(`Send ${msg.message_type || 'this message'} to ${target.name} (${target.host}:${target.port})?`)) {
         return false;
     }
@@ -245,6 +266,7 @@ async function resendMessage(msg, target) {
                 target: targetRequest(target),
                 items: [{ message_id: msg.id }],
                 allow_invalid: allowInvalid,
+                ...(changes ? { set: way.set } : {}),
             }),
         });
         if (!resp.ok) {
@@ -286,12 +308,14 @@ function sendActionsHtml(msg) {
     if (!canResend(msg)) return '';
     const target = findTarget(state.lastTargetId);
     const to = target ? `<span class="to">→ ${esc(target.name)}</span>` : '';
+    const way = SEND_AS[state.sendAs] || SEND_AS.unchanged;
+    const how = state.sendAs === 'unchanged' ? 'byte for byte' : way.label.toLowerCase();
     // aria-disabled, not disabled: a disabled button drops keyboard focus,
     // and resendMessage ignores clicks while a send is under way anyway.
     const busy = state.sending ? ' aria-disabled="true"' : '';
     const open = state.sendMenu ? 'true' : 'false';
     return `<span class="split-btn" id="send-split">
-        <button class="ctl-btn" data-action="resend"${busy} title="${target ? `Send this message again to ${escAttr(target.name)}, byte for byte` : 'Choose a target'}">${ICONS.resend}<span class="btn-label">Resend</span>${to}</button><button class="ctl-btn caret" data-action="resend-menu" aria-haspopup="dialog" aria-expanded="${open}" aria-label="Choose target" title="Choose target">${ICONS.chevronDown}</button>
+        <button class="ctl-btn" data-action="resend"${busy} title="${target ? `Send this message again to ${escAttr(target.name)}, ${escAttr(how)}` : 'Choose a target'}">${ICONS.resend}<span class="btn-label">Resend</span>${to}</button><button class="ctl-btn caret" data-action="resend-menu" aria-haspopup="dialog" aria-expanded="${open}" aria-label="Choose target" title="Choose target">${ICONS.chevronDown}</button>
     </span>`;
 }
 
@@ -412,14 +436,34 @@ function renderSendMenu() {
         </span></h4>
         <div class="target-list" role="radiogroup" aria-label="Targets">${options || '<div class="target-empty">No targets yet</div>'}</div>
         ${m.form ? targetFormHtml(m.form) : ''}
+        <hr>
+        <h4>Send as</h4>
+        <div class="send-as" role="radiogroup" aria-label="Send as">${sendAsHtml()}</div>
         <div class="foot">
-            <span class="hint">As received, byte for byte. The target is remembered for one-click resend.</span>
+            <span class="hint">Target and way are remembered for the next one-click resend.</span>
             <button class="ctl-btn on send-btn" data-action="send-picked"${picked && !state.sending ? '' : ' disabled'}>${ICONS.resend}<span class="btn-label">Send</span></button>
         </div>`;
     if (m.form) {
         const first = document.getElementById(m.form.host ? 'tf-name' : (m.form.name ? 'tf-host' : 'tf-name'));
         if (first && document.activeElement && !menu.contains(document.activeElement)) first.focus();
     }
+}
+
+function sendAsHtml() {
+    return Object.entries(SEND_AS).map(([key, way]) => {
+        const on = key === state.sendAs;
+        return `<div class="opt-row${on ? ' selected' : ''}" role="radio" aria-checked="${on}" tabindex="0" data-action="send-as" data-value="${key}">
+            <span class="radio"></span>${esc(way.label)} <code>${esc(way.code)}</code>
+        </div>`;
+    }).join('');
+}
+
+function chooseSendAs(key) {
+    if (!Object.hasOwn(SEND_AS, key)) return;
+    state.sendAs = key;
+    writeStored(SEND_AS_KEY, key);
+    if (state.sendMenu) renderSendMenu();
+    updateSendButtons();
 }
 
 // Copy what was typed into the form state before a re-render.
@@ -560,6 +604,7 @@ function handleSendAction(action, el) {
             return true;
         case 'target-delete': deleteEditedTarget(); return true;
         case 'send-picked': sendPicked(); return true;
+        case 'send-as': chooseSendAs(el.dataset.value); return true;
         case 'targets-save-file': saveTargetsToFile(); return true;
         case 'targets-load-file': loadTargetsFromFile(); return true;
         default: return false;

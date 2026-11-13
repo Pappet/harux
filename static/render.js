@@ -897,9 +897,13 @@ function sentDescriptionHtml(msg) {
     const parts = [`Sent to ${esc(out.target || msg.source_addr || 'unknown')}`];
     const origin = out.origin || {};
     if (origin.kind === 'resend') {
+        // #275: which fields were set on the way out, if any.
+        const how = Array.isArray(origin.changes) && origin.changes.length > 0
+            ? `resent with ${esc(origin.changes.join(', '))} changed`
+            : 'resent unchanged';
         parts.push(origin.message_id
-            ? `resent unchanged from <button class="origin-link" data-action="select-message" data-id="${escAttr(origin.message_id)}" title="Open the message this one was resent from">the original</button>`
-            : 'resent unchanged');
+            ? `${how} from <button class="origin-link" data-action="select-message" data-id="${escAttr(origin.message_id)}" title="Open the message this one was resent from">the original</button>`
+            : how);
     }
     if (out.requested_by) parts.push(`requested by ${esc(out.requested_by)}`);
     if (msg.message_type_description) parts.push(esc(msg.message_type_description));

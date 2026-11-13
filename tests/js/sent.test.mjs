@@ -196,3 +196,16 @@ test('the detail of a sent message: SENT badge, description, ACK tab relabelled'
     assert.equal(byId('tab-btn-ack').textContent, 'ACK');
     assert.equal(byId('detail-desc').textContent, 'Admit');
 });
+
+test('a resend with changes says which fields were set (#275)', () => {
+    const { ctx } = setup();
+    const escape = (v) => String(v ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;');
+    ctx.esc = escape;
+    ctx.escAttr = escape;
+    const html = ctx.sentDescriptionHtml(sent('s', {
+        outbound: { target: 't', origin: { kind: 'resend', message_id: 'm1', changes: ['MSH-10', 'MSH-7'] } },
+    }));
+    assert.match(html, /^Sent to t · resent with MSH-10, MSH-7 changed from <button class="origin-link"/);
+    const plain = ctx.sentDescriptionHtml(sent('s', { outbound: { target: 't', origin: { kind: 'resend', message_id: 'm1', changes: [] } } }));
+    assert.match(plain, /resent unchanged from/);
+});

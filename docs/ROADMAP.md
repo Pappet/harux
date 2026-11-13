@@ -134,7 +134,7 @@ This document tracks all milestones and planned features. Each milestone lists i
   - [x] M4-1 Send a stored message, unchanged (#272): MLLP client, switch and limits in `harux.toml`, sent messages and their responses in the store and shown as sent
   - [x] M4-2 TLS for outgoing connections (#273)
   - [x] M4-3 Resend in the UI: a target list for every user, one-click resend, direction filter (#274)
-  - [ ] M4-4 Changes on resend: new control ID, current time, field overrides
+  - [x] M4-4 Changes on resend: new control ID, current time, field overrides (#275)
 - [ ] **Message editor** — edit raw HL7 in the UI and send
   - [ ] M4-5 Drafts on the server: preview, field write-back, building the bytes
   - [ ] M4-6 Drafts in the UI: write or edit a message in the detail panel and send it, validated live

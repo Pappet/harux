@@ -1470,6 +1470,7 @@ mod tests {
             transport: crate::hl7::types::Transport::Plain,
             origin: Origin::Resend {
                 message_id: "orig".into(),
+                changes: Vec::new(),
             },
             requested_by: "10.0.0.7".into(),
             run: "run-1".into(),

@@ -125,15 +125,19 @@ pub enum Transport {
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Origin {
-    /// A stored message, sent again unchanged.
-    Resend { message_id: String },
+    /// A stored message, sent again — unchanged, or with the fields in
+    /// `changes` overridden (#275), e.g. `["MSH-10", "MSH-7"]`.
+    Resend {
+        message_id: String,
+        changes: Vec<String>,
+    },
 }
 
 impl Origin {
     /// The stored message this one was made from, if any.
     pub fn message_id(&self) -> Option<&str> {
         match self {
-            Origin::Resend { message_id } => Some(message_id),
+            Origin::Resend { message_id, .. } => Some(message_id),
         }
     }
 }
@@ -506,7 +510,14 @@ impl Hl7Message {
                     + owned_string(&o.requested_by)
                     + owned_string(&o.run)
                     + match &o.origin {
-                        Origin::Resend { message_id } => owned_string(message_id),
+                        Origin::Resend {
+                            message_id,
+                            changes,
+                        } => {
+                            owned_string(message_id)
+                                + vec_heap(changes)
+                                + changes.iter().map(owned_string).sum::<usize>()
+                        }
                     }
             });
 
