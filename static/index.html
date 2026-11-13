@@ -58,6 +58,18 @@
             </div>
         </div>
         <div class="header-actions">
+            <div class="new-message hidden" id="new-message">
+                <button id="btn-new-message" aria-haspopup="menu" aria-expanded="false" title="Write a message as a draft and send it">
+                    <svg class="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+                    New message
+                    <svg class="i-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>
+                </button>
+                <div class="new-menu hidden" id="new-menu" role="menu" aria-label="New message">
+                    <button role="menuitem" data-action="new-blank">Blank message <span class="hint">MSH with a new control ID and time</span></button>
+                    <button role="menuitem" data-action="new-clipboard">From the clipboard <span class="hint">needs HTTPS or localhost; else paste</span></button>
+                    <button role="menuitem" data-action="new-file">From a file <span class="hint">.hl7, decoded by its MSH-18</span></button>
+                </div>
+            </div>
             <button id="btn-export" title="Download all stored messages as an MLLP-framed .hl7 file, byte for byte as received">
                 <svg class="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
                 Export
@@ -100,6 +112,7 @@
                 </button>
             </div>
             <div class="source-rail" id="source-rail"></div>
+            <div class="draft-rail hidden" id="draft-rail" aria-label="Drafts"></div>
             <div class="message-list" id="message-list">
                 <div class="empty-state" id="empty-state">
                     <div class="empty-card" id="empty-onboarding">
@@ -160,7 +173,7 @@
                 </button>
                 <button class="detail-tab" data-tab="raw">Raw</button>
                 <button class="detail-tab" id="tab-btn-ack" data-tab="ack">ACK</button>
-                <button class="detail-tab" data-tab="json">JSON</button>
+                <button class="detail-tab" id="tab-btn-json" data-tab="json">JSON</button>
                 <button class="detail-tab diff-tab hidden" id="tab-btn-diff" data-tab="diff">
                     <svg class="i-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>
                     Diff vs pinned
@@ -192,6 +205,7 @@
     <script src="/render.js" defer></script>
     <script src="/diff.js" defer></script>
     <script src="/send.js" defer></script>
+    <script src="/compose.js" defer></script>
     <script src="/app.js" defer></script>
 </body>
 

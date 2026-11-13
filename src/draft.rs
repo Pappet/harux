@@ -488,6 +488,9 @@ pub fn preview(
         text = fill_references(&text, based_on)?;
     }
     let mut message = crate::mllp::parse_text(&text, DRAFT_PEER);
+    // MSH-18 as the text declares it (#290 review): `parse_text` has no
+    // bytes to decode, so nothing else sets it.
+    message.charset = charset::declared_charset(text.as_bytes());
     if message.parse_error.is_none() {
         let ctx = PlaceholderContext {
             n: 1,
@@ -873,6 +876,15 @@ mod tests {
         let raw = "MSH|^~\\&|A|B|||nonsense||ADT^A01|C1|P|2.5\nEVN|A01|20240101\nPID|||1||Muster";
         let p = preview(raw, &BTreeMap::new(), None, false).unwrap();
         assert!(!p.message.validation_warnings.is_empty());
+        // MSH-18 is named, as for a stored message (#290 review).
+        let p = preview(
+            "MSH|^~\\&|A|B|||20240101||ADT^A01|C1|P|2.5||||||8859/1",
+            &BTreeMap::new(),
+            None,
+            false,
+        )
+        .unwrap();
+        assert_eq!(p.message.charset.as_deref(), Some("8859/1"));
         // Text that is not HL7 is a parse error, not a refusal.
         let p = preview("hello", &BTreeMap::new(), None, false).unwrap();
         assert!(p.message.parse_error.is_some());

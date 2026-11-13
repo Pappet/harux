@@ -18,6 +18,8 @@ const ICONS = {
     chevronDown: '<svg class="i-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>',
     resend: '<svg class="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="17 1 21 5 17 9"/><path d="M3 11V9a4 4 0 0 1 4-4h14"/><polyline points="7 23 3 19 7 15"/><path d="M21 13v2a4 4 0 0 1-4 4H3"/></svg>',
     updown: '<svg class="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="7 7 12 2 17 7"/><line x1="12" y1="2" x2="12" y2="22"/><polyline points="17 17 12 22 7 17"/></svg>',
+    edit: '<svg class="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"/></svg>',
+    plus: '<svg class="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>',
     xMark: '<svg class="i-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>',
 };
 
@@ -92,13 +94,22 @@ function newId() {
     return Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('');
 }
 
-const sessionId = sessionStorage.getItem(SESSION_KEY) || newId();
-sessionStorage.setItem(SESSION_KEY, sessionId);
+// A browser that blocks storage throws on access: the page must still load
+// (#277 — found by the draft storage tests).
+let sessionId = null;
+try {
+    sessionId = sessionStorage.getItem(SESSION_KEY) || newId();
+    sessionStorage.setItem(SESSION_KEY, sessionId);
+} catch (e) {
+    sessionId = sessionId || newId();
+    console.debug('Session storage is not available:', e);
+}
 
 function saveSession() {
     try {
         sessionStorage.setItem(SESSION_STATE_KEY, JSON.stringify({
             selectedId: state.selectedId,
+            selectedDraftId: state.selectedDraftId,
             activeTab: state.activeTab,
             autoscroll: state.autoscroll,
             searchQuery: state.searchQuery,
@@ -125,6 +136,8 @@ function loadSession() {
         if (!raw) return;
         const saved = JSON.parse(raw);
         if (saved.selectedId != null) state.selectedId = saved.selectedId;
+        // An open draft (#277); compose.js drops it if the draft is gone.
+        if (typeof saved.selectedDraftId === 'string') state.selection = { kind: 'draft', id: saved.selectedDraftId };
         if (saved.activeTab) state.activeTab = saved.activeTab;
         if (typeof saved.autoscroll === 'boolean') state.autoscroll = saved.autoscroll;
         if (typeof saved.searchQuery === 'string') state.searchQuery = saved.searchQuery;
@@ -149,6 +162,25 @@ function loadSession() {
 }
 
 // --- Escaping helpers ---
+// Whether `el` takes typed text (#277): the keyboard delegation in app.js
+// leaves Enter and Space to it, so a space can be typed into a draft.
+function isTextEntry(el) {
+    if (!el) return false;
+    const tag = String(el.tagName || '').toUpperCase();
+    return tag === 'TEXTAREA' || tag === 'SELECT' || el.isContentEditable === true
+        || (tag === 'INPUT' && !['button', 'checkbox', 'radio', 'submit'].includes(String(el.type || 'text').toLowerCase()));
+}
+
+// UTF-8 size of a string, without TextEncoder (counts code points).
+function utf8Length(str) {
+    let n = 0;
+    for (const ch of String(str)) {
+        const c = ch.codePointAt(0);
+        n += c < 0x80 ? 1 : c < 0x800 ? 2 : c < 0x10000 ? 3 : 4;
+    }
+    return n;
+}
+
 function esc(str) {
     if (!str) return '';
     const div = document.createElement('div');

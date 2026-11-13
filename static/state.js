@@ -4,9 +4,11 @@
 // a fully initialised `state`.
 
 const state = {
-    // Message buffer + selection
+    // Message buffer + selection. One selection (#277): `{ kind: 'message'
+    // | 'draft', id }` or null. `selectedId` (below) is the message part of
+    // it, so clearing a message selection never closes an open draft.
     messages: [],
-    selectedId: null,
+    selection: null,
     selectedMessage: null,
 
     // Detail panel
@@ -91,6 +93,39 @@ const state = {
     sending: false,
     targetStorageWarned: false,
     directionFilter: 0,   // 0: In + Out, 1: Received, 2: Sent
+
+    // Drafts (#277, compose.js): text kept in this browser tab
+    // (sessionStorage; "Keep on this computer" moves one to localStorage).
+    // The preview is the server's parse of the open draft's text.
+    drafts: [],
+    draftPreview: null,   // { draftId, raw, filled, data, error }
+    draftPreviewSeq: 0,
+    draftPreviewTimer: null,
+    draftSendAnyway: null, // id of a broken draft armed for "Send anyway"
+    draftStorageWarned: false,
+    newMenuOpen: false,
 };
+
+// The selected stored message's ID, or null — a view of `selection`.
+// Setting it selects that message; setting null clears only a message
+// selection, never an open draft (#277: `cleared`, `evicted` and a failed
+// fetch set it to null).
+Object.defineProperty(state, 'selectedId', {
+    get() { return this.selection && this.selection.kind === 'message' ? this.selection.id : null; },
+    set(id) {
+        if (id == null) {
+            if (this.selection && this.selection.kind === 'message') this.selection = null;
+        } else {
+            this.selection = { kind: 'message', id };
+        }
+    },
+    enumerable: true,
+});
+
+// The open draft's ID, or null.
+Object.defineProperty(state, 'selectedDraftId', {
+    get() { return this.selection && this.selection.kind === 'draft' ? this.selection.id : null; },
+    enumerable: true,
+});
 
 window.state = state;
