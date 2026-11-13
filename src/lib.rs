@@ -6,5 +6,6 @@ pub mod mllp;
 pub mod mllp_client;
 pub mod send;
 pub mod store;
+pub mod tls;
 pub mod validation;
 pub mod web;

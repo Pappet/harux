@@ -997,6 +997,10 @@ async fn send_config_describes_the_limits() {
         serde_json::json!(["orchestra.local:6000-6999"])
     );
     assert_eq!(json["max_run_store_percent"], 25);
+    assert_eq!(
+        json["tls"],
+        serde_json::json!({"allow_unverified": false, "client_certificate": false})
+    );
 }
 
 /// `curl -X POST /api/send` resends a stored message to a plain MLLP
@@ -1065,8 +1069,8 @@ async fn send_refusals_have_their_status_codes() {
             StatusCode::BAD_REQUEST,
         ),
         (
-            r#"{"target":{"host":"orchestra.local","port":6000,"tls":true},"items":[{"message_id":"m1"}]}"#,
-            StatusCode::BAD_REQUEST,
+            r#"{"target":{"host":"orchestra.local","port":6000,"tls":true,"verify":false},"items":[{"message_id":"m1"}]}"#,
+            StatusCode::FORBIDDEN,
         ),
         (
             r#"{"target":{"host":"elsewhere.local","port":6000},"items":[{"message_id":"m1"}]}"#,

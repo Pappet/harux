@@ -99,14 +99,26 @@ pub enum Direction {
 pub struct Outbound {
     /// The name the user gave the target — a label, shown in the list.
     pub target: String,
-    /// Whether the connection was encrypted (TLS arrives with M4-2).
-    pub tls: bool,
+    /// How the message travelled: plain, TLS, or TLS without a certificate
+    /// check (#273). Shown in the row.
+    pub transport: Transport,
     /// Where the message came from.
     pub origin: Origin,
     /// The address of the client that asked for the send.
     pub requested_by: String,
     /// The run the send belongs to.
     pub run: String,
+}
+
+/// The connection a message was sent over (#273).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Transport {
+    Plain,
+    /// Encrypted, the target's certificate checked.
+    Tls,
+    /// Encrypted, the certificate not checked (`send.tls.allow_unverified`).
+    TlsUnverified,
 }
 
 /// Where a sent message came from (#272).
@@ -626,6 +638,8 @@ pub struct Hl7MessageSummary {
     pub target: Option<String>,
     /// For a sent message: the stored message it was made from.
     pub origin_id: Option<String>,
+    /// For a sent message: plain, TLS or unverified TLS (#273).
+    pub transport: Option<Transport>,
     /// For a sent message: what became of it, without the response text.
     pub delivery: Option<DeliverySummary>,
     /// Only the beginning of an over-limit frame is stored (#223).
@@ -715,6 +729,7 @@ impl Hl7MessageSummary {
                 .outbound
                 .as_ref()
                 .and_then(|o| o.origin.message_id().map(str::to_owned)),
+            transport: msg.outbound.as_ref().map(|o| o.transport),
             delivery: meta.delivery.as_ref().map(|d| DeliverySummary {
                 state: d.state,
                 ack_code: d.ack_code.clone(),

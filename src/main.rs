@@ -6,6 +6,7 @@ mod mllp;
 mod mllp_client;
 mod send;
 mod store;
+mod tls;
 mod validation;
 mod web;
 
@@ -93,6 +94,7 @@ async fn main() -> anyhow::Result<()> {
     let stats = MllpStats::new();
     // Validated with the configuration, so this cannot fail here.
     let send_settings = send::SendSettings::from_config(&config).map_err(|e| anyhow::anyhow!(e))?;
+    let send_settings_tls = send_settings.tls.clone();
     let sender = send::Sender::new(send_settings, store.clone());
 
     {
@@ -123,6 +125,9 @@ async fn main() -> anyhow::Result<()> {
         None => info!("No harux.toml found — using defaults and environment variables"),
     }
     info!("Effective configuration:\n{}", config);
+    if let Some(tls) = &send_settings_tls {
+        info!("Outgoing TLS trusts {}", tls.summary());
+    }
     if config.send.enabled {
         warn!(
             "Sending is ON (send.enabled): everyone who can open the web UI can make this \

@@ -82,6 +82,24 @@ fn bad_send_destination_stops_the_start() {
     );
 }
 
+/// #273: a `[send.tls]` file that can't be read stops the start (when
+/// sending is on), naming the key.
+#[test]
+fn unreadable_tls_file_stops_the_start() {
+    let (code, stderr) = run_with(
+        Some("[send]\nenabled = true\n[send.tls]\nca_file = \"certs/missing-ca.pem\"\n"),
+        &[],
+    );
+    assert!(
+        matches!(code, Some(c) if c != 0),
+        "exit {code:?}, stderr: {stderr}"
+    );
+    assert!(
+        stderr.contains("send.tls.ca_file") && stderr.contains("missing-ca.pem"),
+        "{stderr}"
+    );
+}
+
 #[test]
 fn typo_in_key_stops_the_start() {
     let (code, stderr) = run_with(Some("[store]\nmax_mesages = 500\n"), &[]);

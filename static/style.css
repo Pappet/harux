@@ -610,6 +610,11 @@ body.resizing * {
     color: var(--error);
 }
 
+/* Sent without a certificate check (send.tls.allow_unverified, #273). */
+.msg-row2 .src.tls-unverified {
+    color: var(--warning);
+}
+
 .msg-latency {
     font-family: var(--font-mono);
     font-size: 10px;

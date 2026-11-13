@@ -257,6 +257,7 @@ fn to(addr: SocketAddr, name: &str) -> TargetRequest {
         host: addr.ip().to_string(),
         port: addr.port(),
         tls: false,
+        verify: true,
     })
 }
 
@@ -481,6 +482,7 @@ async fn refusals_before_anything_is_stored() {
         host: "localhost".into(),
         port: addr.port(),
         tls: false,
+        verify: true,
     });
     assert!(matches!(
         allowed.send(request(by_name, &good), CLIENT).await,
@@ -497,13 +499,15 @@ async fn refusals_before_anything_is_stored() {
         sender.send(request(to(addr, "t"), &broken), CLIENT).await,
         Err(SendError::Unprocessable(_))
     ));
-    let mut tls = request(to(addr, "t"), &good);
-    if let TargetRequest::Explicit(t) = &mut tls.target {
+    // An unverified TLS connection needs send.tls.allow_unverified (#273).
+    let mut unverified = request(to(addr, "t"), &good);
+    if let TargetRequest::Explicit(t) = &mut unverified.target {
         t.tls = true;
+        t.verify = false;
     }
     assert!(matches!(
-        sender.send(tls, CLIENT).await,
-        Err(SendError::BadRequest(_))
+        sender.send(unverified, CLIENT).await,
+        Err(SendError::Forbidden(_))
     ));
     assert_eq!(store.count().await, before, "nothing stored for a refusal");
 
@@ -648,4 +652,254 @@ async fn a_nack_is_counted_as_rejected() {
     );
     sender.reset_counters();
     assert_eq!(sender.counters(), SendCounters::default());
+}
+
+// ── TLS (#273) ────────────────────────────────────────────────────────────
+//
+// A TLS receiver in the test itself, with the static certificates of
+// tests/tls/ (see generate.sh there): a trusted certificate, an unknown
+// issuer, a wrong name, the unverified switch, a receiver that asks for a
+// client certificate, and the two ways plain and TLS can be mixed up.
+
+mod tls {
+    use super::*;
+    use harux::config::SendTlsConfig;
+    use harux::tls::TlsContext;
+    use std::sync::Arc;
+    use tokio_rustls::rustls::pki_types::pem::PemObject;
+    use tokio_rustls::rustls::pki_types::{CertificateDer, PrivateKeyDer};
+    use tokio_rustls::rustls::server::WebPkiClientVerifier;
+    use tokio_rustls::rustls::{crypto, RootCertStore, ServerConfig};
+    use tokio_rustls::TlsAcceptor;
+
+    fn file(name: &str) -> String {
+        format!("{}/tests/tls/{name}", env!("CARGO_MANIFEST_DIR"))
+    }
+
+    /// A TLS receiver with `cert`, answering every frame with `AA`;
+    /// `client_ca` makes it ask for (and require) a client certificate.
+    async fn tls_receiver(
+        cert: &str,
+        client_ca: Option<&str>,
+    ) -> (SocketAddr, mpsc::UnboundedReceiver<Vec<u8>>) {
+        let provider = Arc::new(crypto::ring::default_provider());
+        let chain: Vec<_> = CertificateDer::pem_file_iter(file(&format!("{cert}.pem")))
+            .unwrap()
+            .map(Result::unwrap)
+            .collect();
+        let key = PrivateKeyDer::from_pem_file(file(&format!("{cert}.key"))).unwrap();
+        let builder = ServerConfig::builder_with_provider(Arc::clone(&provider))
+            .with_safe_default_protocol_versions()
+            .unwrap();
+        let builder = match client_ca {
+            Some(ca) => {
+                let mut roots = RootCertStore::empty();
+                for c in CertificateDer::pem_file_iter(file(ca)).unwrap() {
+                    roots.add(c.unwrap()).unwrap();
+                }
+                let verifier =
+                    WebPkiClientVerifier::builder_with_provider(Arc::new(roots), provider)
+                        .build()
+                        .unwrap();
+                builder.with_client_cert_verifier(verifier)
+            }
+            None => builder.with_no_client_auth(),
+        };
+        let acceptor = TlsAcceptor::from(Arc::new(builder.with_single_cert(chain, key).unwrap()));
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let (tx, rx) = mpsc::unbounded_channel();
+        tokio::spawn(async move {
+            while let Ok((s, _)) = listener.accept().await {
+                let (acceptor, tx) = (acceptor.clone(), tx.clone());
+                tokio::spawn(async move {
+                    let Ok(mut s) = acceptor.accept(s).await else {
+                        return;
+                    };
+                    let mut acc = Vec::new();
+                    let mut buf = [0u8; 4096];
+                    while !acc.ends_with(&[FS, CR]) {
+                        match s.read(&mut buf).await {
+                            Ok(0) | Err(_) => return,
+                            Ok(n) => acc.extend_from_slice(&buf[..n]),
+                        }
+                    }
+                    let _ = tx.send(acc[1..acc.len() - 2].to_vec());
+                    let _ = s.write_all(&ack("T1")).await;
+                    let _ = s.flush().await;
+                    let _ = s.shutdown().await;
+                });
+            }
+        });
+        (addr, rx)
+    }
+
+    fn context(ca: bool, client: bool, allow_unverified: bool) -> TlsContext {
+        TlsContext::load(
+            &SendTlsConfig {
+                ca_file: ca.then(|| file("ca.pem")),
+                allow_unverified,
+                client_cert_file: client.then(|| file("client.pem")),
+                client_key_file: client.then(|| file("client.key")),
+            },
+            false, // the OS store must not decide these tests
+        )
+        .unwrap()
+    }
+
+    fn sender(store: &MessageStore, tls: TlsContext) -> Sender {
+        let mut s = settings(|_| {});
+        s.tls = Some(Arc::new(tls));
+        Sender::new(s, store.clone())
+    }
+
+    fn tls_to(addr: SocketAddr, host: &str, verify: bool) -> TargetRequest {
+        TargetRequest::Explicit(ExplicitTarget {
+            name: Some("tls target".into()),
+            host: host.into(),
+            port: addr.port(),
+            tls: true,
+            verify,
+        })
+    }
+
+    const MSG: &[u8] = b"MSH|^~\\&|A|B|||20260101||ADT^A01|T1|P|2.5\rPID|||1||M\xc3\xbcller\r";
+
+    async fn send(
+        sender: &Sender,
+        store: &MessageStore,
+        target: TargetRequest,
+    ) -> harux::hl7::types::Delivery {
+        let id = received(store, MSG).await;
+        sender
+            .send(request(target, &id), CLIENT)
+            .await
+            .unwrap()
+            .delivery
+    }
+
+    /// The certificate comes from a CA in `ca_file`: the message goes out
+    /// encrypted, byte for byte, and the sent message records TLS.
+    #[tokio::test]
+    async fn trusted_certificate_from_ca_file() {
+        let (addr, mut frames) = tls_receiver("server", None).await;
+        let store = store();
+        let sender = sender(&store, context(true, false, false));
+        for host in ["localhost", "127.0.0.1"] {
+            let d = send(&sender, &store, tls_to(addr, host, true)).await;
+            assert_eq!(d.state, DeliveryState::Acked, "{host}: {d:?}");
+            assert_eq!(d.ack_code.as_deref(), Some("AA"));
+            assert_eq!(frames.recv().await.unwrap(), MSG, "same bytes inside TLS");
+        }
+        let sent = summaries(&store).await.pop().unwrap();
+        assert_eq!(sent.transport, Some(harux::hl7::types::Transport::Tls));
+    }
+
+    /// An unknown issuer is refused with a reason that names it.
+    #[tokio::test]
+    async fn unknown_issuer_is_named() {
+        let (addr, _) = tls_receiver("untrusted", None).await;
+        let store = store();
+        let d = send(
+            &sender(&store, context(true, false, false)),
+            &store,
+            tls_to(addr, "localhost", true),
+        )
+        .await;
+        assert_eq!(d.state, DeliveryState::Failed);
+        assert_eq!(d.error.as_deref(), Some("untrusted certificate"));
+        let detail = d.error_detail.unwrap();
+        assert!(
+            detail.contains("CN=Unknown Test CA, O=Elsewhere")
+                && detail.contains("send.tls.ca_file"),
+            "{detail}"
+        );
+    }
+
+    #[tokio::test]
+    async fn wrong_name_is_reported() {
+        let (addr, _) = tls_receiver("wrongname", None).await;
+        let store = store();
+        let d = send(
+            &sender(&store, context(true, false, false)),
+            &store,
+            tls_to(addr, "localhost", true),
+        )
+        .await;
+        assert_eq!(d.error.as_deref(), Some("wrong name"), "{d:?}");
+        assert!(d.error_detail.unwrap().contains("elsewhere.example"));
+    }
+
+    /// `verify: false` only with `send.tls.allow_unverified`; then the
+    /// untrusted target is reached and the row says it was unverified.
+    #[tokio::test]
+    async fn unverified_needs_the_switch() {
+        let (addr, mut frames) = tls_receiver("untrusted", None).await;
+        let store = store();
+        let strict = sender(&store, context(true, false, false));
+        let id = received(&store, MSG).await;
+        assert!(matches!(
+            strict
+                .send(request(tls_to(addr, "localhost", false), &id), CLIENT)
+                .await,
+            Err(SendError::Forbidden(_))
+        ));
+
+        let lenient = sender(&store, context(true, false, true));
+        let d = send(&lenient, &store, tls_to(addr, "localhost", false)).await;
+        assert_eq!(d.state, DeliveryState::Acked, "{d:?}");
+        assert!(frames.recv().await.is_some());
+        let sent = summaries(&store).await.pop().unwrap();
+        assert_eq!(
+            sent.transport,
+            Some(harux::hl7::types::Transport::TlsUnverified)
+        );
+    }
+
+    /// A target that asks for a client certificate: refused without one,
+    /// served with the configured one.
+    #[tokio::test]
+    async fn client_certificate_when_asked() {
+        let (addr, mut frames) = tls_receiver("server", Some("ca.pem")).await;
+        let store = store();
+        let d = send(
+            &sender(&store, context(true, false, false)),
+            &store,
+            tls_to(addr, "localhost", true),
+        )
+        .await;
+        assert_eq!(d.error.as_deref(), Some("certificate required"), "{d:?}");
+        assert!(d
+            .error_detail
+            .unwrap()
+            .contains("send.tls.client_cert_file"));
+
+        let d = send(
+            &sender(&store, context(true, true, false)),
+            &store,
+            tls_to(addr, "localhost", true),
+        )
+        .await;
+        assert_eq!(d.state, DeliveryState::Acked, "{d:?}");
+        assert_eq!(frames.recv().await.unwrap(), MSG);
+    }
+
+    /// TLS to a plain MLLP port: no TLS answer (within the connect
+    /// timeout). Plain to a TLS port: the target expects TLS.
+    #[tokio::test]
+    async fn plain_and_tls_mixed_up() {
+        let (plain, _) = acking().await;
+        let store = store();
+        let mut s = settings(|_| {});
+        s.tls = Some(Arc::new(context(true, false, false)));
+        s.timeouts.connect = Duration::from_millis(300);
+        let quick = Sender::new(s, store.clone());
+        let d = send(&quick, &store, tls_to(plain, "127.0.0.1", true)).await;
+        assert_eq!(d.error.as_deref(), Some("no TLS answer"), "{d:?}");
+        assert!(d.error_detail.unwrap().contains("plain MLLP port"));
+
+        let (tls_port, _) = tls_receiver("server", None).await;
+        let d = send(&quick, &store, to(tls_port, "plain")).await;
+        assert_eq!(d.error.as_deref(), Some("expects TLS"), "{d:?}");
+    }
 }

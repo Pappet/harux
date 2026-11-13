@@ -20,7 +20,7 @@
 
 use harux::hl7::parser::{build_ack, parse_message};
 use harux::hl7::types::{
-    heap_bytes, Delivery, DeliveryState, MessageMeta, Origin, Outbound, WireForm,
+    heap_bytes, Delivery, DeliveryState, MessageMeta, Origin, Outbound, Transport, WireForm,
 };
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::cell::Cell;
@@ -195,7 +195,7 @@ fn sent_message_and_its_metadata_are_accounted() {
     let (_, a0, m0) = snapshot();
     msg.outbound = Some(Box::new(Outbound {
         target: "orchestra-test-adt".to_string(),
-        tls: false,
+        transport: Transport::Plain,
         origin: Origin::Resend {
             message_id: "0b9e8f9c-4d2e-4f3a-9c1b-2a7d5e6f8a90".to_string(),
         },

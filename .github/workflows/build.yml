@@ -3,6 +3,12 @@ name: Build & Release
 on:
   push:
     branches: [main]
+  # A pull request that changes the dependencies builds on all three
+  # release targets before it is merged (#273: new crates must build on
+  # Windows and macOS too, not only on the Linux CI runner).
+  pull_request:
+    branches: [main]
+    paths: ['Cargo.toml', 'Cargo.lock', '.github/workflows/build.yml']
   release:
     types: [published]
 

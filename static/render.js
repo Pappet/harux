@@ -339,8 +339,11 @@ function buildMessageRow(msg) {
     const [facility, , src, , segs, time] = row2.children;
     facility.textContent = msg.sending_facility || 'unknown';
     if (outbound) {
-        src.textContent = TARGET_PREFIX + (msg.target || msg.source_addr || '');
-        src.title = `Sent to ${msg.source_addr || ''}`;
+        // TLS is part of the row (#273); an unverified connection is marked.
+        const tls = TRANSPORT_LABELS[msg.transport] || '';
+        src.textContent = TARGET_PREFIX + (msg.target || msg.source_addr || '') + (tls ? ` \u00b7 ${tls}` : '');
+        src.title = `Sent to ${msg.source_addr || ''}${tls ? ` over ${tls}` : ''}`;
+        if (msg.transport === 'tls_unverified') src.classList.add('tls-unverified');
     } else {
         src.textContent = msg.source_addr || '';
     }
@@ -354,6 +357,9 @@ function buildMessageRow(msg) {
     btn.appendChild(iconNode(msg.bookmarked ? 'starFilled' : 'starOutline'));
     return row;
 }
+
+// How a sent message travelled (#273), as shown in its row and detail.
+const TRANSPORT_LABELS = { tls: 'TLS', tls_unverified: 'TLS unverified' };
 
 // The chip (and the round-trip time) of a sent row, from its delivery.
 function appendDeliveryChip(row1, delivery) {
@@ -762,6 +768,11 @@ function buildDetailMeta(msg) {
     const received = formatDetailReceived(msg.received_at);
     if (received) {
         items.push(`<span class="item"><span class="k">${outbound ? 'sent' : 'received'}</span><span class="v">${esc(received)}</span></span>`);
+    }
+    if (outbound && msg.outbound) {
+        const t = msg.outbound.transport;
+        const label = t === 'tls' ? 'TLS, certificate checked' : t === 'tls_unverified' ? 'TLS, certificate NOT checked' : 'plain';
+        items.push(`<span class="item"><span class="k">over</span><span class="v">${esc(label)}</span></span>`);
     }
     const latency = outbound && msg.delivery ? formatLatency(msg.delivery.latency_ms) : '';
     if (latency) {

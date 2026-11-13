@@ -54,3 +54,16 @@ max_concurrent_runs = 4
 # Where users may send. Empty = any host and port.
 # Entries are host:port or host:from-to ([v6]:port for IPv6 addresses).
 # allowed_destinations = ["orchestra-test.klinik.local:6000-6999"]
+
+[send.tls]
+# TLS for outgoing connections. A target's certificate is checked against
+# the operating system's certificate store and, if set, against this file
+# (PEM), e.g. the hospital's own CA. Relative paths: the working directory.
+# ca_file = "certs/klinik-ca.pem"
+# Let users switch the certificate check off for a target of theirs (test
+# systems with self-signed certificates): encrypted, but not verified.
+allow_unverified = false
+# Harux's own certificate, shown to a target that asks the sender for one.
+# Most targets do not; leave it out unless a send fails with that reason.
+# client_cert_file = "certs/harux.pem"
+# client_key_file = "certs/harux.key"

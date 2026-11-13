@@ -109,6 +109,28 @@ pub struct SendConfig {
     /// Where users may send. Empty = any host and port. Entries are
     /// `host:port` or `host:from-to` (`[v6]:port` for IPv6 addresses).
     pub allowed_destinations: Vec<String>,
+    /// `[send.tls]`: TLS for outgoing connections (#273).
+    pub tls: SendTlsConfig,
+}
+
+/// `[send.tls]` (#273). Read at start when sending is on; a file that can't
+/// be read, holds no certificate or a key that doesn't belong to its
+/// certificate stops the start. Relative paths are relative to the working
+/// directory, like `logging.file`.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct SendTlsConfig {
+    /// PEM file with CA certificates trusted in addition to the operating
+    /// system's store, e.g. the hospital's own CA.
+    pub ca_file: Option<String>,
+    /// Let users switch the certificate check off for a target of theirs:
+    /// encrypted, but not verified.
+    pub allow_unverified: bool,
+    /// Harux's own certificate (PEM, chain allowed), shown to a target that
+    /// asks the sender for one. One for the whole server, never per user.
+    pub client_cert_file: Option<String>,
+    /// The private key of `client_cert_file` (PEM). Never logged or returned.
+    pub client_key_file: Option<String>,
 }
 
 /// One `send.allowed_destinations` entry: a host (normalized by
@@ -276,6 +298,7 @@ impl Default for SendConfig {
             max_run_store_percent: 25,
             max_concurrent_runs: 4,
             allowed_destinations: Vec::new(),
+            tls: SendTlsConfig::default(),
         }
     }
 }
@@ -445,6 +468,14 @@ impl Config {
                 "send.max_run_store_percent ({}) must be between 1 and 100",
                 self.send.max_run_store_percent
             ));
+        }
+        let tls = &self.send.tls;
+        let set = |v: &Option<String>| v.as_deref().is_some_and(|f| !f.trim().is_empty());
+        if set(&tls.client_cert_file) != set(&tls.client_key_file) {
+            problems.push(
+                "send.tls.client_cert_file and send.tls.client_key_file must be set together"
+                    .to_string(),
+            );
         }
         for entry in &self.send.allowed_destinations {
             if let Err(why) = DestinationRule::parse(entry) {
@@ -642,6 +673,21 @@ impl std::fmt::Display for Config {
             ),
         };
         writeln!(f, "  Sending:            ON, {limit}")?;
+        let tls = &self.send.tls;
+        writeln!(
+            f,
+            "  Send TLS:           trusts the OS store{}; unverified {}; client certificate {}",
+            tls.ca_file
+                .as_deref()
+                .map_or(String::new(), |c| format!(" and {c}")),
+            if tls.allow_unverified {
+                "allowed"
+            } else {
+                "not allowed"
+            },
+            // The certificate's file, never the key's.
+            tls.client_cert_file.as_deref().unwrap_or("none")
+        )?;
         match self.loopback_destination() {
             Some(addr) => writeln!(f, "  Loopback target:    {addr}")?,
             None => writeln!(f, "  Loopback target:    off")?,
@@ -932,6 +978,10 @@ mllp_port = 4000
         ] {
             assert!(err.contains(key), "{key} missing in: {err}");
         }
+        let err = load("[send.tls]\nclient_cert_file = \"harux.pem\"\n", &[]).unwrap_err();
+        assert!(err.contains("must be set together"), "{err}");
+        let err = load("[send.tls]\nca_flie = \"x\"\n", &[]).unwrap_err();
+        assert!(err.contains("ca_flie"), "{err}");
         let err = load("[send]\nenabeld = true\n", &[]).unwrap_err();
         assert!(err.contains("enabeld"), "{err}");
         for bad in [
