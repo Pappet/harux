@@ -1037,6 +1037,9 @@ async fn send_a_stored_message_to_a_target() {
     assert_eq!(list[0]["direction"], "out");
     assert_eq!(list[0]["target"], "fake receiver");
     assert_eq!(list[0]["delivery"]["ack_code"], "AA");
+    // The spelling static/render.js reads (#285 review).
+    assert_eq!(list[0]["transport"], "plain");
+    assert_eq!(detail["outbound"]["transport"], "plain");
     assert!(list[0]["delivery"].get("response").is_none());
     assert_eq!(list[1]["direction"], "in");
 

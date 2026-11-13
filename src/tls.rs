@@ -81,11 +81,16 @@ impl TlsContext {
         }
         if let Some(file) = non_empty(&config.ca_file) {
             let certs = read_certs(file, "send.tls.ca_file")?;
-            let (added, _) = roots.add_parsable_certificates(certs);
+            let (added, ignored) = roots.add_parsable_certificates(certs);
             if added == 0 {
                 return Err(format!(
                     "send.tls.ca_file {file:?} holds no usable CA certificate"
                 ));
+            }
+            if ignored > 0 {
+                // Not fatal — the others work — but a CA that silently
+                // drops out shows up only as "untrusted" later (#285 review).
+                warn!("send.tls.ca_file {file:?}: {ignored} certificate(s) could not be used");
             }
             parts.push(format!("{added} from {file}"));
         }
@@ -219,6 +224,21 @@ pub struct ClientAuth {
 }
 
 impl ClientAuth {
+    /// A record as a connection would leave it, for the classification
+    /// tests in `mllp_client`.
+    #[cfg(test)]
+    pub(crate) fn for_tests(asked: bool, had_certificate: bool) -> Self {
+        Self {
+            key: had_certificate.then(|| {
+                let provider = crypto::ring::default_provider();
+                let chain = read_certs("tests/tls/client.pem", "test").unwrap();
+                let key = PrivateKeyDer::from_pem_file("tests/tls/client.key").unwrap();
+                Arc::new(CertifiedKey::from_der(chain, key, &provider).unwrap())
+            }),
+            asked: AtomicBool::new(asked),
+        }
+    }
+
     /// The target asked Harux for a certificate.
     pub fn asked(&self) -> bool {
         self.asked.load(Ordering::Relaxed)

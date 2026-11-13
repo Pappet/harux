@@ -740,3 +740,23 @@ impl Hl7MessageSummary {
         }
     }
 }
+
+#[cfg(test)]
+mod wire_tests {
+    use super::*;
+
+    /// The spellings `static/render.js` compares against (#285 review): a
+    /// rename on this side would otherwise drop the row's TLS label silently.
+    #[test]
+    fn transport_and_direction_spellings() {
+        let s = |v: serde_json::Value| v.as_str().unwrap().to_string();
+        assert_eq!(s(serde_json::json!(Transport::Plain)), "plain");
+        assert_eq!(s(serde_json::json!(Transport::Tls)), "tls");
+        assert_eq!(
+            s(serde_json::json!(Transport::TlsUnverified)),
+            "tls_unverified"
+        );
+        assert_eq!(s(serde_json::json!(Direction::Out)), "out");
+        assert_eq!(s(serde_json::json!(DeliveryState::Acked)), "acked");
+    }
+}

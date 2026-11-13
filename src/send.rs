@@ -789,6 +789,21 @@ impl Sender {
 mod tests {
     use super::*;
 
+    /// #285 review: a hand-written request with `"tls": true` and no
+    /// `verify` checks the certificate.
+    #[test]
+    fn verify_defaults_to_on() {
+        let req: SendRequest = serde_json::from_str(
+            r#"{"target":{"host":"h","port":1,"tls":true},"items":[{"message_id":"m"}]}"#,
+        )
+        .unwrap();
+        let TargetRequest::Explicit(t) = req.target else {
+            panic!("explicit target expected")
+        };
+        assert!(t.tls && t.verify);
+        assert!(req.await_response && !req.allow_invalid);
+    }
+
     #[test]
     fn response_is_read_from_msa() {
         let d = read_response(
