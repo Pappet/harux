@@ -41,3 +41,9 @@
 # max_run_store_percent = 25      # share of store.max_memory_mb a run may take
 # max_concurrent_runs = 4
 # allowed_destinations = ["orchestra-test.klinik.local:6000-6999"]  # empty = anywhere
+
+# [send.tls]
+# ca_file = "certs/klinik-ca.pem"   # CAs trusted besides the OS certificate store (PEM)
+# allow_unverified = false          # let users switch the certificate check off per target
+# client_cert_file = "certs/harux.pem"  # Harux's own certificate, for targets that ask
+# client_key_file = "certs/harux.key"   # its private key; set both or neither

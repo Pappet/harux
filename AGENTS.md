@@ -22,8 +22,9 @@ Orchestra (a healthcare integration platform) for development and debugging.
 MDM messages with Base64-encoded attachments are common daily traffic.
 
 **Scope today:** receive and inspect, plus — off by default — resending a
-stored message unchanged (Milestone 4, M4-1). The rest of Milestone 4
-(TLS, editing, templates, runs) and persistence (Milestone 5) are planned —
+stored message unchanged, over plain MLLP or TLS (Milestone 4, M4-1 and
+M4-2). The rest of Milestone 4 (editing, templates, runs) and persistence
+(Milestone 5) are planned —
 see the roadmap and `docs/MILESTONE_4_PLAN.md`. Do not implement roadmap
 features unless explicitly asked.
 
@@ -150,7 +151,8 @@ Off unless `send.enabled = true` (#272): every send route answers `403` and the 
 5. **No response text in summaries:** `Hl7MessageSummary` gets `direction`, `target`, `origin_id`, a small `delivery` — the response (cut at 64 KB) is in the detail JSON only.
 6. **A destination is never shown as a sender:** the UI keys sent messages by `sourceKeyOf(msg)` (`→ target`), not by `source_addr` — rail, counters, bar colour and highlight. `rate` / `last` count received messages only.
 7. **No store lock across network I/O**; the exchange runs in its own task, limited by `send.max_concurrent_runs`. Log lines carry metadata only, never content.
-8. `allowed_destinations` compares normalized hosts (`config::normalize_host`) and never resolves names. An over-limit entry (`truncated`, #223) cannot be resent; a parse error only with `allow_invalid`. `POST /api/send` refuses unknown fields so an unsupported option never silently sends the message unchanged.
+8. **TLS for outgoing connections** (`src/tls.rs`, #273): per target (`tls`, `verify` in the request). `TlsContext` is built once at start from `[send.tls]` (OS store via `rustls-native-certs`, `ca_file`, client certificate) — a bad file stops the start. The handshake counts into `send.connect_timeout_secs`. Every TLS failure becomes a reason naming the setting that answers it (`mllp_client::TlsFailure`); with TLS 1.3 a refused client certificate surfaces only while reading, which `after_handshake` re-reads. `verify: false` only with `send.tls.allow_unverified`, recorded as `Transport::TlsUnverified`. Never log, return or `Debug`-print key material. The crypto provider is `ring` (`default-features = false` on `tokio-rustls`) — don't let `aws-lc-rs` in, it needs CMake/NASM on Windows.
+9. `allowed_destinations` compares normalized hosts (`config::normalize_host`) and never resolves names. An over-limit entry (`truncated`, #223) cannot be resent; a parse error only with `allow_invalid`. `POST /api/send` refuses unknown fields so an unsupported option never silently sends the message unchanged.
 
 ### Configuration & Logging
 
@@ -214,7 +216,7 @@ Key frontend behaviors:
 | Parser | No zero-copy / lifetime refactoring. Correctness over performance. |
 | Store locking | `Arc<RwLock<>>` is intentional: no `dashmap`, no `mpsc`-channel refactor. |
 | DOM rendering | Keep the 250 ms flush batching. New messages prepend on the no-filter hot path; full rebuild only when a filter is active. No virtual DOM, no per-message full rebuilds. |
-| Dependencies | No new crates without explicit instruction. Check `Cargo.toml` first; prefer what is already in the dependency tree. |
+| Dependencies | No new crates without explicit instruction. Check `Cargo.toml` first; prefer what is already in the dependency tree. (The TLS crates `tokio-rustls` and `rustls-native-certs` came in with #273 on the owner's decision D4.) A pull request that changes `Cargo.toml`/`Cargo.lock` also runs the release builds for Windows, macOS and Linux (`build.yml`) and `cargo audit`. |
 | Eviction | No count-only eviction, no bookmarks outside the budget, no payload mutation (`Arc::make_mut`) for tags/bookmarks. |
 | ACK behaviour | Never ACK an incoming ACK. |
 
@@ -265,6 +267,7 @@ src/
 ├── mllp.rs          # TCP listener, MLLP framing, ACK/NACK dispatch
 ├── mllp_client.rs   # Sending side of MLLP: connect, one exchange, response limits (#272)
 ├── send.rs          # Sending engine: checks, store-before-connect, outcome, /api/send request types (#272)
+├── tls.rs           # Outgoing TLS: TlsContext from [send.tls], verifiers, client certificate, issuer names (#273)
 ├── store.rs         # In-memory store with broadcast channel, dual eviction
 ├── web.rs           # Axum router, REST handlers, WebSocket handler
 ├── dictionary.rs    # Embedded HL7 field/segment dictionary (v2.5.1.json)
@@ -290,7 +293,8 @@ static/
 tests/
 ├── parser_fixtures.rs            # Parser tests against tests/messages/*.hl7 fixtures
 ├── mllp_tcp.rs                   # MLLP over real TCP: framing, ACK/NACK, limits, shutdown
-├── send_tcp.rs                   # Sending over real TCP: fake receivers, round trip to Harux, bytes on the wire (#272)
+├── send_tcp.rs                   # Sending over real TCP and TLS: fake receivers, round trip to Harux, bytes on the wire, TLS failure reasons (#272, #273)
+├── tls/                          # Static test certificates (CA, server, wrong name, unknown CA, client) and generate.sh
 ├── fuzz_ingest.rs                # Mutation fuzz of decode → parse → ACK → JSON, no panic + invariants (#243)
 ├── config_startup.rs             # Real binary: broken config stops the start; unwritable log, bind addresses
 ├── accept_errors.rs              # Real binary under ulimit: accept() errors are not fatal, SIGTERM (Unix)

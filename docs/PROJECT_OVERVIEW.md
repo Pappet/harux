@@ -8,7 +8,7 @@ Harux is a high-performance MLLP server with a real-time web UI for inspecting H
 
 - **Language:** Rust
 - **Latest Release:** v0.9.0 — Reliability & Security Hardening (audit Phases 0–3, v0.8.0 review) — see the [changelog](../CHANGELOG.md)
-- **Scope today:** receive and inspect (Milestones 0–3), and — once `send.enabled` switches it on — resend a stored message unchanged to an MLLP destination (Milestone 4, first package). Editing, templates, runs (the rest of Milestone 4) and persistence (Milestone 5) are planned — see the [roadmap](ROADMAP.md)
+- **Scope today:** receive and inspect (Milestones 0–3), and — once `send.enabled` switches it on — resend a stored message unchanged to an MLLP destination, plain or over TLS (Milestone 4, first two packages). Editing, templates, runs (the rest of Milestone 4) and persistence (Milestone 5) are planned — see the [roadmap](ROADMAP.md)
 
 ---
 
@@ -85,6 +85,7 @@ Off unless `send.enabled = true` (#272). `POST /api/send` resends one stored mes
 
 - **Everything sent is stored first:** the sent message is inserted with delivery `pending` **before** the connection is opened, so a refused or timed-out send is a row too, and what the destination forwards because of it is listed after it. The outcome (`acked` with the MSA-1 code, `failed` with a reason, `sent` when no response is awaited) is recorded in the entry's metadata and broadcast as `delivery_updated`.
 - **A sent message is a message:** same list, detail, tags, bookmark, search and eviction. It has `direction: "out"`, `outbound` (target name, origin, requesting client address, run) and its response in `delivery`. Its `source_addr` is the destination. The UI shows it with `↑`, a dashed bar and `→ target`, and the ACK tab becomes **Response**.
+- **TLS** (`src/tls.rs`): per target. The certificate is checked against the operating system's store and `send.tls.ca_file`; with `send.tls.allow_unverified` a user may switch the check off for a target (recorded as *TLS unverified*). Harux shows its own certificate (`send.tls.client_cert_file`) to targets that ask. A failure names the setting that answers it: *untrusted certificate* (with the issuer), *wrong name*, *certificate required*, *no TLS answer* (a plain port), *expects TLS* (a plain send to a TLS port).
 - **The exchange** (`mllp_client.rs`): one frame out, one frame back, `TCP_NODELAY`; connect timeout `send.connect_timeout_secs`, response timeout `send.response_timeout_secs`, write timeout `mllp.write_timeout_secs`; responses above 1 MB are refused, at most 64 KB of a response is stored. A message whose type starts with `ACK` is written without waiting for an answer.
 - **Limits:** `send.max_concurrent_runs` runs at a time (`429` beyond); a message may take at most `send.max_run_store_percent` of the store when it is stored again. A frame above the size limit (stored cut off, `truncated`) cannot be resent; one that did not parse only with `allow_invalid`.
 - Every send is logged at `info` (failure: `warn`) with type, control ID, size, target, destination and requesting address — never with content.
@@ -193,6 +194,9 @@ Built-in defaults → `harux.toml` (next to the binary, then the working directo
 | `send.connect_timeout_secs` / `send.response_timeout_secs` | `5` / `30` | Send timeouts |
 | `send.max_concurrent_runs` | `4` | Sends at a time |
 | `send.max_run_messages` / `send.max_run_store_percent` | `1000` / `25` | Limits of one run; a run's messages may take at most this share of `store.max_memory_mb` |
+| `send.tls.ca_file` | — | PEM file with CA certificates trusted besides the operating system's store |
+| `send.tls.allow_unverified` | `false` | Let users switch the certificate check off for a target of theirs |
+| `send.tls.client_cert_file` / `send.tls.client_key_file` | — | Harux's own certificate and key (PEM), for targets that ask for one |
 
 ---
 
@@ -205,7 +209,7 @@ Built-in defaults → `harux.toml` (next to the binary, then the working directo
 | `GET` | `/api/search?q=ADT&limit=100&before=<id>` | Search like the UI filter (`has:warnings`/`has:errors`, type, patient, facility, control ID, source, tags), newest first; `before` searches only older messages. The UI uses it for "Search older on the server" |
 | `GET` | `/api/stats` | Live server stats: message counts, store bytes and limit, parse errors, connections, `sending_enabled`, `sent` (accepted, `AA`/`CA`), `send_rejected` (any other MSA code), `send_failed` (no usable answer), `active_runs` |
 | `GET` | `/api/export?direction=in` | Every stored received message as one MLLP-framed `harux-export.hl7`, byte for byte as received, oldest first (streamed); `direction=out` the sent ones, `all` both |
-| `GET` | `/api/send/config` | Whether sending is on, the loopback target, the destination and run limits (`403` while sending is off) |
+| `GET` | `/api/send/config` | Whether sending is on, the loopback target, the destination and run limits, whether unverified TLS may be chosen and a client certificate is set (`403` while sending is off) |
 | `POST` | `/api/send` | Resend one stored message unchanged (below); `403` while sending is off |
 | `POST` | `/api/clear` | Delete all messages from store |
 | `POST` | `/api/messages/{id}/bookmark` | Toggle bookmark on a message |
@@ -217,14 +221,15 @@ Built-in defaults → `harux.toml` (next to the binary, then the working directo
 
 ```jsonc
 {
-  "target": { "name": "orchestra-test", "host": "orchestra-test.klinik.local", "port": 6661 },  // or "loopback"
+  "target": { "name": "orchestra-test", "host": "orchestra-test.klinik.local", "port": 6661,
+              "tls": true, "verify": true },                       // or "loopback"
   "items": [{ "message_id": "…" }],   // exactly one stored message
   "await_response": true,             // false: do not wait for an answer
   "allow_invalid": false              // resend a message that did not parse
 }
 ```
 
-Answers `200` with `{ "id": "<sent message>", "delivery": { "state", "ack_code", "response", "latency_ms", "error", "control_id_matches", … } }` once the exchange ended — a refused connection or a NACK is a `200` too: the request worked, the send did not. Refusals: `400` malformed request, host or target (unknown fields such as `set` are refused, TLS is not available yet) · `403` sending off, destination outside `send.allowed_destinations` · `404` unknown message · `413` message too large · `422` a cut-off entry, or a message that did not parse without `allow_invalid` · `429` too many sends at once.
+Answers `200` with `{ "id": "<sent message>", "delivery": { "state", "ack_code", "response", "latency_ms", "error", "control_id_matches", … } }` once the exchange ended — a refused connection or a NACK is a `200` too: the request worked, the send did not. Refusals: `400` malformed request, host or target (unknown fields such as `set` are refused) · `403` sending off, destination outside `send.allowed_destinations`, `verify: false` without `send.tls.allow_unverified` · `404` unknown message · `413` message too large · `422` a cut-off entry, or a message that did not parse without `allow_invalid` · `429` too many sends at once.
 
 ### WebSocket Events
 
@@ -277,6 +282,7 @@ Events arrive in the order the store changed. State-changing routes are `POST`/`
 | Static files | `rust-embed` + `mime_guess` | 8.x / 2.x |
 | Streaming export | `futures-core` | 0.3 |
 | Error handling | `anyhow` | 1.x |
+| Outgoing TLS | `tokio-rustls` (rustls, `ring` provider) + `rustls-native-certs` | 0.26 / 0.8 |
 | Frontend | Vanilla JS / HTML / CSS | — |
 
 ---

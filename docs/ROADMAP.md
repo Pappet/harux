@@ -132,7 +132,7 @@ This document tracks all milestones and planned features. Each milestone lists i
 
 - [ ] **Message replay** — resend stored messages to a configurable target address/port (MLLP client, over TLS where the target needs it)
   - [x] M4-1 Send a stored message, unchanged (#272): MLLP client, switch and limits in `harux.toml`, sent messages and their responses in the store and shown as sent
-  - [ ] M4-2 TLS for outgoing connections
+  - [x] M4-2 TLS for outgoing connections (#273)
   - [ ] M4-3 Resend in the UI: a target list for every user, one-click resend, direction filter
   - [ ] M4-4 Changes on resend: new control ID, current time, field overrides
 - [ ] **Message editor** — edit raw HL7 in the UI and send
@@ -153,8 +153,8 @@ This document tracks all milestones and planned features. Each milestone lists i
 - [ ] A received message can be replayed to a configured target address with a single click
 - [ ] A template can be filled out in the UI, sent, and the response (ACK/NAK) displayed
 - [ ] Raw HL7 can be edited and sent directly
-- [ ] A message can be sent to a target that requires TLS
-- [ ] Sending is off until `harux.toml` switches it on, and can be limited to listed destinations; everything Harux sends is visible in the message list with the address that asked for it
+- [x] A message can be sent to a target that requires TLS
+- [x] Sending is off until `harux.toml` switches it on, and can be limited to listed destinations; everything Harux sends is visible in the message list with the address that asked for it
 
 ---
 

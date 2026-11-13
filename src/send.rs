@@ -16,10 +16,11 @@
 
 use crate::config::{normalize_host, Config, DestinationRule};
 use crate::hl7::types::{
-    Delivery, DeliveryState, Hl7Message, Origin, Outbound, MAX_STORED_RESPONSE_BYTES,
+    Delivery, DeliveryState, Hl7Message, Origin, Outbound, Transport, MAX_STORED_RESPONSE_BYTES,
 };
 use crate::mllp_client::{self, Timeouts};
 use crate::store::MessageStore;
+use crate::tls::TlsContext;
 use serde::{Deserialize, Serialize};
 use std::net::{IpAddr, SocketAddr};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -53,6 +54,8 @@ pub struct SendSettings {
     /// `mllp.max_message_size_mb`: the largest message that can be sent is
     /// the largest that can be received.
     pub max_message_bytes: usize,
+    /// `[send.tls]`, read at start when sending is on (#273).
+    pub tls: Option<Arc<TlsContext>>,
 }
 
 impl SendSettings {
@@ -76,6 +79,13 @@ impl SendSettings {
                 / 100,
             max_concurrent_runs: s.max_concurrent_runs.max(1),
             max_message_bytes: config.mllp.max_message_size(),
+            // The OS store and the files are read only when sending is on;
+            // a file problem then stops the start (#273).
+            tls: if s.enabled {
+                Some(Arc::new(TlsContext::load(&s.tls, true)?))
+            } else {
+                None
+            },
         })
     }
 }
@@ -120,6 +130,10 @@ pub struct ExplicitTarget {
     pub port: u16,
     #[serde(default)]
     pub tls: bool,
+    /// With TLS: check the target's certificate. `false` only with
+    /// `send.tls.allow_unverified`. Ignored without TLS.
+    #[serde(default = "yes")]
+    pub verify: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -182,6 +196,7 @@ struct Destination {
     /// What is connected to: an IP address or a name.
     host: String,
     port: u16,
+    transport: Transport,
 }
 
 impl Destination {
@@ -366,7 +381,7 @@ impl Sender {
         msg.ack_code = None;
         msg.outbound = Some(Box::new(Outbound {
             target: destination.label.clone(),
-            tls: false,
+            transport: destination.transport,
             origin: Origin::Resend {
                 message_id: original.id.clone(),
             },
@@ -395,10 +410,12 @@ impl Sender {
         let settings = &self.inner.settings;
         match target {
             TargetRequest::Named(name) if name == "loopback" => match settings.loopback {
+                // The listener speaks plain MLLP (TLS for it is Milestone 6).
                 Some(addr) => Ok(Destination {
                     label: LOOPBACK_NAME.into(),
                     host: addr.ip().to_string(),
                     port: addr.port(),
+                    transport: Transport::Plain,
                 }),
                 None => Err(SendError::Forbidden(
                     "The loopback target is off (send.loopback_target)".into(),
@@ -408,13 +425,20 @@ impl Sender {
                 "Unknown target {other:?}: name \"loopback\" or give host and port"
             ))),
             TargetRequest::Explicit(t) => {
-                if t.tls {
-                    return Err(SendError::BadRequest(
-                        "TLS for outgoing connections is not available yet; send to a plain \
-                         MLLP port (tls: false)"
-                            .into(),
-                    ));
-                }
+                let transport = match (t.tls, t.verify) {
+                    (false, _) => Transport::Plain,
+                    (true, true) => Transport::Tls,
+                    (true, false) => {
+                        if !settings.tls.as_ref().is_some_and(|c| c.allow_unverified()) {
+                            return Err(SendError::Forbidden(
+                                "An unverified TLS connection (verify: false) needs \
+                                 send.tls.allow_unverified = true"
+                                    .into(),
+                            ));
+                        }
+                        Transport::TlsUnverified
+                    }
+                };
                 let host = normalize_host(&t.host).ok_or_else(|| {
                     SendError::BadRequest(format!("{:?} is not a host name or IP address", t.host))
                 })?;
@@ -431,6 +455,7 @@ impl Sender {
                     label: String::new(),
                     host,
                     port: t.port,
+                    transport,
                 };
                 if !allowed {
                     return Err(SendError::Forbidden(format!(
@@ -479,13 +504,23 @@ impl Sender {
 
         let mut shutdown = inner.shutdown.subscribe();
         let timeouts = inner.settings.timeouts;
+        let tls = inner.settings.tls.clone();
         let started = Instant::now();
         // The exchange runs in a task of its own: a panic there ends that
         // task only and is recorded as a failure (as `ingest` does, #235).
         let mut exchange = tokio::spawn({
             let sent = Arc::clone(&sent);
             let destination = destination.clone();
-            async move { exchange_one(&sent, &destination, await_response, timeouts).await }
+            async move {
+                exchange_one(
+                    &sent,
+                    &destination,
+                    tls.as_deref(),
+                    await_response,
+                    timeouts,
+                )
+                .await
+            }
         });
         let delivery = tokio::select! {
             joined = &mut exchange => joined.unwrap_or_else(|e| Delivery::failed(
@@ -582,10 +617,12 @@ fn describe(d: &Delivery) -> String {
     }
 }
 
-/// Connect, write the stored bytes, read the response.
+/// Connect (with TLS if the target uses it), write the stored bytes, read
+/// the response.
 async fn exchange_one(
     sent: &Hl7Message,
     destination: &Destination,
+    tls: Option<&TlsContext>,
     await_response: bool,
     timeouts: Timeouts,
 ) -> Delivery {
@@ -593,14 +630,36 @@ async fn exchange_one(
     let failed = |e: mllp_client::ExchangeError| {
         Delivery::failed(e.reason(), e.detail(), Some(elapsed_ms(started)))
     };
-    let mut stream =
-        match mllp_client::connect(&destination.host, destination.port, timeouts.connect).await {
-            Ok(s) => s,
-            Err(e) => return failed(e),
-        };
     // Unchanged means byte for byte (#230): what was received.
     let payload = sent.wire_bytes();
-    match mllp_client::exchange(&mut stream, &payload, await_response, timeouts).await {
+    let (host, port) = (destination.host.as_str(), destination.port);
+    let result = match destination.transport {
+        Transport::Plain => match mllp_client::connect(host, port, timeouts.connect).await {
+            Ok(mut stream) => {
+                mllp_client::exchange(&mut stream, &payload, await_response, timeouts).await
+            }
+            Err(e) => return failed(e),
+        },
+        Transport::Tls | Transport::TlsUnverified => {
+            let Some(tls) = tls else {
+                return Delivery::failed(
+                    "TLS failed",
+                    "TLS is not set up on this server (send.enabled)",
+                    None,
+                );
+            };
+            let verify = destination.transport == Transport::Tls;
+            match mllp_client::connect_tls(host, port, timeouts.connect, tls, verify).await {
+                Ok((mut stream, auth)) => {
+                    mllp_client::exchange(&mut stream, &payload, await_response, timeouts)
+                        .await
+                        .map_err(|e| mllp_client::after_handshake(e, &auth))
+                }
+                Err(e) => return failed(e),
+            }
+        }
+    };
+    match result {
         Ok(None) => Delivery {
             state: DeliveryState::Sent,
             latency_ms: Some(elapsed_ms(started)),
@@ -682,6 +741,16 @@ pub struct SendConfigResponse {
     pub max_run_store_percent: usize,
     pub max_concurrent_runs: usize,
     pub max_message_bytes: usize,
+    /// What outgoing TLS offers (#273): never paths or keys.
+    pub tls: TlsInfo,
+}
+
+#[derive(Debug, Serialize)]
+pub struct TlsInfo {
+    /// A user may switch the certificate check off for a target.
+    pub allow_unverified: bool,
+    /// Harux shows a certificate of its own to targets that ask.
+    pub client_certificate: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -708,6 +777,10 @@ impl Sender {
             max_run_store_percent: s.max_run_store_percent,
             max_concurrent_runs: s.max_concurrent_runs,
             max_message_bytes: s.max_message_bytes,
+            tls: TlsInfo {
+                allow_unverified: s.tls.as_ref().is_some_and(|t| t.allow_unverified()),
+                client_certificate: s.tls.as_ref().is_some_and(|t| t.has_client_certificate()),
+            },
         }
     }
 }
@@ -715,6 +788,21 @@ impl Sender {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// #285 review: a hand-written request with `"tls": true` and no
+    /// `verify` checks the certificate.
+    #[test]
+    fn verify_defaults_to_on() {
+        let req: SendRequest = serde_json::from_str(
+            r#"{"target":{"host":"h","port":1,"tls":true},"items":[{"message_id":"m"}]}"#,
+        )
+        .unwrap();
+        let TargetRequest::Explicit(t) = req.target else {
+            panic!("explicit target expected")
+        };
+        assert!(t.tls && t.verify);
+        assert!(req.await_response && !req.allow_invalid);
+    }
 
     #[test]
     fn response_is_read_from_msa() {

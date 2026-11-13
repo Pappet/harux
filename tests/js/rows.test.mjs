@@ -132,3 +132,15 @@ test('a sent row: arrow, target instead of source, chip from the delivery, no se
     assert.deepEqual(row1.children.map((c) => cls(c)[0]), ['msg-type', 'msg-patient', 'msg-ack', 'msg-latency']);
     assert.equal(row1.children[2].textContent, 'AE');
 });
+
+test('a sent row says TLS, and marks an unverified connection (#273)', () => {
+    const { ctx } = setup();
+    const base = { id: 't', direction: 'out', target: 'orch', source_addr: 'h:1', tags: [], delivery: { state: 'pending' } };
+    const src = (msg) => ctx.buildMessageRow(msg).children[1].children[1].children[2];
+    assert.equal(src({ ...base, transport: 'plain' }).textContent, '→ orch');
+    assert.equal(src({ ...base, transport: 'tls' }).textContent, '→ orch · TLS');
+    const unverified = src({ ...base, transport: 'tls_unverified' });
+    assert.equal(unverified.textContent, '→ orch · TLS unverified');
+    assert.ok(cls(unverified).includes('tls-unverified'));
+    assert.equal(unverified.title, 'Sent to h:1 over TLS unverified');
+});

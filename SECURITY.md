@@ -40,7 +40,7 @@ Instead, report security issues privately via one of these methods:
 Harux is an **inspection and debugging tool** — not a production message broker. Please keep the following in mind when deploying:
 
 - **Network placement**: Run Harux only within trusted network segments. The Web UI and API have no authentication: anyone who can reach the web port can read every stored message, tag it and clear the store. `server.mllp_bind` and `server.web_bind` restrict each listener to one address — e.g. `web_bind = "127.0.0.1"` behind a reverse proxy that adds TLS and login.
-- **No TLS**: MLLP connections and the Web UI are unencrypted. Use network-level controls (VPN, firewall rules) or a TLS-terminating reverse proxy to restrict access.
+- **No TLS for incoming connections**: the MLLP listener and the Web UI are unencrypted. Use network-level controls (VPN, firewall rules) or a TLS-terminating reverse proxy to restrict access. Outgoing sends can use TLS (see *Sending*).
 - **PHI exposure**: Messages displayed in the Web UI may contain patient data. Limit browser access to authorized personnel.
 - **No persistent storage** (currently): Messages are held in memory only and are lost on restart. This limits exposure but does not eliminate it while the service is running. Data leaves memory in two ways: the export (`/api/export`) writes every stored message to a file on the user's machine, and the log (stdout, and with `logging.file` the daily log files, kept for `logging.max_files` days) records connections and parse errors, which can quote the start of a broken message.
 
@@ -54,7 +54,7 @@ What stands against a mistake once it is on:
 - **Every send is visible:** the sent message is stored before Harux connects, as a row everyone sees, with the destination and the address of the client that asked for it, and a log line (metadata only, never content). Behind a reverse proxy that address is the proxy's.
 - Send routes are `POST` and covered by the cross-site guard; the number of sends at a time is limited (`send.max_concurrent_runs`).
 - A response is read up to 1 MB and stored up to 64 KB; it never travels in list rows or WebSocket events.
-- Outgoing connections are unencrypted for now; TLS for them is the next work package.
+- **TLS for outgoing connections** is chosen per target. The target's certificate must be valid for the host name or address and chain to a root in the operating system's store or in `send.tls.ca_file`. A user can switch that check off for a target of theirs only if `send.tls.allow_unverified = true`; every message sent that way is recorded as *TLS unverified* and marked in its row. Harux's own client certificate (`send.tls.client_cert_file` / `client_key_file`) is one for the whole server, read at start, shown only to targets that ask for it, and never logged or returned by the API. The TLS library is rustls with the `ring` provider (no OpenSSL at run time).
 
 ## Hardening Measures (Built-in)
 

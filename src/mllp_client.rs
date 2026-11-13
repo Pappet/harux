@@ -6,10 +6,15 @@
 //! one definition of the envelope for receiving, exporting and sending.
 
 use crate::mllp::{extract_mllp_frame, MLLP_END_1, MLLP_END_2, MLLP_START};
-use std::time::Duration;
+use crate::tls::{ClientAuth, TlsContext, UntrustedCertificate};
+use std::sync::Arc;
+use std::time::{Duration, Instant};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio::time::timeout;
+use tokio_rustls::client::TlsStream;
+use tokio_rustls::rustls::pki_types::ServerName;
+use tokio_rustls::rustls::{self, AlertDescription, CertificateError};
 
 /// Largest response read to find its end (#272). A destination writes it,
 /// so its size is not Harux's to choose; what is stored is cut further.
@@ -48,6 +53,37 @@ pub enum ExchangeError {
     /// The response is larger than [`MAX_RESPONSE_BYTES`].
     TooLarge,
     Read(std::io::Error),
+    /// A plain connection answered with TLS: the target expects TLS.
+    ExpectsTls,
+    /// The TLS handshake (or a TLS-specific failure after it) — #273.
+    Tls(TlsFailure),
+}
+
+/// Why a TLS connection failed, each naming the setting that answers it
+/// (#273). How the targets' certificates are issued is not known in
+/// advance (plan, Q2), so the first real attempt has to say which case
+/// applies.
+#[derive(Debug)]
+pub enum TlsFailure {
+    /// Issued by a CA nobody trusts here (or self-signed): `send.tls.ca_file`.
+    Untrusted(String),
+    /// Valid, but not for the host name or address connected to.
+    WrongName(String),
+    Expired,
+    /// The target asks Harux for a certificate and none is configured.
+    CertificateRequired,
+    /// The target refused the certificate Harux showed.
+    CertificateRefused,
+    /// The target did not answer the handshake: a plain MLLP port?
+    NoTlsAnswer,
+    /// The connection ended without a TLS alert after the target had asked
+    /// Harux for a certificate. Likely the reason, but not certain: a target
+    /// may ask optionally and drop the connection for something else
+    /// (#285 review), so the reason stays "closed" and the detail says so.
+    ClosedAfterCertificateRequest {
+        had_certificate: bool,
+    },
+    Other(String),
 }
 
 impl ExchangeError {
@@ -63,6 +99,17 @@ impl ExchangeError {
             ExchangeError::NotFramed => "not MLLP",
             ExchangeError::TooLarge => "too large",
             ExchangeError::Read(_) => "read failed",
+            ExchangeError::ExpectsTls => "expects TLS",
+            ExchangeError::Tls(f) => match f {
+                TlsFailure::Untrusted(_) => "untrusted certificate",
+                TlsFailure::WrongName(_) => "wrong name",
+                TlsFailure::Expired => "expired certificate",
+                TlsFailure::CertificateRequired => "certificate required",
+                TlsFailure::CertificateRefused => "certificate refused",
+                TlsFailure::NoTlsAnswer => "no TLS answer",
+                TlsFailure::ClosedAfterCertificateRequest { .. } => "closed",
+                TlsFailure::Other(_) => "TLS failed",
+            },
         }
     }
 
@@ -94,6 +141,39 @@ impl ExchangeError {
                 MAX_RESPONSE_BYTES / 1024
             ),
             ExchangeError::Read(e) => format!("Reading the response failed: {e}"),
+            ExchangeError::ExpectsTls => {
+                "The target expects TLS: switch TLS on for this target".into()
+            }
+            ExchangeError::Tls(f) => match f {
+                TlsFailure::Untrusted(what) => format!(
+                    "Certificate not trusted: {what}. Add its CA to send.tls.ca_file, or \
+                     switch the check off for this target (needs send.tls.allow_unverified)"
+                ),
+                TlsFailure::WrongName(detail) => {
+                    format!("The certificate is for another name{detail}")
+                }
+                TlsFailure::Expired => "The target's certificate has expired".into(),
+                TlsFailure::CertificateRequired => "The target asks for a certificate from \
+                     Harux: set send.tls.client_cert_file and client_key_file"
+                    .into(),
+                TlsFailure::CertificateRefused => {
+                    "The target refused Harux's certificate (send.tls.client_cert_file)".into()
+                }
+                TlsFailure::NoTlsAnswer => {
+                    "No TLS answer — is this a plain MLLP port? Switch TLS off for this target"
+                        .into()
+                }
+                TlsFailure::ClosedAfterCertificateRequest { had_certificate } => format!(
+                    "The target closed the connection before it answered. It had asked for a \
+                     certificate from Harux{} — if it requires one, that is the likely reason",
+                    if *had_certificate {
+                        ", and got send.tls.client_cert_file"
+                    } else {
+                        ", and none is configured (send.tls.client_cert_file)"
+                    }
+                ),
+                TlsFailure::Other(e) => format!("TLS failed: {e}"),
+            },
         }
     }
 }
@@ -102,6 +182,11 @@ impl ExchangeError {
 /// (resolved here). The socket gets `TCP_NODELAY`: a frame written in parts
 /// would otherwise wait for the peer's delayed ACK, adding tens of
 /// milliseconds to every send and to the round-trip time Harux shows.
+///
+/// On Windows a refused connection is reported only after about 2 s (the
+/// OS retries the SYN), and a name with several addresses is tried address
+/// by address — `localhost` on `::1` first. `send.connect_timeout_secs`
+/// (default 5) leaves room for that.
 pub async fn connect(host: &str, port: u16, limit: Duration) -> Result<TcpStream, ExchangeError> {
     let stream = match timeout(limit, TcpStream::connect((host, port))).await {
         Err(_) => return Err(ExchangeError::ConnectTimeout),
@@ -114,6 +199,122 @@ pub async fn connect(host: &str, port: u16, limit: Duration) -> Result<TcpStream
     // Only a latency matter; the exchange works without it.
     let _ = stream.set_nodelay(true);
     Ok(stream)
+}
+
+/// Connect to `host:port` and complete the TLS handshake, both within
+/// `limit` (#273): the handshake counts into the connect timeout. Returns
+/// the stream and the record of whether the target asked for a client
+/// certificate, which [`after_handshake`] needs.
+pub async fn connect_tls(
+    host: &str,
+    port: u16,
+    limit: Duration,
+    tls: &TlsContext,
+    verify: bool,
+) -> Result<(TlsStream<TcpStream>, Arc<ClientAuth>), ExchangeError> {
+    let started = Instant::now();
+    let tcp = connect(host, port, limit).await?;
+    let connected_after = started.elapsed();
+    let remaining = limit.saturating_sub(connected_after);
+    if remaining.is_zero() {
+        return Err(ExchangeError::ConnectTimeout);
+    }
+    let (connector, auth) = tls
+        .connector(verify)
+        .map_err(|e| ExchangeError::Tls(TlsFailure::Other(e)))?;
+    let name = ServerName::try_from(host.to_string())
+        .map_err(|e| ExchangeError::Tls(TlsFailure::Other(e.to_string())))?;
+    match timeout(remaining, connector.connect(name, tcp)).await {
+        // A TCP connect that took most of the budget leaves the handshake
+        // too little time to call the target "not TLS" (#285 review).
+        Err(_) if connected_after * 2 >= limit => Err(ExchangeError::ConnectTimeout),
+        Err(_) => Err(ExchangeError::Tls(TlsFailure::NoTlsAnswer)),
+        Ok(Ok(stream)) => Ok((stream, auth)),
+        Ok(Err(e)) => Err(ExchangeError::Tls(tls_failure(&e, &auth))),
+    }
+}
+
+/// An exchange error on a TLS connection, re-read in the light of the
+/// handshake (#273): with TLS 1.3 a target checks Harux's certificate only
+/// after the client finished the handshake, so a missing or refused client
+/// certificate shows up as an alert or a closed connection while reading.
+///
+/// Only a TLS alert is taken as proof. A plain close after the target asked
+/// for a certificate keeps the reason "closed", with the request as a hint.
+pub fn after_handshake(e: ExchangeError, auth: &ClientAuth) -> ExchangeError {
+    match e {
+        ExchangeError::Read(io) => match rustls_error(&io) {
+            Some(_) => ExchangeError::Tls(tls_failure(&io, auth)),
+            None if auth.asked() => ExchangeError::Tls(closed_after_request(auth)),
+            None => ExchangeError::Read(io),
+        },
+        ExchangeError::Closed if auth.asked() => ExchangeError::Tls(closed_after_request(auth)),
+        e => e,
+    }
+}
+
+fn closed_after_request(auth: &ClientAuth) -> TlsFailure {
+    TlsFailure::ClosedAfterCertificateRequest {
+        had_certificate: auth.had_certificate(),
+    }
+}
+
+fn rustls_error(e: &std::io::Error) -> Option<&rustls::Error> {
+    e.get_ref()?.downcast_ref::<rustls::Error>()
+}
+
+/// The reason a person can act on, from the error rustls reported.
+fn tls_failure(e: &std::io::Error, auth: &ClientAuth) -> TlsFailure {
+    let Some(err) = rustls_error(e) else {
+        // The connection ended without an alert: a peer that doesn't speak
+        // TLS, or one that drops a client without the certificate it wants.
+        return match e.kind() {
+            _ if auth.asked() => closed_after_request(auth),
+            std::io::ErrorKind::UnexpectedEof
+            | std::io::ErrorKind::ConnectionReset
+            | std::io::ErrorKind::ConnectionAborted
+            | std::io::ErrorKind::InvalidData => TlsFailure::NoTlsAnswer,
+            _ => TlsFailure::Other(e.to_string()),
+        };
+    };
+    match err {
+        rustls::Error::InvalidCertificate(CertificateError::Other(other)) => {
+            match other.0.downcast_ref::<UntrustedCertificate>() {
+                Some(u) => TlsFailure::Untrusted(u.to_string()),
+                None => TlsFailure::Other(err.to_string()),
+            }
+        }
+        rustls::Error::InvalidCertificate(CertificateError::UnknownIssuer) => {
+            TlsFailure::Untrusted("issued by an unknown CA".into())
+        }
+        rustls::Error::InvalidCertificate(CertificateError::NotValidForNameContext {
+            expected,
+            presented,
+        }) => TlsFailure::WrongName(format!(
+            ": {expected:?} was asked for, the certificate is for {}",
+            presented.join(", ")
+        )),
+        rustls::Error::InvalidCertificate(CertificateError::NotValidForName) => {
+            TlsFailure::WrongName(String::new())
+        }
+        rustls::Error::InvalidCertificate(
+            CertificateError::Expired | CertificateError::ExpiredContext { .. },
+        ) => TlsFailure::Expired,
+        // The alerts that are about Harux's certificate: proof.
+        rustls::Error::AlertReceived(AlertDescription::CertificateRequired) => {
+            TlsFailure::CertificateRequired
+        }
+        rustls::Error::AlertReceived(
+            AlertDescription::BadCertificate
+            | AlertDescription::UnknownCA
+            | AlertDescription::UnsupportedCertificate
+            | AlertDescription::CertificateExpired,
+        ) if auth.asked() && auth.had_certificate() => TlsFailure::CertificateRefused,
+        rustls::Error::InvalidMessage(_)
+        | rustls::Error::InappropriateMessage { .. }
+        | rustls::Error::InappropriateHandshakeMessage { .. } => TlsFailure::NoTlsAnswer,
+        other => TlsFailure::Other(other.to_string()),
+    }
 }
 
 /// One exchange on an open connection: write `payload` as one MLLP frame,
@@ -174,7 +375,11 @@ async fn read_frame<S: AsyncRead + Unpin>(stream: &mut S) -> Result<Vec<u8>, Exc
         }
         acc.extend_from_slice(&buf[..n]);
         if !framed_so_far(&acc) {
-            return Err(ExchangeError::NotFramed);
+            return Err(if speaks_tls(&acc) {
+                ExchangeError::ExpectsTls
+            } else {
+                ExchangeError::NotFramed
+            });
         }
         if let Some((payload, _)) = extract_mllp_frame(&acc, scan_from) {
             return Ok(payload.to_vec());
@@ -185,6 +390,13 @@ async fn read_frame<S: AsyncRead + Unpin>(stream: &mut S) -> Result<Vec<u8>, Exc
         }
         scan_from = acc.len().saturating_sub(1);
     }
+}
+
+/// A TLS record where an MLLP frame was expected: an alert (`0x15`, what a
+/// TLS server answers a plain frame with) or a handshake (`0x16`), followed
+/// by a TLS version (`0x03`).
+fn speaks_tls(acc: &[u8]) -> bool {
+    matches!(acc, [0x15 | 0x16, 0x03, ..])
 }
 
 /// Whether `acc` is (the start of) an MLLP frame: only whitespace before the
@@ -205,6 +417,51 @@ mod tests {
         assert!(framed_so_far(b"\r\n"));
         assert!(framed_so_far(b"\r\n\x0bMSH"));
         assert!(!framed_so_far(b"HTTP/1.1 400"));
+        assert!(speaks_tls(b"\x15\x03\x03\x00\x02\x02\x32"));
+        assert!(!speaks_tls(b"\x15x"));
+    }
+
+    /// #285 review: only an alert proves a certificate problem; a plain
+    /// close after a certificate request stays "closed", with a hint.
+    #[test]
+    fn a_close_after_a_certificate_request_is_only_a_hint() {
+        let eof = || std::io::Error::new(std::io::ErrorKind::UnexpectedEof, "eof");
+        let asked = ClientAuth::for_tests(true, false);
+        let e = after_handshake(ExchangeError::Closed, &asked);
+        assert_eq!(e.reason(), "closed");
+        assert!(e.detail().contains("none is configured"), "{}", e.detail());
+        assert_eq!(
+            after_handshake(ExchangeError::Read(eof()), &asked).reason(),
+            "closed"
+        );
+        assert_eq!(
+            after_handshake(ExchangeError::NotFramed, &asked).reason(),
+            "not MLLP"
+        );
+
+        let alert = |a| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                rustls::Error::AlertReceived(a),
+            )
+        };
+        let e = after_handshake(
+            ExchangeError::Read(alert(AlertDescription::CertificateRequired)),
+            &asked,
+        );
+        assert_eq!(e.reason(), "certificate required");
+        let showed = ClientAuth::for_tests(true, true);
+        let e = after_handshake(
+            ExchangeError::Read(alert(AlertDescription::BadCertificate)),
+            &showed,
+        );
+        assert_eq!(e.reason(), "certificate refused");
+        // Not asked: a close is a close.
+        let not_asked = ClientAuth::for_tests(false, false);
+        assert!(matches!(
+            after_handshake(ExchangeError::Closed, &not_asked),
+            ExchangeError::Closed
+        ));
     }
 
     #[tokio::test]

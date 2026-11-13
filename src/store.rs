@@ -1467,7 +1467,7 @@ mod tests {
         msg.source_addr = "10.9.9.9:6661".into();
         msg.outbound = Some(Box::new(Outbound {
             target: target.into(),
-            tls: false,
+            transport: crate::hl7::types::Transport::Plain,
             origin: Origin::Resend {
                 message_id: "orig".into(),
             },
