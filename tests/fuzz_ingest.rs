@@ -17,7 +17,10 @@
 //! - read as the response to a send (#272), the bytes give an outcome
 //!   without a panic, and an acknowledgement always carries its code;
 //! - resent with a new MSH-10 (#275), the payload never carries an MLLP
-//!   frame byte and the parser finds the override again.
+//!   frame byte and the parser finds the override again;
+//! - made a draft (#276), its references filled in give back the stored
+//!   segment lines, the preview's field positions lie inside the text, and a
+//!   built payload never carries an MLLP frame byte.
 //!
 //! `HARUX_FUZZ_ITERATIONS` raises the count for a longer local run, and
 //! `HARUX_FUZZ_SEED` picks another sequence.
@@ -143,6 +146,56 @@ fn field<'a>(msg: &'a Hl7Message, segment: &str, index: usize) -> Option<&'a str
 
 /// Everything the ingest path does with one frame, plus the properties.
 /// `Err` describes a broken property; a panic propagates.
+/// The stored message as a draft (#276): references, preview, build.
+fn check_draft(stored: &Hl7Message) -> Result<(), String> {
+    use harux::hl7::compose::segment_lines;
+    let draft = harux::draft::draft_of(stored).map_err(|e| format!("draft_of: {e:?}"))?;
+    let filled = harux::draft::fill_references(&draft.raw, Some(stored))
+        .map_err(|e| format!("references not filled: {e:?}"))?;
+    let lines = |t: &str| -> Vec<String> {
+        segment_lines(t)
+            .into_iter()
+            .map(|r| t[r].to_string())
+            .collect()
+    };
+    if lines(&filled) != lines(&stored.raw) {
+        return Err("the draft with its references filled in is not the stored text".into());
+    }
+    let preview = harux::draft::preview(&draft.raw, &Default::default(), None, false)
+        .map_err(|e| format!("preview: {e:?}"))?;
+    let units = preview.raw.encode_utf16().count();
+    for seg in &preview.positions {
+        if seg.start > seg.end || seg.end > units {
+            return Err(format!(
+                "segment {} at {}..{} of {units}",
+                seg.name, seg.start, seg.end
+            ));
+        }
+        if let Some(f) = seg
+            .fields
+            .iter()
+            .find(|[_, a, b]| a > b || *a < seg.start || *b > seg.end)
+        {
+            return Err(format!("field {f:?} outside segment {}", seg.name));
+        }
+    }
+    if preview.message.parse_error.is_none()
+        && preview.positions.len() != preview.message.segments.len()
+    {
+        return Err(format!(
+            "{} positioned lines but {} segments",
+            preview.positions.len(),
+            preview.message.segments.len()
+        ));
+    }
+    if let Ok(bytes) = harux::draft::build_payload(&draft.raw, None, Some(stored), 1, usize::MAX) {
+        if bytes.iter().any(|&b| b == 0x0B || b == 0x1C) {
+            return Err("a built draft carries an MLLP frame byte".into());
+        }
+    }
+    Ok(())
+}
+
 fn check(payload: &[u8]) -> Result<(), String> {
     let decoded = decode_payload(payload);
 
@@ -156,6 +209,7 @@ fn check(payload: &[u8]) -> Result<(), String> {
     if stored.wire_bytes().as_ref() != payload {
         return Err("wire_bytes() differs from the received payload".into());
     }
+    check_draft(&stored)?;
 
     let msg = match parse_message(&decoded.text, "127.0.0.1:1") {
         Ok(msg) => msg,

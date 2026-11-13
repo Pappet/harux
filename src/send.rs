@@ -35,6 +35,15 @@ pub const LOOPBACK_NAME: &str = "This Harux";
 /// Longest target name kept; it is a label, shown in the row.
 const MAX_TARGET_NAME_CHARS: usize = 64;
 
+/// How many requests with a large body (`/api/send`, `/api/parse`,
+/// `/api/build`) may be read and handled at once (#276). A larger one is
+/// answered `429`.
+pub const LARGE_BODY_PERMITS: usize = 4;
+
+/// From this size on a request body counts as large (or when its size is
+/// not announced).
+pub const LARGE_BODY_BYTES: u64 = 256 * 1024;
+
 /// What the sender needs from the configuration (`[send]`, `[mllp]`,
 /// `[store]`). Built once at start; tests build it by hand.
 #[derive(Debug, Clone)]
@@ -142,10 +151,47 @@ pub struct ExplicitTarget {
     pub verify: bool,
 }
 
-#[derive(Debug, Deserialize)]
+/// One message to send: a stored one (`message_id`) or a draft (`raw`,
+/// #276) — exactly one of the two.
+#[derive(Debug, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ItemRequest {
-    pub message_id: String,
+    /// A stored message, sent as received or with `set`.
+    #[serde(default)]
+    pub message_id: Option<String>,
+    /// A draft's text: line ends become `CR`, placeholders and references
+    /// are filled in, encoded with `charset` (#276).
+    #[serde(default)]
+    pub raw: Option<String>,
+    /// The draft's encoding: `"auto"` (default: MSH-18, else UTF-8) or a
+    /// name (`UTF-8`, `8859/1`, `windows-1252`, …).
+    #[serde(default)]
+    pub charset: Option<String>,
+    /// The stored message the draft was made from; its references
+    /// (`{{from:OBX[1]-5}}`) are filled in from it.
+    #[serde(default)]
+    pub based_on: Option<String>,
+}
+
+// For callers of the library (the integration tests); the binary builds
+// items from JSON only.
+#[allow(dead_code)]
+impl ItemRequest {
+    /// A stored message, by ID.
+    pub fn stored(id: impl Into<String>) -> Self {
+        Self {
+            message_id: Some(id.into()),
+            ..Self::default()
+        }
+    }
+
+    /// A draft's text.
+    pub fn draft(raw: impl Into<String>) -> Self {
+        Self {
+            raw: Some(raw.into()),
+            ..Self::default()
+        }
+    }
 }
 
 /// The answer to a run of one message: the sent message's ID and outcome.
@@ -174,7 +220,33 @@ pub enum SendError {
     Busy,
 }
 
+impl From<crate::hl7::compose::ComposeError> for SendError {
+    /// A bad path is a malformed request; a missing segment or a value that
+    /// would leave its field is a message that cannot be built.
+    fn from(e: crate::hl7::compose::ComposeError) -> Self {
+        use crate::hl7::compose::ComposeError;
+        match e {
+            ComposeError::BadPath(m) => SendError::BadRequest(m),
+            ComposeError::MissingSegment(m) | ComposeError::BadValue(m) => {
+                SendError::Unprocessable(m)
+            }
+        }
+    }
+}
+
 impl SendError {
+    /// The HTTP status of the refusal.
+    pub fn status(&self) -> u16 {
+        match self {
+            SendError::Disabled | SendError::Forbidden(_) => 403,
+            SendError::BadRequest(_) => 400,
+            SendError::NotFound(_) => 404,
+            SendError::TooLarge(_) => 413,
+            SendError::Unprocessable(_) => 422,
+            SendError::Busy => 429,
+        }
+    }
+
     pub fn message(&self) -> String {
         match self {
             SendError::Disabled => {
@@ -249,6 +321,8 @@ struct Inner {
     settings: SendSettings,
     store: MessageStore,
     runs: Arc<Semaphore>,
+    /// Requests with a large body being read or handled (#276).
+    large_bodies: Arc<Semaphore>,
     stats: SendStats,
     shutdown: watch::Sender<bool>,
 }
@@ -262,6 +336,7 @@ impl Sender {
                 settings,
                 store,
                 runs,
+                large_bodies: Arc::new(Semaphore::new(LARGE_BODY_PERMITS)),
                 stats: SendStats::default(),
                 shutdown,
             }),
@@ -270,6 +345,27 @@ impl Sender {
 
     pub fn enabled(&self) -> bool {
         self.inner.settings.enabled
+    }
+
+    /// `mllp.max_message_size_mb` in bytes: the largest message that can
+    /// be sent, and the base of the body limit of the draft routes.
+    pub fn max_message_bytes(&self) -> usize {
+        self.inner.settings.max_message_bytes
+    }
+
+    /// A permit to read and handle a large request body (#276), or `None`
+    /// when [`LARGE_BODY_PERMITS`] such requests are under way: axum reads
+    /// a body into memory before the handler runs, so their number is
+    /// limited too, not only their size.
+    pub fn large_body_permit(&self) -> Option<tokio::sync::OwnedSemaphorePermit> {
+        Arc::clone(&self.inner.large_bodies)
+            .try_acquire_owned()
+            .ok()
+    }
+
+    /// The stored message `id`, if it is still stored.
+    pub async fn stored(&self, id: &str) -> Option<Arc<Hl7Message>> {
+        self.inner.store.get_by_id(id).await.map(|s| s.message)
     }
 
     /// The counters since start or the last *Clear*.
@@ -335,14 +431,71 @@ impl Sender {
             }
         };
         let destination = self.check_target(&request.target)?;
+        let peer = destination.display();
+        let (mut msg, origin) = match (&item.message_id, &item.raw) {
+            (Some(id), None) => {
+                if item.charset.is_some() || item.based_on.is_some() {
+                    return Err(SendError::BadRequest(
+                        "charset and based_on belong to a draft (raw), not to a stored message"
+                            .into(),
+                    ));
+                }
+                self.stored_message(id, &request, &peer).await?
+            }
+            (None, Some(raw)) => self.draft_message(raw, item, &request, &peer).await?,
+            _ => {
+                return Err(SendError::BadRequest(
+                    "An item names a stored message (message_id) or carries a draft (raw), \
+                     one of the two"
+                        .into(),
+                ))
+            }
+        };
 
+        let permit = Arc::clone(&self.inner.runs)
+            .try_acquire_owned()
+            .map_err(|_| SendError::Busy)?;
+
+        msg.id = uuid::Uuid::new_v4().to_string();
+        msg.received_at = chrono::Utc::now();
+        msg.source_addr = peer;
+        msg.ack_response = None;
+        msg.ack_code = None;
+        msg.outbound = Some(Box::new(Outbound {
+            target: destination.label.clone(),
+            transport: destination.transport,
+            origin,
+            requested_by: requested_by.to_canonical().to_string(),
+            run: uuid::Uuid::new_v4().to_string(),
+        }));
+        // A receiver does not answer an ACK, just as Harux never does.
+        let await_response = request.await_response && !msg.message_type.starts_with("ACK");
+
+        let sender = self.clone();
+        let run = tokio::spawn(async move {
+            let result = sender.run_one(msg, destination, await_response).await;
+            drop(permit);
+            result
+        });
+        run.await.map_err(|e| {
+            // `run_one` catches the exchange's panics itself; this is the
+            // store calls around it.
+            SendError::Unprocessable(format!("Internal error while sending: {e}"))
+        })
+    }
+
+    /// The stored message `id`, as received or with `request.set` (#275).
+    async fn stored_message(
+        &self,
+        id: &str,
+        request: &SendRequest,
+        peer: &str,
+    ) -> Result<(Hl7Message, Origin), SendError> {
+        let settings = &self.inner.settings;
         let original = self
-            .inner
-            .store
-            .get_by_id(&item.message_id)
+            .stored(id)
             .await
-            .ok_or_else(|| SendError::NotFound(format!("No message {}", item.message_id)))?
-            .message;
+            .ok_or_else(|| SendError::NotFound(format!("No message {id}")))?;
         if original.truncated {
             return Err(SendError::Unprocessable(
                 "This entry holds only the beginning of a frame above the size limit and \
@@ -363,65 +516,98 @@ impl Sender {
                 size / 1024
             )));
         }
-        // Every sent message is stored again (rule 1): one run may not take
-        // more than its share of the store.
-        if original.estimated_bytes() > settings.max_run_bytes {
+        self.check_run_bytes(&original)?;
+
+        // Unchanged: the stored message itself — its bytes are the same
+        // (`wire` is copied), so the parse is too. Changed: the overrides
+        // written into its text, encoded like the original, then decoded
+        // and parsed like a received frame (#275).
+        let (msg, changes) = if request.set.is_empty() {
+            ((*original).clone(), Vec::new())
+        } else {
+            self.changed_message(&original, &request.set, peer, request.allow_invalid)?
+        };
+        Ok((
+            msg,
+            Origin::Resend {
+                message_id: original.id.clone(),
+                changes,
+            },
+        ))
+    }
+
+    /// A draft (#276): `request.set` written into its text, then the bytes
+    /// built (`draft::build_payload`) and decoded and parsed like a received
+    /// frame. References are filled in from `based_on`; if that message is
+    /// gone, a draft that refers to it is refused.
+    async fn draft_message(
+        &self,
+        raw: &str,
+        item: &ItemRequest,
+        request: &SendRequest,
+        peer: &str,
+    ) -> Result<(Hl7Message, Origin), SendError> {
+        let (text, _) = crate::draft::apply_set(raw, &request.set)?;
+        let based_on = self.based_on(item.based_on.as_deref(), &text).await?;
+        let bytes = crate::draft::build_payload(
+            &text,
+            item.charset.as_deref(),
+            based_on.as_deref(),
+            1,
+            self.inner.settings.max_message_bytes,
+        )?;
+        drop(based_on);
+        let msg = crate::mllp::ingest(&bytes, peer);
+        if let Some(e) = &msg.parse_error {
+            if !request.allow_invalid {
+                return Err(SendError::Unprocessable(format!(
+                    "The draft does not parse: {e}. Set allow_invalid to send it anyway"
+                )));
+            }
+        }
+        self.check_run_bytes(&msg)?;
+        Ok((
+            msg,
+            Origin::Draft {
+                based_on: item.based_on.clone(),
+            },
+        ))
+    }
+
+    /// The message a draft was made from, when the draft needs it: `None`
+    /// without references. A draft whose references point into a message
+    /// that is no longer stored is refused (a bookmark keeps it).
+    pub async fn based_on(
+        &self,
+        id: Option<&str>,
+        text: &str,
+    ) -> Result<Option<Arc<Hl7Message>>, SendError> {
+        if !crate::draft::has_references(text) {
+            return Ok(None);
+        }
+        match id {
+            None => Ok(None), // `fill_references` says what is missing
+            Some(id) => self.stored(id).await.map(Some).ok_or_else(|| {
+                SendError::Unprocessable(format!(
+                    "The draft refers to values of the message it was made from ({id}), \
+                     which is no longer stored; a bookmark keeps a message"
+                ))
+            }),
+        }
+    }
+
+    /// Every sent message is stored again (rule 1): one run may not take
+    /// more than its share of the store.
+    fn check_run_bytes(&self, msg: &Hl7Message) -> Result<(), SendError> {
+        let settings = &self.inner.settings;
+        if msg.estimated_bytes() > settings.max_run_bytes {
             return Err(SendError::TooLarge(format!(
                 "Storing this message again would take more than \
                  send.max_run_store_percent ({} %) of the store",
                 settings.max_run_store_percent
             )));
         }
-
-        // Unchanged: the stored message itself — its bytes are the same
-        // (`wire` is copied), so the parse is too. Changed: the overrides
-        // written into its text, encoded like the original, then decoded
-        // and parsed like a received frame (#275).
-        let (mut msg, changes) = if request.set.is_empty() {
-            ((*original).clone(), Vec::new())
-        } else {
-            self.changed_message(
-                &original,
-                &request.set,
-                &destination.display(),
-                request.allow_invalid,
-            )?
-        };
-
-        let permit = Arc::clone(&self.inner.runs)
-            .try_acquire_owned()
-            .map_err(|_| SendError::Busy)?;
-
-        msg.id = uuid::Uuid::new_v4().to_string();
-        msg.received_at = chrono::Utc::now();
-        msg.source_addr = destination.display();
-        msg.ack_response = None;
-        msg.ack_code = None;
-        msg.outbound = Some(Box::new(Outbound {
-            target: destination.label.clone(),
-            transport: destination.transport,
-            origin: Origin::Resend {
-                message_id: original.id.clone(),
-                changes,
-            },
-            requested_by: requested_by.to_canonical().to_string(),
-            run: uuid::Uuid::new_v4().to_string(),
-        }));
-        drop(original);
-        // A receiver does not answer an ACK, just as Harux never does.
-        let await_response = request.await_response && !msg.message_type.starts_with("ACK");
-
-        let sender = self.clone();
-        let run = tokio::spawn(async move {
-            let result = sender.run_one(msg, destination, await_response).await;
-            drop(permit);
-            result
-        });
-        run.await.map_err(|e| {
-            // `run_one` catches the exchange's panics itself; this is the
-            // store calls around it.
-            SendError::Unprocessable(format!("Internal error while sending: {e}"))
-        })
+        Ok(())
     }
 
     /// `original` with the fields of `set` overridden (#275), decoded and
@@ -727,7 +913,7 @@ pub fn changed_payload(
     max_bytes: usize,
 ) -> Result<(Vec<u8>, Vec<String>), SendError> {
     use crate::hl7::charset;
-    use crate::hl7::compose::{self, ComposeError, FieldPath, PlaceholderContext};
+    use crate::hl7::compose::{self, FieldPath, PlaceholderContext};
     if original.parse_error.is_some() {
         return Err(SendError::Unprocessable(
             "A message that did not parse can only be resent unchanged".into(),
@@ -741,14 +927,9 @@ pub fn changed_payload(
     let mut text = original.raw.clone();
     let mut changes = Vec::with_capacity(set.len());
     for (path, value) in set {
-        let path = FieldPath::parse(path).map_err(|e| SendError::BadRequest(e.to_string()))?;
+        let path = FieldPath::parse(path)?;
         let value = compose::fill_placeholders(value, &ctx);
-        text = compose::set_field(&text, d, &path, &value).map_err(|e| match e {
-            ComposeError::BadPath(m) => SendError::BadRequest(m),
-            ComposeError::MissingSegment(m) | ComposeError::BadValue(m) => {
-                SendError::Unprocessable(m)
-            }
-        })?;
+        text = compose::set_field(&text, d, &path, &value)?;
         changes.push(path.to_string());
     }
     // Compared with the parser's own list, so "the same segments" means "as

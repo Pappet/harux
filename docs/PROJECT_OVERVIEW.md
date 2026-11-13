@@ -81,7 +81,7 @@ Listens on `server.mllp_bind:mllp_port`, handles MLLP framing (`0x0B` start, `0x
 
 ### Sending (`src/send.rs`, `src/mllp_client.rs`)
 
-Off unless `send.enabled = true` (#272). `POST /api/send` resends one stored message, unchanged — the bytes it arrived as — to the destination the request names (every user keeps their own targets in the browser; the server keeps none). `send.allowed_destinations` can limit where users may send.
+Off unless `send.enabled = true` (#272). `POST /api/send` resends one stored message — unchanged, the bytes it arrived as, or with fields changed (#275) — or sends a draft (#276) to the destination the request names (every user keeps their own targets in the browser; the server keeps none). `send.allowed_destinations` can limit where users may send.
 
 - **Everything sent is stored first:** the sent message is inserted with delivery `pending` **before** the connection is opened, so a refused or timed-out send is a row too, and what the destination forwards because of it is listed after it. The outcome (`acked` with the MSA-1 code, `failed` with a reason, `sent` when no response is awaited) is recorded in the entry's metadata and broadcast as `delivery_updated`.
 - **A sent message is a message:** same list, detail, tags, bookmark, search and eviction. It has `direction: "out"`, `outbound` (target name, origin, requesting client address, run) and its response in `delivery`. Its `source_addr` is the destination. The UI shows it with `↑`, a dashed bar and `→ target`, and the ACK tab becomes **Response**.
@@ -212,7 +212,10 @@ Built-in defaults → `harux.toml` (next to the binary, then the working directo
 | `GET` | `/api/stats` | Live server stats: message counts, store bytes and limit, parse errors, connections, `sending_enabled`, `sent` (accepted, `AA`/`CA`), `send_rejected` (any other MSA code), `send_failed` (no usable answer), `active_runs` |
 | `GET` | `/api/export?direction=in` | Every stored received message as one MLLP-framed `harux-export.hl7`, byte for byte as received, oldest first (streamed); `direction=out` the sent ones, `all` both |
 | `GET` | `/api/send/config` | Whether sending is on, the loopback target, the destination and run limits, whether unverified TLS may be chosen and a client certificate is set (`403` while sending is off) |
-| `POST` | `/api/send` | Resend one stored message, unchanged or with field overrides (below); `403` while sending is off |
+| `POST` | `/api/send` | Send one stored message (unchanged or with field overrides) or one draft (below); `403` while sending is off |
+| `GET` | `/api/messages/{id}/draft` | A stored message as draft text: one segment per line, values above 2,000 characters as references `{{from:OBX[1]-5}}`, the encoding it arrived in (`403` while sending is off) |
+| `POST` | `/api/parse` | JSON `{raw, set, based_on, fill_references}` (a body starting with `{` counts as JSON): the draft's preview — the detail JSON of its text, field positions in UTF-16 units, `set` written back; validation with sample values for placeholders. Any other body: a file's bytes decoded like a received frame (`raw`, `encoding`, `warning`, `framed`) |
+| `POST` | `/api/build` | `{raw, charset, based_on, set}`: the bytes a send would write, MLLP-framed, as `harux-draft.hl7` |
 | `POST` | `/api/clear` | Delete all messages from store |
 | `POST` | `/api/messages/{id}/bookmark` | Toggle bookmark on a message |
 | `POST` | `/api/messages/{id}/tags` | Add a tag to a message |
@@ -225,7 +228,8 @@ Built-in defaults → `harux.toml` (next to the binary, then the working directo
 {
   "target": { "name": "orchestra-test", "host": "orchestra-test.klinik.local", "port": 6661,
               "tls": true, "verify": true },                       // or "loopback"
-  "items": [{ "message_id": "…" }],   // exactly one stored message
+  "items": [{ "message_id": "…" }],   // exactly one: a stored message, or a draft:
+                                      // { "raw": "MSH|…", "charset": "auto", "based_on": "<id>" }
   "set": { "MSH-10": "{{id}}", "MSH-7": "{{now}}" },  // optional field overrides
   "await_response": true,             // false: do not wait for an answer
   "allow_invalid": false              // resend a message that did not parse
@@ -234,7 +238,9 @@ Built-in defaults → `harux.toml` (next to the binary, then the working directo
 
 Answers `200` with `{ "id": "<sent message>", "delivery": { "state", "ack_code", "response", "latency_ms", "error", "control_id_matches", … } }` once the exchange ended — a refused connection or a NACK is a `200` too: the request worked, the send did not. Refusals: `400` malformed request, host or target (unknown fields such as `repeat` are refused; an override path that isn't `SEG-n` / `SEG[k]-n` with a field from 1 — 3 for MSH — to 1000) · `403` sending off, destination outside `send.allowed_destinations`, `verify: false` without `send.tls.allow_unverified` · `404` unknown message · `413` message too large · `422` a cut-off entry, a message that did not parse without `allow_invalid` (with overrides: at all), an override value with the field separator, `CR`, `LF` or an MLLP frame byte, a missing segment, a character the message's encoding cannot write, a message whose bytes were kept as received (`WireForm::Original`) with overrides · `429` too many sends at once.
 
-**Overrides** (`set`, #275) are written by `src/hl7/compose.rs`, the one place that writes a field into a message: only that field's text changes — the line ends, the final terminator and every other byte stay; a missing field is created with separators. Values are the field's raw text (components, repetitions and escapes allowed) and may use the placeholders `{{now}}` (local time `YYYYMMDDHHMMSS`), `{{today}}`, `{{id}}` (a new 20-character control ID, as ACKs get), `{{n}}` (position in the run) and `{{rand:N}}` (N random digits); anything else in double braces is sent as written. A changed message is sent in the encoding the original arrived in — a pure-ASCII original in the charset its MSH-18 declares — then decoded and parsed like a received frame, and records the changed fields (`outbound.origin.changes`).
+**Overrides** (`set`, #275) are written by `src/hl7/compose.rs`, the one place that writes a field into a message: only that field's text changes — the line ends, the final terminator and every other byte stay; a missing field is created with separators. Values are the field's raw text (components, repetitions and escapes allowed) and may use the placeholders `{{now}}` (local time `YYYYMMDDHHMMSS`), `{{today}}`, `{{id}}` (a new 20-character control ID, as ACKs get), `{{n}}` (position in the run) and `{{rand:N}}` (N random digits), and `{{open}}` for a literal `{{` (#276); anything else in double braces is sent as written. A changed message is sent in the encoding the original arrived in — a pure-ASCII original in the charset its MSH-18 declares — then decoded and parsed like a received frame, and records the changed fields (`outbound.origin.changes`).
+
+**Drafts** (#276, `src/draft.rs`) are text kept by the browser; the server parses, previews and builds them and stores nothing until a send. A draft item's text gets its line ends normalized to `CR` (and a final `CR`), its placeholders and its references from `based_on` filled in, in one pass; `{{open}}` stands for a literal `{{` (a draft made from a stored message writes every `{{` of it that way, so nothing in the stored text is taken for a placeholder) — a reference whose message is no longer stored is refused (`422`; a bookmark keeps a message) — and is encoded per MSH-18, else UTF-8 (`"charset": "auto"`), or in the encoding it names (`UTF-8`, `8859/1`, `windows-1252`, …); a character that encoding cannot write is refused, named. A draft that does not parse goes out only with `allow_invalid` and is stored with its parse error. The sent message records `origin: {"kind": "draft", "based_on": …}`. `/api/send`, `/api/parse` and `/api/build` accept bodies up to twice `mllp.max_message_size_mb` plus 1 MB (a message grows inside a JSON string); a body of 256 KB or more, or of unknown size, needs one of 4 permits before it is read (`429` with `Retry-After` when none is free).
 
 ### WebSocket Events
 

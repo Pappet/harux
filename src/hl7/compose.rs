@@ -226,7 +226,8 @@ pub struct PlaceholderContext {
 
 /// Fill in the placeholders of an override value. Only these are
 /// recognized: `{{now}}`, `{{today}}`, `{{id}}`, `{{n}}`, `{{rand:N}}`
-/// (N = 1–32 digits). Anything else in double braces is left as written.
+/// (N = 1–32 digits) and `{{open}}` (a literal `{{`). Anything else in
+/// double braces is left as written.
 pub fn fill_placeholders(value: &str, ctx: &PlaceholderContext) -> String {
     let mut out = String::with_capacity(value.len());
     let mut rest = value;
@@ -248,8 +249,12 @@ pub fn fill_placeholders(value: &str, ctx: &PlaceholderContext) -> String {
     out
 }
 
-fn placeholder(name: &str, ctx: &PlaceholderContext) -> Option<String> {
+/// The value of the placeholder `{{name}}`, `None` if `name` is not one.
+/// `{{open}}` is a literal `{{` (#276): the escape a draft uses for text
+/// that only looks like a placeholder.
+pub fn placeholder(name: &str, ctx: &PlaceholderContext) -> Option<String> {
     match name {
+        "open" => Some("{{".into()),
         "now" => Some(ctx.now.format("%Y%m%d%H%M%S").to_string()),
         "today" => Some(ctx.now.format("%Y%m%d").to_string()),
         "id" => Some(super::parser::new_control_id()),

@@ -904,6 +904,11 @@ function sentDescriptionHtml(msg) {
         parts.push(origin.message_id
             ? `${how} from <button class="origin-link" data-action="select-message" data-id="${escAttr(origin.message_id)}" title="Open the message this one was resent from">the original</button>`
             : how);
+    } else if (origin.kind === 'draft') {
+        // #276: written or changed in the editor, maybe from a stored message.
+        parts.push(origin.based_on
+            ? `from a draft based on <button class="origin-link" data-action="select-message" data-id="${escAttr(origin.based_on)}" title="Open the message the draft was made from">a stored message</button>`
+            : 'from a draft');
     }
     if (out.requested_by) parts.push(`requested by ${esc(out.requested_by)}`);
     if (msg.message_type_description) parts.push(esc(msg.message_type_description));

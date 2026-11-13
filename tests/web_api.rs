@@ -1173,3 +1173,578 @@ async fn export_by_direction() {
         StatusCode::BAD_REQUEST
     );
 }
+
+// ── Drafts (#276) ─────────────────────────────────────────────────────────────
+
+/// A request to `uri` from client 10.0.0.7: `(status, body, content type)`.
+/// `length: false` leaves `Content-Length` out (a body of unknown size).
+async fn post_raw(
+    state: &AppState,
+    uri: &str,
+    content_type: &str,
+    body: Vec<u8>,
+    length: bool,
+) -> (StatusCode, Vec<u8>, String) {
+    let mut b = Request::builder()
+        .method(Method::POST)
+        .uri(uri)
+        .header("host", "10.1.2.3:8080")
+        .header("content-type", content_type);
+    if length {
+        b = b.header("content-length", body.len());
+    }
+    let client: std::net::SocketAddr = "10.0.0.7:50000".parse().unwrap();
+    let res = create_router(state.clone())
+        .layer(axum::extract::connect_info::MockConnectInfo(client))
+        .oneshot(b.body(Body::from(body)).unwrap())
+        .await
+        .unwrap();
+    let status = res.status();
+    let ct = res
+        .headers()
+        .get(header::CONTENT_TYPE)
+        .map(|v| v.to_str().unwrap().to_string())
+        .unwrap_or_default();
+    (status, collect_body(res.into_body()).await.to_vec(), ct)
+}
+
+async fn post_json(state: &AppState, uri: &str, body: serde_json::Value) -> (StatusCode, Vec<u8>) {
+    let (status, body, _) = post_raw(
+        state,
+        uri,
+        "application/json",
+        body.to_string().into_bytes(),
+        true,
+    )
+    .await;
+    (status, body)
+}
+
+fn json_of(body: &[u8]) -> serde_json::Value {
+    serde_json::from_slice(body)
+        .unwrap_or_else(|e| panic!("{e}: {}", String::from_utf8_lossy(body)))
+}
+
+/// A received message from `bytes`, stored as `id`.
+async fn store_bytes(state: &AppState, id: &str, bytes: &[u8]) -> std::sync::Arc<Hl7Message> {
+    let mut msg = harux::mllp::ingest(bytes, "10.9.9.9:5000");
+    msg.id = id.to_string();
+    state.store.insert(msg).await;
+    state.store.get_by_id(id).await.unwrap().message
+}
+
+fn mdm_bytes(attachment: &str) -> Vec<u8> {
+    format!(
+        "MSH|^~\\&|KIS|KLINIK|ORCH|RZ|20240101120000||MDM^T02|MDM1|P|2.5\rEVN|T02|20240101120000\rPID|||4711||Muster^Max\rPV1||I\rTXA|1|CN|TX|20240101120000\rOBX|1|ED|PDF^Report||^application^pdf^Base64^{attachment}||||||F\r"
+    )
+    .into_bytes()
+}
+
+#[tokio::test]
+async fn draft_routes_are_forbidden_while_sending_is_off() {
+    let state = make_state();
+    stored_received(&state, "m1").await;
+    let res = create_router(state.clone())
+        .oneshot(
+            Request::builder()
+                .uri("/api/messages/m1/draft")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::FORBIDDEN);
+    for uri in ["/api/parse", "/api/build"] {
+        let (status, _) = post_json(&state, uri, serde_json::json!({"raw": simple_raw()})).await;
+        assert_eq!(status, StatusCode::FORBIDDEN, "{uri}");
+    }
+}
+
+/// The detail JSON names each field's datatype (#276), for stored messages
+/// and previews alike.
+#[tokio::test]
+async fn the_detail_json_names_datatypes() {
+    let state = sending_state(|_| {});
+    store_bytes(
+        &state,
+        "m1",
+        b"MSH|^~\\&|A|B|||20240101||ADT^A01|C1|P|2.5\rPID|||1||Muster^Max\rZZZ|x\r",
+    )
+    .await;
+    let detail = get_json(&state, "/api/messages/m1").await;
+    let field = |seg: usize, index: u64| {
+        detail["segments"][seg]["fields"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|f| f["index"] == index)
+            .unwrap()
+            .clone()
+    };
+    assert_eq!(field(0, 7)["datatype"], "TS");
+    assert_eq!(field(1, 5)["datatype"], "XPN");
+    assert_eq!(
+        field(2, 1)["datatype"],
+        serde_json::Value::Null,
+        "unknown segment"
+    );
+}
+
+/// The roadmap's criterion with `curl` alone, for the MDM: a draft whose
+/// attachment is a reference is made, previewed, changed with `set`,
+/// built and sent — and the attachment arrives as it was stored.
+#[tokio::test]
+async fn an_mdm_draft_carries_its_attachment_as_a_reference() {
+    let state = sending_state(|_| {});
+    let attachment = "JVBERi0xLjQK".repeat(1000); // 12,000 characters
+    let original = store_bytes(&state, "mdm", &mdm_bytes(&attachment)).await;
+
+    let draft = get_json(&state, "/api/messages/mdm/draft").await;
+    assert_eq!(draft["based_on"], "mdm");
+    assert_eq!(draft["encoding"], "UTF-8");
+    let raw = draft["raw"].as_str().unwrap().to_string();
+    assert!(
+        raw.contains("OBX|1|ED|PDF^Report||{{from:OBX-5}}||||||F"),
+        "{raw}"
+    );
+    assert!(raw.len() < 1000, "the attachment stays on the server");
+    assert_eq!(draft["references"][0]["path"], "OBX-5");
+    assert_eq!(
+        draft["references"][0]["bytes"],
+        attachment.len() + "^application^pdf^Base64^".len()
+    );
+
+    // Preview: the text as written, positions, datatypes.
+    let (status, body) = post_json(
+        &state,
+        "/api/parse",
+        serde_json::json!({"raw": raw, "based_on": "mdm"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{}", String::from_utf8_lossy(&body));
+    let p = json_of(&body);
+    assert!(p["message"]["parse_error"].is_null());
+    assert_eq!(p["message"]["message_type"], "MDM^T02");
+    let obx = &p["message"]["segments"][5];
+    assert_eq!(obx["fields"][4]["value"], "{{from:OBX-5}}");
+    assert_eq!(obx["fields"][4]["datatype"], "VARIES");
+    assert_eq!(p["positions"].as_array().unwrap().len(), 6);
+    let pid5 = &p["positions"][2]["fields"][4];
+    let units: Vec<u16> = raw.encode_utf16().collect();
+    let (a, b) = (
+        pid5[1].as_u64().unwrap() as usize,
+        pid5[2].as_u64().unwrap() as usize,
+    );
+    assert_eq!(pid5[0], 5);
+    assert_eq!(String::from_utf16(&units[a..b]).unwrap(), "Muster^Max");
+
+    // Diff vs pinned: the references filled in compare as equal.
+    let (status, body) = post_json(
+        &state,
+        "/api/parse",
+        serde_json::json!({"raw": raw, "based_on": "mdm", "fill_references": true}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let filled = json_of(&body);
+    assert_eq!(
+        filled["message"]["segments"][5]["fields"][4]["value"],
+        original.segments[5].fields[4].value
+    );
+
+    // Write a field back: the returned text is the new draft.
+    let (status, body) = post_json(
+        &state,
+        "/api/parse",
+        serde_json::json!({"raw": raw, "set": {"PID-5": "Doe^Jane", "MSH-10": "{{id}}"}}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let changed = json_of(&body);
+    let changed_raw = changed["raw"].as_str().unwrap().to_string();
+    assert!(changed_raw.contains("PID|||4711||Doe^Jane"));
+    assert!(changed_raw.contains("||MDM^T02|{{id}}|P|"));
+    assert_eq!(changed["changes"], serde_json::json!(["MSH-10", "PID-5"]));
+
+    // Built unchanged: the bytes as stored.
+    let (status, bytes, ct) = post_raw(
+        &state,
+        "/api/build",
+        "application/json",
+        serde_json::json!({"raw": raw, "based_on": "mdm"})
+            .to_string()
+            .into_bytes(),
+        true,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(ct, "application/octet-stream");
+    assert_eq!(bytes[0], 0x0b);
+    assert!(bytes.ends_with(&[0x1c, 0x0d]));
+    assert_eq!(&bytes[1..bytes.len() - 2], original.wire_bytes().as_ref());
+
+    // Sent: the attachment arrives as stored, and the row says where the
+    // draft came from.
+    let addr = ack_receiver().await;
+    let (status, body) = post_send(
+        &state,
+        &serde_json::json!({
+            "target": {"host": "127.0.0.1", "port": addr.port()},
+            "items": [{"raw": changed_raw, "based_on": "mdm"}],
+        })
+        .to_string(),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let id = json_of(body.as_bytes())["id"].as_str().unwrap().to_string();
+    let sent = get_json(&state, &format!("/api/messages/{id}")).await;
+    assert_eq!(
+        sent["outbound"]["origin"],
+        serde_json::json!({"kind": "draft", "based_on": "mdm"})
+    );
+    let sent_raw = sent["raw"].as_str().unwrap();
+    assert!(sent_raw.contains(&attachment));
+    assert!(sent_raw.contains("PID|||4711||Doe^Jane\r"));
+    assert!(
+        !sent_raw.contains("{{"),
+        "placeholders and references filled in"
+    );
+    let list = get_json(&state, "/api/messages").await;
+    assert_eq!(list[0]["origin_id"], "mdm");
+
+    // The original gone, the reference cannot be filled: refused, nothing
+    // stored.
+    state.store.clear().await;
+    let (status, body) = post_send(
+        &state,
+        &serde_json::json!({
+            "target": {"host": "127.0.0.1", "port": addr.port()},
+            "items": [{"raw": raw, "based_on": "mdm"}],
+        })
+        .to_string(),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert!(body.contains("no longer stored"), "{body}");
+    assert_eq!(state.store.count().await, 0);
+}
+
+/// The roadmap's criterion for the Latin-1 message: the draft keeps the
+/// encoding, the build gives back the received bytes, and a file in
+/// Latin-1 reaches the editor as text.
+#[tokio::test]
+async fn a_latin1_draft_keeps_its_bytes() {
+    let state = sending_state(|_| {});
+    let bytes = b"MSH|^~\\&|KIS|KLINIK|ORCH|RZ|20240101120000||ADT^A01|L1|P|2.5||||||8859/1\rEVN|A01|20240101120000\rPID|||1||M\xfcller^J\xf6rg\rPV1||I\r";
+    store_bytes(&state, "l1", bytes).await;
+    let draft = get_json(&state, "/api/messages/l1/draft").await;
+    assert_eq!(draft["encoding"], "windows-1252");
+    assert_eq!(draft["charset"], "8859/1");
+    let raw = draft["raw"].as_str().unwrap();
+    assert!(raw.contains("PID|||1||Müller^Jörg\nPV1"));
+
+    let (status, built, _) = post_raw(
+        &state,
+        "/api/build",
+        "application/json",
+        serde_json::json!({"raw": raw, "charset": draft["encoding"]})
+            .to_string()
+            .into_bytes(),
+        true,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(&built[1..built.len() - 2], bytes);
+
+    // A character Latin-1 cannot write is refused, named.
+    let (status, body, _) = post_raw(
+        &state,
+        "/api/build",
+        "application/json",
+        serde_json::json!({"raw": raw.replace("Müller", "Ωmega")})
+            .to_string()
+            .into_bytes(),
+        true,
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert!(String::from_utf8_lossy(&body).contains("U+03A9"));
+
+    // From a file: the bytes, MLLP-framed, decoded by the server.
+    let mut file = vec![0x0b];
+    file.extend_from_slice(bytes);
+    file.extend_from_slice(&[0x1c, 0x0d]);
+    let (status, body, _) =
+        post_raw(&state, "/api/parse", "application/octet-stream", file, true).await;
+    assert_eq!(status, StatusCode::OK);
+    let decoded = json_of(&body);
+    assert_eq!(decoded["encoding"], "windows-1252");
+    assert_eq!(decoded["framed"], true);
+    assert_eq!(decoded["raw"], raw);
+
+    // Sent with the encoding the draft names.
+    let addr = ack_receiver().await;
+    let (status, body) = post_send(
+        &state,
+        &serde_json::json!({
+            "target": {"host": "127.0.0.1", "port": addr.port()},
+            "items": [{"raw": raw, "charset": "windows-1252"}],
+        })
+        .to_string(),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let id = json_of(body.as_bytes())["id"].as_str().unwrap().to_string();
+    let sent = state.store.get_by_id(&id).await.unwrap().message;
+    assert_eq!(sent.wire_bytes().as_ref(), bytes);
+    assert_eq!(
+        get_json(&state, &format!("/api/messages/{id}")).await["outbound"]["origin"],
+        serde_json::json!({"kind": "draft", "based_on": null})
+    );
+}
+
+#[tokio::test]
+async fn draft_refusals_have_their_status_codes() {
+    let state = sending_state(|c| {
+        c.send.allowed_destinations = vec!["orchestra.local:6000".into()];
+    });
+    let target = serde_json::json!({"host": "orchestra.local", "port": 6000});
+    let send = |item: serde_json::Value| {
+        serde_json::json!({"target": target, "items": [item]}).to_string()
+    };
+    let cases = [
+        // Not HL7 without allow_invalid.
+        (
+            send(serde_json::json!({"raw": "hello"})),
+            StatusCode::UNPROCESSABLE_ENTITY,
+        ),
+        // Both or neither.
+        (
+            send(serde_json::json!({"raw": simple_raw(), "message_id": "m1"})),
+            StatusCode::BAD_REQUEST,
+        ),
+        (send(serde_json::json!({})), StatusCode::BAD_REQUEST),
+        // Draft fields on a stored message.
+        (
+            send(serde_json::json!({"message_id": "m1", "charset": "UTF-8"})),
+            StatusCode::BAD_REQUEST,
+        ),
+        // A frame byte.
+        (
+            send(serde_json::json!({"raw": format!("{}\u{1c}", simple_raw())})),
+            StatusCode::UNPROCESSABLE_ENTITY,
+        ),
+        // An encoding Harux does not know.
+        (
+            send(serde_json::json!({"raw": simple_raw(), "charset": "klingon"})),
+            StatusCode::BAD_REQUEST,
+        ),
+        // A reference without its message.
+        (
+            send(
+                serde_json::json!({"raw": format!("{}OBX|1|ST|X||{{{{from:OBX-5}}}}", simple_raw())}),
+            ),
+            StatusCode::UNPROCESSABLE_ENTITY,
+        ),
+        // A reference to a message that is not stored.
+        (
+            send(
+                serde_json::json!({"raw": format!("{}OBX|1|ST|X||{{{{from:OBX-5}}}}", simple_raw()), "based_on": "gone"}),
+            ),
+            StatusCode::UNPROCESSABLE_ENTITY,
+        ),
+        // An unknown item field.
+        (
+            send(serde_json::json!({"raw": simple_raw(), "template": "x"})),
+            StatusCode::BAD_REQUEST,
+        ),
+    ];
+    for (body, expect) in cases {
+        let (status, text) = post_send(&state, &body, None).await;
+        assert_eq!(status, expect, "{body}: {text}");
+    }
+    assert_eq!(state.store.count().await, 0, "no refusal stores anything");
+
+    // #289 review: a JSON body without its Content-Type is still a JSON
+    // request — and a broken one is a 400, not a "file".
+    let body = serde_json::json!({"raw": simple_raw()})
+        .to_string()
+        .into_bytes();
+    for ct in ["text/plain", "application/octet-stream"] {
+        let (status, body, _) = post_raw(&state, "/api/parse", ct, body.clone(), true).await;
+        assert_eq!(status, StatusCode::OK, "{ct}");
+        assert!(
+            json_of(&body)["message"].is_object(),
+            "{ct}: a preview, not a decoded file"
+        );
+    }
+    let (status, _, _) = post_raw(
+        &state,
+        "/api/parse",
+        "text/plain",
+        b" {\"raw\": ".to_vec(),
+        true,
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    let (status, _) = post_json(
+        &state,
+        "/api/parse",
+        serde_json::json!({"raw": "x", "fill_references": true, "raw2": 1}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "unknown field");
+    let (status, _) = post_json(
+        &state,
+        "/api/parse",
+        serde_json::json!({"raw": "hello", "set": {"PID-5": "x"}}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "set needs an MSH");
+    let res = create_router(state.clone())
+        .oneshot(
+            Request::builder()
+                .uri("/api/messages/gone/draft")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::NOT_FOUND);
+}
+
+/// A draft that does not parse goes out with `allow_invalid`, and is
+/// stored with its parse error, like a broken received frame.
+#[tokio::test]
+async fn a_broken_draft_is_sent_with_allow_invalid() {
+    let state = sending_state(|_| {});
+    let addr = ack_receiver().await;
+    let (status, body) = post_send(
+        &state,
+        &serde_json::json!({
+            "target": {"host": "127.0.0.1", "port": addr.port()},
+            "items": [{"raw": "MSH|broken"}],
+            "allow_invalid": true,
+        })
+        .to_string(),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let list = get_json(&state, "/api/messages").await;
+    assert!(list[0]["parse_error"].is_string(), "{}", list[0]);
+}
+
+/// The body limit is twice `mllp.max_message_size_mb` plus 1 MB — above
+/// axum's 2 MB default — and a large body needs a permit (`429` without).
+#[tokio::test]
+async fn message_routes_have_a_body_limit_and_permits() {
+    let state = sending_state(|c| c.mllp.max_message_size_mb = 1);
+    assert_eq!(harux::web::message_body_limit(1 << 20), 3 << 20);
+    let preview = |len: usize| {
+        let raw = format!("{}OBX|1|ST|X||{}", simple_raw(), "x".repeat(len));
+        serde_json::json!({"raw": raw}).to_string().into_bytes()
+    };
+    let (status, _, _) = post_raw(
+        &state,
+        "/api/parse",
+        "application/json",
+        preview(2_500_000),
+        true,
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "above axum's default, below the limit"
+    );
+    let (status, _, _) = post_raw(
+        &state,
+        "/api/parse",
+        "application/json",
+        preview(3_200_000),
+        true,
+    )
+    .await;
+    assert_eq!(status, StatusCode::PAYLOAD_TOO_LARGE);
+
+    // The draft itself may not exceed the message limit.
+    let (status, body) = post_json(
+        &state,
+        "/api/build",
+        serde_json::json!({"raw": format!("{}OBX|1|ST|X||{}", simple_raw(), "x".repeat(1_100_000))}),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::PAYLOAD_TOO_LARGE,
+        "{}",
+        String::from_utf8_lossy(&body)
+    );
+
+    // Every permit taken: a large body, or one of unknown size, waits for none.
+    let held: Vec<_> = (0..harux::send::LARGE_BODY_PERMITS)
+        .map(|_| state.sender.large_body_permit().unwrap())
+        .collect();
+    let small = serde_json::json!({"raw": simple_raw()})
+        .to_string()
+        .into_bytes();
+    let (status, _, _) = post_raw(
+        &state,
+        "/api/parse",
+        "application/json",
+        small.clone(),
+        true,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "a small body needs no permit");
+    let (status, _, _) = post_raw(
+        &state,
+        "/api/parse",
+        "application/json",
+        small.clone(),
+        false,
+    )
+    .await;
+    assert_eq!(status, StatusCode::TOO_MANY_REQUESTS, "unknown size");
+    let res = create_router(state.clone())
+        .oneshot(
+            Request::builder()
+                .method(Method::POST)
+                .uri("/api/parse")
+                .header("host", "10.1.2.3:8080")
+                .header("content-type", "application/json")
+                .body(Body::from(small.clone()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::TOO_MANY_REQUESTS);
+    assert_eq!(res.headers()[header::RETRY_AFTER], "1", "#289 review");
+    let (status, _, _) = post_raw(
+        &state,
+        "/api/parse",
+        "application/json",
+        preview(300_000),
+        true,
+    )
+    .await;
+    assert_eq!(status, StatusCode::TOO_MANY_REQUESTS);
+    drop(held);
+    let (status, _, _) = post_raw(
+        &state,
+        "/api/parse",
+        "application/json",
+        preview(300_000),
+        true,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        state.sender.large_body_permit().is_some(),
+        "the permit was given back"
+    );
+}
