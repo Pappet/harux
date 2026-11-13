@@ -98,6 +98,7 @@ function applyCleared() {
     state.lastMessageReceivedAt = null;
     state.selectedId = null; // never closes an open draft (#277)
     state.selectedMessage = null;
+    if (typeof markDraftOriginsGone === 'function') markDraftOriginsGone(null);
     renderMessageList();
     renderSourceLegend();
     renderHealthPills();
@@ -259,6 +260,10 @@ function removeEvictedMessages(ids) {
         if (state.selectedMessage) renderDetail();
         else if (state.selectedDraftId && typeof renderDraftDetail === 'function') renderDraftDetail();
     }
+
+    // Drafts made from an evicted message can't fill their references any
+    // more (#290 review).
+    if (typeof markDraftOriginsGone === 'function') markDraftOriginsGone(ids);
 
     if (removedFromList > 0) removeRowsFromList(gone);
     renderSourceLegend();

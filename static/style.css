@@ -2835,3 +2835,8 @@ kbd.key {
     color: var(--text-muted);
     width: 80px;
 }
+
+.origin-gone,
+.draft-chip .gone {
+    color: var(--warning);
+}

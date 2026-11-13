@@ -162,6 +162,7 @@ async function clearMessages() {
         state.lastMessageReceivedAt = null;
         state.selectedId = null; // an open draft stays open (#277)
         state.selectedMessage = null;
+        markDraftOriginsGone(null);
         renderMessageList();
         renderSourceLegend();
         renderHealthPills();

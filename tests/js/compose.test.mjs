@@ -352,3 +352,67 @@ test('the rail: one chip per draft with a dot for unsent changes, only while sen
     ctx.renderDraftRail();
     assert.ok(rail.classList.contains('hidden'), 'nothing new while sending is off');
 });
+
+// --- #290 review ---
+
+test('the status line never reads a preview with the references filled in', () => {
+    const { ctx, state, byId } = setup();
+    const d = ctx.addDraft({ raw: 'MSH|^~\\&|A\nOBX|1|ED|X||{{from:OBX-5}}', basedOn: 'm1' });
+    state.selection = { kind: 'draft', id: d.id };
+    const ta = byId('draft-text');
+    ta.selectionStart = 0;
+    const data = { positions: [{ name: 'MSH', start: 0, end: 10, fields: [] }], message: { segments: [] } };
+    state.draftPreview = { draftId: d.id, raw: d.raw, filled: true, data, error: null };
+    ctx.updateDraftStatus();
+    assert.equal(byId('draft-status').textContent, 'Reading the draft…');
+    state.draftPreview = { ...state.draftPreview, filled: false };
+    ctx.updateDraftStatus();
+    assert.equal(byId('draft-status').textContent, 'MSH');
+});
+
+test('a reload never drops a kept draft, however many drafts the tab holds', () => {
+    const { ctx, state, local, session } = setup();
+    for (let i = 0; i < 50; i++) ctx.addDraft({ raw: `MSH|${i}` });
+    state.drafts[0].keep = true;
+    ctx.saveDrafts();
+    // The tab holds 49, the computer 1; the tab then gets one more.
+    const tab = JSON.parse(session.data.get('harux_drafts'));
+    tab.push({ id: 'extra', raw: 'MSH|x' });
+    session.data.set('harux_drafts', JSON.stringify(tab));
+    const again = setup({ local, session });
+    again.ctx.loadDrafts();
+    assert.equal(again.state.drafts.length, 51);
+    assert.ok(again.state.drafts.some((d) => d.keep), 'the kept draft is there');
+    again.ctx.saveDrafts();
+    assert.equal(JSON.parse(local.data.get('harux_drafts_kept')).length, 1, 'and stays stored');
+});
+
+test('a sent draft makes its target the one the next draft starts with', async () => {
+    const { ctx, state, local } = setup({
+        responses: { '/api/send': okJson({ id: 's', delivery: { state: 'acked', ack_code: 'AA' } }) },
+    });
+    ctx.renderDraftHeader = () => {};
+    const d = ctx.addDraft({ raw: 'MSH|1' });
+    state.selection = { kind: 'draft', id: d.id };
+    await ctx.sendDraft(d, ctx.loopbackTarget());
+    assert.equal(state.lastTargetId, 'loopback');
+    assert.equal(local.data.get('harux_last_target'), '"loopback"');
+    const next = ctx.addDraft({ raw: 'MSH|2' });
+    assert.equal(ctx.draftTarget(next).id, 'loopback');
+});
+
+test('a draft whose original is evicted or cleared says so at once', () => {
+    const { ctx, state } = setup();
+    ctx.renderDraftHeader = () => {};
+    const withRefs = ctx.addDraft({ raw: 'OBX|1|ED|X||{{from:OBX-5}}', basedOn: 'm1', origin: { kind: 'edit', id: 'm1', control: 'C1' }, references: [{ path: 'OBX-5' }] });
+    const other = ctx.addDraft({ raw: 'MSH|1', basedOn: 'm2', origin: { kind: 'edit', id: 'm2' } });
+    state.messages = [{ id: 'm1', tags: [] }, { id: 'm2', tags: [] }];
+    ctx.handleServerEvent({ type: 'evicted', data: ['m1'] });
+    assert.equal(withRefs.originGone, true);
+    assert.equal(other.originGone, false);
+    assert.match(ctx.draftOriginHtml(withRefs), /no longer stored — its references cannot be filled in/);
+    assert.ok(!ctx.draftOriginHtml(withRefs).includes('data-action="select-message"'), 'no dead link');
+    ctx.handleServerEvent({ type: 'cleared' });
+    assert.equal(other.originGone, true);
+    assert.match(ctx.draftOriginHtml(other), /^Edit of a message <span class="origin-gone">\(no longer stored\)<\/span>$/);
+});

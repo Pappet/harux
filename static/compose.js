@@ -78,6 +78,7 @@ function normalizeDraft(raw) {
         sends: Array.isArray(raw.sends) ? raw.sends.slice(-MAX_DRAFT_HISTORY) : [],
         sentRaw: typeof raw.sentRaw === 'string' ? raw.sentRaw : null,
         keep: raw.keep === true,
+        originGone: raw.originGone === true,
         created: typeof raw.created === 'number' ? raw.created : Date.now(),
     };
 }
@@ -86,11 +87,15 @@ function loadDrafts() {
     const kept = readDraftStore(localStorage, DRAFTS_KEPT_KEY).map((d) => ({ ...d, keep: true }));
     const tab = readDraftStore(sessionStorage, DRAFTS_SESSION_KEY);
     const seen = new Set();
-    state.drafts = [...tab, ...kept].map(normalizeDraft).filter((d) => {
+    // No cut here (#290 review): a draft the user kept must never fall off
+    // the list and be overwritten by the next save. The limit applies when
+    // a draft is added.
+    // In the order they were made, whichever store holds them.
+    state.drafts = [...kept, ...tab].map(normalizeDraft).filter((d) => {
         if (!d || seen.has(d.id)) return false;
         seen.add(d.id);
         return true;
-    }).slice(0, MAX_DRAFTS);
+    }).sort((x, y) => x.created - y.created);
     if (state.selectedDraftId && !findDraft(state.selectedDraftId)) state.selection = null;
 }
 
@@ -132,7 +137,9 @@ function addDraft(fields) {
         showToast(`At most ${MAX_DRAFTS} drafts — delete one first`);
         return null;
     }
-    const draft = normalizeDraft({ ...fields, raw: textareaText(fields.raw || ''), id: newId(), created: Date.now() });
+    // Strictly increasing, so the order survives a reload (loadDrafts sorts).
+    const created = Math.max(Date.now(), ...state.drafts.map((d) => d.created + 1));
+    const draft = normalizeDraft({ ...fields, raw: textareaText(fields.raw || ''), id: newId(), created });
     state.drafts.push(draft);
     saveDrafts();
     return draft;
@@ -167,8 +174,26 @@ async function editMessage(id) {
         type: msg ? msg.message_type || '' : '',
         title: msg ? msg.patient_name || msg.patient_id || '' : '',
     });
-    if (draft) openDraft(draft.id);
+    if (draft) openDraft(draft.id, 'raw');
     return draft;
+}
+
+// The stored messages a draft was made from are gone (#290 review): evicted
+// (`ids`) or cleared (`null`, all of them). The draft says so at once —
+// its references can no longer be filled, so a send would be refused.
+function markDraftOriginsGone(ids) {
+    const gone = ids ? new Set(ids) : null;
+    let changed = false;
+    for (const d of state.drafts) {
+        if (d.basedOn && !d.originGone && (!gone || gone.has(d.basedOn))) {
+            d.originGone = true;
+            changed = true;
+        }
+    }
+    if (!changed) return;
+    saveDrafts();
+    renderDraftRail();
+    if (isDraftOpen()) renderDraftHeader();
 }
 
 function newBlankDraft() {
@@ -383,8 +408,10 @@ function updateDraftStatus() {
     const ta = document.getElementById('draft-text');
     const d = openDraftObject();
     if (!el || !ta || !d) return;
+    // A preview with the references filled in (for the diff) has offsets
+    // into another text (#290 review): it never names the cursor's field.
     const p = currentPreview(d);
-    el.textContent = p ? draftStatusText(p, ta.selectionStart) || ' ' : 'Reading the draft…';
+    el.textContent = p && !p.filled ? draftStatusText(p, ta.selectionStart) || ' ' : 'Reading the draft…';
 }
 
 // --- Typing ---
@@ -408,7 +435,7 @@ function saveDraftsSoon() {
 
 function setDraftCharset(value) {
     const d = openDraftObject();
-    if (!d || !DRAFT_ENCODINGS.some(([v]) => v === value) && value !== d.charset) return;
+    if (!d || (!DRAFT_ENCODINGS.some(([v]) => v === value) && value !== d.charset)) return;
     d.charset = value;
     saveDrafts();
     renderDraftHeader();
@@ -466,6 +493,10 @@ async function sendDraft(d, target) {
         d.sends = d.sends.slice(-MAX_DRAFT_HISTORY);
         d.sentRaw = raw;
         d.targetId = target.id;
+        // The next draft starts with this target too, as a resend does
+        // (#290 review).
+        state.lastTargetId = target.id;
+        writeStored(LAST_TARGET_KEY, target.id);
         state.draftSendAnyway = null;
         saveDrafts();
         recordTargetResult(target.id, dl);
@@ -535,8 +566,9 @@ function renderDraftRail() {
         const active = d.id === state.selectedDraftId ? ' active' : '';
         const title = d.title || (d.origin.kind === 'file' ? d.origin.name : '') || 'Draft';
         const dot = draftHasUnsentChanges(d) ? '<span class="unsent" title="Changed since the last send"></span>' : '';
+        const gone = d.originGone && d.references.length ? '<span class="gone" title="The message it was made from is no longer stored">\u26a0</span>' : '';
         return `<span class="draft-chip${active}" role="button" tabindex="0" data-action="draft-open" data-draft-id="${escAttr(d.id)}" title="Open the draft">`
-            + `${d.type ? `<span class="t">${esc(d.type)}</span>` : ''}<span class="n">${esc(title)}</span>${dot}`
+            + `${d.type ? `<span class="t">${esc(d.type)}</span>` : ''}<span class="n">${esc(title)}</span>${gone}${dot}`
             + `<button class="x" data-action="draft-delete" data-draft-id="${escAttr(d.id)}" title="Delete the draft" aria-label="Delete the draft">✕</button></span>`;
     }).join('');
     rail.innerHTML = `<span class="label">Drafts</span><div class="draft-rail-chips">${chips}</div>`;
@@ -545,6 +577,12 @@ function renderDraftRail() {
 function draftOriginHtml(d) {
     const o = d.origin || {};
     if (o.kind === 'edit' && o.id) {
+        if (d.originGone) {
+            const refs = d.references.length > 0
+                ? ' — its references cannot be filled in, so a send is refused; delete the draft or replace them'
+                : '';
+            return `Edit of ${esc(o.control || 'a message')} <span class="origin-gone">(no longer stored${esc(refs)})</span>`;
+        }
         return `Edit of <button class="origin-link" data-action="select-message" data-id="${escAttr(o.id)}" title="Open the message this draft was made from">${esc(o.control || 'the original')}</button>`;
     }
     if (o.kind === 'file') return `From the file ${esc(o.name || '')}`;
@@ -682,6 +720,12 @@ function emptyNote(text) {
 function renderDraftTab(content) {
     const d = openDraftObject();
     if (!d || !content) return;
+    // Leaving or entering the diff changes which preview is needed (filled
+    // or as written): ask for the right one.
+    const shown = state.draftPreview;
+    if (state.activeTab !== 'ack' && shown && shown.draftId === d.id && shown.filled !== draftNeedsFilledPreview(d)) {
+        requestDraftPreview(d, true);
+    }
     if (state.activeTab === 'raw') return renderDraftRawTab(content, d);
     if (state.activeTab === 'ack') return renderDraftResponseTab(content, d);
     const p = state.draftPreview && state.draftPreview.draftId === d.id && state.draftPreview.raw === d.raw ? state.draftPreview : null;
