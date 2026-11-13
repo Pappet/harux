@@ -27,8 +27,8 @@ and writing or editing a message as a draft, also field by field or from a
 template, and sending it — also several messages in one run: the filtered
 list, or a draft repeated — and loading an exported `.hl7` file back into the
 list — and, for everyone, a watch that tells a background tab about new
-messages matching a filter (Milestone 4, M4-1 … M4-11). The release of
-Milestone 4 (v1.0.0) and persistence (Milestone 5) are planned —
+messages matching a filter (Milestone 4, released as v1.0.0). Persistence
+(Milestone 5) is planned —
 see the roadmap and `docs/MILESTONE_4_PLAN.md`. Do not implement roadmap
 features unless explicitly asked.
 

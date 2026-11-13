@@ -2,7 +2,7 @@
 
 This document tracks all milestones and planned features. Each milestone lists its tasks, completion status, and acceptance criteria. It is the one place for planning facts (current milestone, next work); `AGENTS.md` and the other guides link here instead of repeating them.
 
-**Current state:** Milestones 0–3 are complete. v0.9.0 shipped the hardening from the v0.8.0 review (#222–#250). **Next planned:** Milestone 4 (Workflow & Testing), which will be released as v1.0.0 — see its [implementation plan](MILESTONE_4_PLAN.md).
+**Current state:** Milestones 0–4 are complete. v1.0.0 shipped Milestone 4 (Workflow & Testing): resend, drafts and templates, runs, import and watch (#271). **Next planned:** Milestone 5 (Persistence).
 
 ---
 
@@ -122,7 +122,7 @@ This document tracks all milestones and planned features. Each milestone lists i
 
 **Goal:** Rapid testing against Orchestra — send, edit, replay messages directly from the UI.
 
-**Status: Planned** — the [implementation plan](MILESTONE_4_PLAN.md) has the design, the API, the safety rules and the work packages M4-1 … M4-12. The owner's decisions of 2026-11-12 are in its section 11; one question is still open there.
+**Status: Complete** — released as v1.0.0 (#271). The [implementation plan](MILESTONE_4_PLAN.md) has the design, the safety rules and the owner's decisions; the rules that last are in `AGENTS.md` (*Sending*).
 
 ### Requirements
 
@@ -146,7 +146,7 @@ This document tracks all milestones and planned features. Each milestone lists i
   - [x] M4-10 Import an `.hl7` file into the store (#281)
 - [x] **Auto-refresh trigger** — desktop notification on new messages (optional)
   - [x] M4-11 Watch: notify about new messages that match the current filter (#282)
-- [ ] M4-12 Release v1.0.0
+- [x] M4-12 Release v1.0.0 (#283)
 
 ### Acceptance Criteria
 
