@@ -417,6 +417,10 @@ mod tests {
         assert_eq!(t.encoding, "windows-1252");
         assert_eq!(t.charset.as_deref(), Some("8859/1"));
         assert!(t.raw.ends_with("PID|||1||Müller"), "{:?}", t.raw);
+        // Saved with CR LF (Notepad on the server): LF lines like a draft
+        // (#297 review).
+        assert!(t.raw.contains("8859/1\nPID"), "{:?}", t.raw);
+        assert!(!t.raw.contains('\r'), "{:?}", t.raw);
         // Only keys of the listing: no path, no link, nothing outside.
         for id in [
             "site:../harux-templates-site.outside.hl7",
