@@ -2098,3 +2098,225 @@ async fn a_run_is_started_followed_and_cancelled() {
         StatusCode::METHOD_NOT_ALLOWED
     );
 }
+
+// ── POST /api/import (#281) ──────────────────────────────────────────────────
+
+/// A request body that arrives in the given pieces, as a browser streams a
+/// file.
+struct Pieces(std::collections::VecDeque<Vec<u8>>);
+
+impl futures_core::Stream for Pieces {
+    type Item = Result<Vec<u8>, std::io::Error>;
+    fn poll_next(
+        mut self: std::pin::Pin<&mut Self>,
+        _: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Option<Self::Item>> {
+        std::task::Poll::Ready(self.0.pop_front().map(Ok))
+    }
+}
+
+async fn post_import(state: &AppState, name: &str, pieces: Vec<Vec<u8>>) -> (StatusCode, String) {
+    let res = create_router(state.clone())
+        .oneshot(
+            Request::builder()
+                .method(Method::POST)
+                .uri(format!("/api/import?name={name}"))
+                .header("host", "10.1.2.3:8080")
+                .header("content-type", "application/octet-stream")
+                .body(Body::from_stream(Pieces(pieces.into())))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = res.status();
+    let body = collect_body(res.into_body()).await;
+    (status, String::from_utf8_lossy(&body).into_owned())
+}
+
+async fn export_of(state: &AppState) -> Vec<u8> {
+    let res = create_router(state.clone())
+        .oneshot(
+            Request::builder()
+                .uri("/api/export?direction=all")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    collect_body(res.into_body()).await.to_vec()
+}
+
+/// The milestone's criterion: what `/api/export` writes loads back — every
+/// message as received from `import:<file>`, byte for byte (an export of the
+/// import is the same file), in its order — and can be resent.
+#[tokio::test]
+async fn an_export_is_imported_byte_for_byte_and_resent() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let source = sending_state(|_| {});
+    let frames: Vec<Vec<u8>> = vec![
+        b"MSH|^~\\&|A|B|||20260101||ADT^A01|I1|P|2.5\rPID|||1||Muster^Max\r".to_vec(),
+        // Latin-1, declared in MSH-18.
+        b"MSH|^~\\&|A|B|||20260101||ADT^A08|I2|P|2.5||||||8859/1\rPID|||2||M\xfcller\r".to_vec(),
+        b"NOT HL7 AT ALL".to_vec(),
+        format!(
+            "MSH|^~\\&|A|B|||20260101||MDM^T02|I4|P|2.5\rOBX|1|ED|PDF||^application^pdf^Base64^{}\r",
+            "QUJD".repeat(40_000)
+        )
+        .into_bytes(),
+    ];
+    for f in &frames {
+        source
+            .store
+            .insert(harux::mllp::ingest(f, "10.9.9.9:5000"))
+            .await;
+    }
+    let file = export_of(&source).await;
+
+    let state = sending_state(|_| {});
+    // In awkward pieces: a frame end split between two of them.
+    let pieces: Vec<Vec<u8>> = file.chunks(7_777).map(<[u8]>::to_vec).collect();
+    let (status, text) = post_import(&state, "../exports/harux-export.hl7", pieces).await;
+    assert_eq!(status, StatusCode::OK, "{text}");
+    let summary: serde_json::Value = serde_json::from_str(&text).unwrap();
+    assert_eq!(summary["imported"], 4);
+    assert_eq!(summary["parse_errors"], 1);
+    assert_eq!(summary["truncated"], 0);
+    assert_eq!(summary["skipped_bytes"], 0);
+    assert_eq!(summary["bytes"], file.len());
+    assert_eq!(summary["source"], "import:harux-export.hl7");
+
+    assert_eq!(
+        export_of(&state).await,
+        file,
+        "the same bytes, in the same order"
+    );
+    let list = get_json(&state, "/api/messages?limit=10").await;
+    assert!(list
+        .as_array()
+        .unwrap()
+        .iter()
+        .all(|m| m["source_addr"] == "import:harux-export.hl7" && m["direction"] == "in"));
+    assert_eq!(
+        list[0]["message_control_id"], "I4",
+        "newest last in the file"
+    );
+
+    // Resent: the Latin-1 message goes out as it arrived.
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    tokio::spawn(async move {
+        let (mut s, _) = listener.accept().await.unwrap();
+        let mut acc = Vec::new();
+        let mut buf = [0u8; 4096];
+        while !acc.ends_with(&[0x1C, 0x0D]) {
+            let n = s.read(&mut buf).await.unwrap();
+            acc.extend_from_slice(&buf[..n]);
+        }
+        let _ = tx.send(acc[1..acc.len() - 2].to_vec());
+        let _ = s
+            .write_all(b"\x0bMSH|^~\\&|R|F|H|H|20260101||ACK|A|P|2.5\rMSA|AA|I2\r\x1c\r")
+            .await;
+    });
+    let latin = list
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|m| m["message_control_id"] == "I2")
+        .unwrap()["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let (status, text) = post_send(
+        &state,
+        &format!(
+            r#"{{"target":{{"host":"127.0.0.1","port":{port}}},"items":[{{"message_id":"{latin}"}}]}}"#
+        ),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{text}");
+    assert_eq!(rx.recv().await.unwrap(), frames[1], "byte for byte");
+}
+
+/// Refusals and edges: sending off (403), a file without a frame (422,
+/// nothing stored), a file larger than the store (413), a file that ends
+/// inside a frame, an over-limit frame kept cut off.
+#[tokio::test]
+async fn import_refusals_and_edges() {
+    let off = make_state();
+    let frame = b"\x0bMSH|^~\\&|A|B|||20260101||ADT^A01|E1|P|2.5\r\x1c\r".to_vec();
+    assert_eq!(
+        post_import(&off, "a.hl7", vec![frame.clone()]).await.0,
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(off.store.count().await, 0);
+
+    // An empty file is refused like an unframed one (#294 review).
+    let empty_state = sending_state(|_| {});
+    assert_eq!(
+        post_import(&empty_state, "empty.hl7", vec![]).await.0,
+        StatusCode::UNPROCESSABLE_ENTITY
+    );
+
+    let state = sending_state(|c| c.mllp.max_message_size_mb = 1);
+    let (status, text) = post_import(
+        &state,
+        "msg.hl7",
+        vec![b"MSH|^~\\&|A|B|||20260101||ADT^A01|U1|P|2.5\r".to_vec()],
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{text}");
+    assert!(text.contains("From a file"), "{text}");
+    assert_eq!(state.store.count().await, 0);
+
+    // Ends inside a frame: the frames before it are loaded, the rest named.
+    let mut cut = frame.clone();
+    cut.extend_from_slice(b"\x0bMSH|^~\\&|A|B|||20260101||ADT^A01|E2");
+    let (status, text) = post_import(&state, "cut.hl7", vec![cut]).await;
+    assert_eq!(status, StatusCode::OK, "{text}");
+    let summary: serde_json::Value = serde_json::from_str(&text).unwrap();
+    assert_eq!(summary["imported"], 1);
+    assert!(summary["skipped_bytes"].as_u64().unwrap() > 30);
+
+    // An over-limit frame (1 MB here): stored cut off, the next one too.
+    let mut big = vec![0x0B];
+    big.extend_from_slice(b"MSH|^~\\&|A|B|||20260101||MDM^T02|BIG|P|2.5\rOBX|1|ED|X||");
+    big.extend(std::iter::repeat_n(b'Q', 1024 * 1024 + 10));
+    big.extend_from_slice(&[0x1C, 0x0D]);
+    big.extend_from_slice(&frame);
+    let pieces: Vec<Vec<u8>> = big.chunks(64 * 1024).map(<[u8]>::to_vec).collect();
+    let (status, text) = post_import(&state, "big.hl7", pieces).await;
+    assert_eq!(status, StatusCode::OK, "{text}");
+    let summary: serde_json::Value = serde_json::from_str(&text).unwrap();
+    assert_eq!(
+        (summary["imported"].as_u64(), summary["truncated"].as_u64()),
+        (Some(2), Some(1))
+    );
+    let list = get_json(&state, "/api/messages?limit=1&offset=1").await;
+    assert_eq!(list[0]["message_control_id"], "BIG");
+    assert_eq!(list[0]["truncated"], true);
+
+    // Larger than the store (10 MB in these tests): announced → 413 at once;
+    // streamed → 413 at the limit, nothing beyond it stored.
+    let before = state.store.count().await;
+    let res = create_router(state.clone())
+        .oneshot(
+            Request::builder()
+                .method(Method::POST)
+                .uri("/api/import?name=huge.hl7")
+                .header("host", "10.1.2.3:8080")
+                .header("content-length", (11 * 1024 * 1024).to_string())
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::PAYLOAD_TOO_LARGE);
+    let pieces: Vec<Vec<u8>> = (0..12).map(|_| vec![b' '; 1024 * 1024]).collect();
+    let (status, text) = post_import(&state, "huge.hl7", pieces).await;
+    assert_eq!(status, StatusCode::PAYLOAD_TOO_LARGE, "{text}");
+    assert!(text.contains("store.max_memory_mb"), "{text}");
+    assert_eq!(state.store.count().await, before);
+}

@@ -243,3 +243,12 @@ test('a run that tried every message but lost some says why (#293 review)', () =
     assert.ok(!clean.includes('class="reason"'));
 });
 
+
+test('an imported file is one source, named whole (#281)', () => {
+    const { ctx, state } = setup();
+    assert.equal(ctx.srcLabelFor('import:export 2026:11.hl7'), 'import:export 2026:11.hl7');
+    assert.equal(ctx.srcLabelFor('10.0.0.1:5000'), '10.0.0.1', 'an address still groups by host');
+    state.colorByPort = false;
+    assert.notEqual(ctx.getSourceColor('import:a.hl7'), undefined);
+    assert.equal(ctx.getSourceColor('import:a.hl7'), ctx.getSourceColor('import:a.hl7'));
+});

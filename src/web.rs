@@ -330,6 +330,14 @@ pub fn create_router(state: AppState) -> Router {
             "/api/build",
             large_body(&state, axum::routing::post(build_draft)),
         )
+        // Import (#281): streamed, so no body limit of axum's — the handler
+        // counts — but the permit, held for the whole import.
+        .route(
+            "/api/import",
+            axum::routing::post(import_file).layer::<_, Infallible>(
+                middleware::from_fn_with_state(state.clone(), take_large_body_permit),
+            ),
+        )
         // An /api path no route takes is a 404, never the SPA (#292
         // review): a client must not read index.html as an API answer.
         .route("/api/{*rest}", axum::routing::any(api_not_found))
@@ -775,6 +783,106 @@ struct BuildRequest {
     based_on: Option<String>,
     #[serde(default)]
     set: std::collections::BTreeMap<String, String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ImportQuery {
+    /// The file's name, a label for `import:<name>`.
+    #[serde(default)]
+    name: Option<String>,
+}
+
+/// `POST /api/import?name=<file name>` (#281): load an MLLP-framed `.hl7`
+/// file — what `/api/export` writes — into the store, every frame as
+/// received from `import:<name>`. The body is the file's bytes, read as a
+/// stream and split frame by frame by the listener's own splitter; nothing of
+/// it is held beyond the frame in work. At most `store.max_memory_mb` bytes
+/// *read* (`413`; frames before the limit stay stored) — whitespace and
+/// noise count too, it is the file's size that is limited. A file without a
+/// single frame, an empty one included, is refused (`422`): one unframed
+/// message is opened as a draft instead. An import into a full store evicts
+/// its oldest messages like any arrival; the UI says so before it asks.
+/// Part of sending: `403` while it is off.
+async fn import_file(
+    State(state): State<AppState>,
+    Query(query): Query<ImportQuery>,
+    request: axum::extract::Request,
+) -> Response {
+    use futures_core::Stream;
+    if !state.sender.enabled() {
+        return sending_off();
+    }
+    let (_, max_bytes) = state.store.memory_usage().await;
+    let length = request
+        .headers()
+        .get(axum::http::header::CONTENT_LENGTH)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.parse::<u64>().ok());
+    let too_large = || {
+        format!(
+            "The file is larger than store.max_memory_mb ({} MB), what the store can hold",
+            max_bytes / (1024 * 1024)
+        )
+    };
+    if length.is_some_and(|l| l > max_bytes as u64) {
+        return (StatusCode::PAYLOAD_TOO_LARGE, too_large()).into_response();
+    }
+    let mut importer = crate::mllp::Importer::new(
+        query.name.as_deref().unwrap_or_default(),
+        state.sender.max_message_bytes() / (1024 * 1024),
+    );
+    let mut body = request.into_body().into_data_stream();
+    loop {
+        let next = std::future::poll_fn(|cx| Pin::new(&mut body).poll_next(cx)).await;
+        let chunk = match next {
+            None => break,
+            Some(Ok(chunk)) => chunk,
+            Some(Err(e)) => {
+                let s = importer.finish();
+                tracing::warn!("Import into {} broke off: {e}", s.source);
+                return (
+                    StatusCode::BAD_REQUEST,
+                    format!("The upload broke off after {} messages: {e}", s.imported),
+                )
+                    .into_response();
+            }
+        };
+        // Checked before the piece is stored: nothing beyond the limit is.
+        if importer.bytes() + chunk.len() as u64 > max_bytes as u64 {
+            let s = importer.finish();
+            tracing::warn!(
+                "Import into {} stopped at store.max_memory_mb after {} messages",
+                s.source,
+                s.imported
+            );
+            return (
+                StatusCode::PAYLOAD_TOO_LARGE,
+                format!("{}; stopped after {} messages", too_large(), s.imported),
+            )
+                .into_response();
+        }
+        importer.push(&chunk, &state.store).await;
+    }
+    let summary = importer.finish();
+    // Nothing in it, or no frame in it (#294 review: an empty file too).
+    if summary.imported == 0 {
+        return (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "The file holds no MLLP frame (what Export writes). A single message is opened as a \
+             draft instead: New message → From a file",
+        )
+            .into_response();
+    }
+    tracing::info!(
+        "Imported {} messages ({} bytes) as {}: {} did not parse, {} cut off, {} bytes outside frames not loaded",
+        summary.imported,
+        summary.bytes,
+        summary.source,
+        summary.parse_errors,
+        summary.truncated,
+        summary.skipped_bytes
+    );
+    Json(summary).into_response()
 }
 
 /// `POST /api/build`: *Save as file* — the bytes `POST /api/send` would

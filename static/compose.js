@@ -262,15 +262,103 @@ async function draftFromFileBytes(name, bytes) {
     return draft;
 }
 
+// *From a file* (#281): a file of MLLP frames — what Export writes — with
+// more than one message is loaded into the list (`POST /api/import`); one
+// message, framed or not, opens as a draft.
 function newDraftFromFile() {
     const input = document.createElement('input');
     input.type = 'file';
     input.accept = '.hl7,.txt,.msg,text/plain,application/octet-stream';
     input.addEventListener('change', async () => {
         const file = input.files && input.files[0];
-        if (file) await draftFromFileBytes(file.name, await file.arrayBuffer());
+        if (file) await openFile(file);
     });
     input.click();
+}
+
+async function openFile(file) {
+    const head = new Uint8Array(await file.slice(0, 64).arrayBuffer());
+    if (!isFramedHead(head)) return draftFromFileBytes(file.name, await file.arrayBuffer());
+    // Larger than one message can be: several frames. Otherwise count them.
+    const max = state.sendConfig && state.sendConfig.max_message_bytes ? state.sendConfig.max_message_bytes : 10 * 1024 * 1024;
+    if (file.size > max + 3) return importFile(file, null);
+    const bytes = await file.arrayBuffer();
+    const frames = countFrames(new Uint8Array(bytes));
+    if (frames > 1) return importFile(file, frames);
+    return draftFromFileBytes(file.name, bytes);
+}
+
+// The file starts with an MLLP start byte (after whitespace).
+function isFramedHead(bytes) {
+    for (const b of bytes) {
+        if (b === 0x0b) return true;
+        if (b !== 0x20 && b !== 0x09 && b !== 0x0a && b !== 0x0d) return false;
+    }
+    return false;
+}
+
+// MLLP frame ends (FS CR) in `bytes`.
+function countFrames(bytes) {
+    let n = 0;
+    for (let i = 0; i + 1 < bytes.length; i++) {
+        if (bytes[i] === 0x1c && bytes[i + 1] === 0x0d) n++;
+    }
+    return n;
+}
+
+// Load `file` into the list, every message as received from
+// `import:<name>`, after a confirmation. The rows come over the WebSocket.
+async function importFile(file, frames) {
+    const what = frames ? `the ${frames} messages` : 'the messages';
+    const room = await storeRoomNote(file.size);
+    if (!confirm(`Load ${what} in ${file.name} into the list, as received from import:${file.name}? They can then be resent like any other.${room}`)) return null;
+    try {
+        const resp = await fetch(`/api/import?name=${encodeURIComponent(file.name)}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/octet-stream' },
+            body: file,
+        });
+        if (!resp.ok) {
+            showToast(`Cannot load ${file.name}: ${(await resp.text()) || `HTTP ${resp.status}`}`);
+            return null;
+        }
+        const summary = await resp.json();
+        showToast(importSummaryText(file.name, summary), summary.skipped_bytes || summary.truncated ? 'error' : 'info');
+        return summary;
+    } catch (e) {
+        showToast(`Cannot load ${file.name}: ` + (e.message || e));
+        return null;
+    }
+}
+
+// An import is stored like any arrival: into a full store it pushes out the
+// oldest messages (#294 review). Say so before asking, from /api/stats.
+async function storeRoomNote(size) {
+    try {
+        const resp = await fetch('/api/stats');
+        if (!resp.ok) return '';
+        const s = await resp.json();
+        return importRoomNote(size, s.store_bytes, s.store_max_bytes);
+    } catch (e) {
+        console.debug('Could not read the store size:', e);
+        return '';
+    }
+}
+
+// The confirmation's warning when `size` bytes will not fit next to what
+// the store holds: eviction starts at the limit and goes down to 90 %.
+function importRoomNote(size, used, max) {
+    if (typeof used !== 'number' || typeof max !== 'number' || !max || used + size <= max) return '';
+    const mb = (b) => `${Math.max(1, Math.round(b / (1024 * 1024)))} MB`;
+    return `\n\nThe store holds ${mb(used)} of ${mb(max)} (store.max_memory_mb): loading ${mb(size)} pushes out the oldest messages — received ones too — except bookmarks within their budget.`;
+}
+
+function importSummaryText(name, s) {
+    const parts = [`Loaded ${s.imported} message${s.imported === 1 ? '' : 's'} from ${name}`];
+    if (s.parse_errors) parts.push(`${s.parse_errors} did not parse`);
+    if (s.truncated) parts.push(`${s.truncated} above the size limit, kept cut off`);
+    if (s.skipped_bytes) parts.push(`${s.skipped_bytes} bytes outside frames not loaded`);
+    return parts.join(' · ');
 }
 
 function deleteDraft(id) {

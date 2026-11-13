@@ -240,21 +240,11 @@ async fn handle_connection(
     mut shutdown: tokio::sync::watch::Receiver<bool>,
 ) -> anyhow::Result<()> {
     let mut buf = vec![0u8; 64 * 1024]; // 64 KB read buffer
-    let mut accumulated = Vec::with_capacity(8 * 1024);
-    let max_size = config.max_message_size();
+    let mut frames = FrameSplitter::new(config.max_message_size());
     let read_timeout = config.read_timeout();
     let write_timeout = config.write_timeout();
 
-    // Tracks the farthest byte already scanned for the MLLP end sequence.
-    // Avoids O(n²) re-scanning of large messages arriving in many small chunks.
-    let mut scan_offset: usize = 0;
-
     let mut shutdown_requested = false;
-
-    // Set while the rest of a rejected over-limit frame is skipped (#223):
-    // the connection stays usable for the frames after it.
-    let mut discarding = false;
-    let mut last_was_fs = false;
 
     loop {
         let n = tokio::select! {
@@ -277,7 +267,7 @@ async fn handle_connection(
             }
             _ = shutdown.changed(), if !shutdown_requested => {
                 shutdown_requested = true;
-                if accumulated.is_empty() {
+                if frames.is_empty() {
                     break;
                 }
                 // Continue reading to finish the current frame
@@ -285,56 +275,21 @@ async fn handle_connection(
             }
         };
 
-        let mut data = &buf[..n];
-        if discarding {
-            match skip_to_frame_end(data, &mut last_was_fs) {
-                Some(end) => {
-                    discarding = false;
-                    data = &data[end..];
-                }
-                None => data = &[],
-            }
-        }
-        accumulated.extend_from_slice(data);
-
-        // Process all complete MLLP frames in the buffer
-        while let Some((payload, consumed)) = extract_mllp_frame(&accumulated, scan_offset) {
+        frames.push(&buf[..n]);
+        // Every complete frame in the buffer, and an incomplete one already
+        // beyond the limit (answered now, its rest skipped — #223).
+        while let Some(frame) = frames.next_frame() {
             stats.received.fetch_add(1, Ordering::Relaxed);
-            let reply = if payload.len() > max_size {
-                reject_oversize(payload, peer, store, stats, config).await
-            } else {
-                process_frame(payload, peer, store, stats).await
+            let reply = match frame {
+                Frame::Complete(payload) => process_frame(payload, peer, store, stats).await,
+                Frame::Oversize(head) => reject_oversize(head, peer, store, stats, config).await,
             };
             if let Some(reply) = reply {
                 send_reply(&mut socket, &reply, peer, write_timeout).await;
             }
-
-            // Remove processed bytes; reset scan position for the next frame.
-            accumulated.drain(..consumed);
-            scan_offset = 0;
         }
 
-        // An incomplete frame already beyond the limit: answer now, then skip
-        // the rest of it instead of buffering it (#223).
-        if accumulated.len() > max_size {
-            stats.received.fetch_add(1, Ordering::Relaxed);
-            let body = match accumulated.iter().position(|&b| b == MLLP_START) {
-                Some(p) => &accumulated[p + 1..],
-                None => &accumulated[..],
-            };
-            if let Some(reply) = reject_oversize(body, peer, store, stats, config).await {
-                send_reply(&mut socket, &reply, peer, write_timeout).await;
-            }
-            discarding = true;
-            last_was_fs = accumulated.last() == Some(&MLLP_END_1);
-            accumulated.clear();
-        }
-
-        // No complete frame yet — advance past already-scanned bytes on the next read.
-        // Subtract 1 so we re-check the last byte in case FS+CR straddles a chunk boundary.
-        scan_offset = accumulated.len().saturating_sub(1);
-
-        if shutdown_requested && accumulated.is_empty() {
+        if shutdown_requested && frames.is_empty() {
             info!("Gracefully closing connection from {} after draining", peer);
             break;
         }
@@ -580,6 +535,285 @@ fn oversize_message(frame: &[u8], limit_mb: usize, peer: &str) -> Hl7Message {
     msg
 }
 
+/// Loads an MLLP-framed file — what `/api/export` writes — into the store,
+/// frame by frame as its pieces arrive (#281). Every frame is stored as
+/// received from `source` (`import:<file name>`): decoded and parsed like a
+/// frame from the listener ([`ingest`]), an over-limit one cut like there
+/// (#223). Nothing is answered, and the listener's counters stay about the
+/// listener. Only framed files: finding messages in unframed text would need
+/// a second MSH scanner (#188).
+pub struct Importer {
+    frames: FrameSplitter,
+    source: String,
+    limit_mb: usize,
+    summary: ImportSummary,
+}
+
+/// What an import loaded.
+#[derive(Debug, Clone, Default, serde::Serialize, PartialEq, Eq)]
+pub struct ImportSummary {
+    /// The `source_addr` of every imported message.
+    pub source: String,
+    /// Messages stored.
+    pub imported: usize,
+    /// Of them, messages that did not parse (stored with their error).
+    pub parse_errors: usize,
+    /// Of them, frames above `mllp.max_message_size_mb`, kept cut off.
+    pub truncated: usize,
+    /// Bytes of the file read.
+    pub bytes: u64,
+    /// Bytes not loaded: outside frames (whitespace between frames aside),
+    /// or of a frame the file ends inside.
+    pub skipped_bytes: usize,
+}
+
+impl Importer {
+    /// An import of `name` (a label: the file name the browser gave).
+    pub fn new(name: &str, max_message_size_mb: usize) -> Self {
+        let source = format!("import:{}", import_label(name));
+        Self {
+            frames: FrameSplitter::ignoring_noise(max_message_size_mb.saturating_mul(1024 * 1024)),
+            summary: ImportSummary {
+                source: source.clone(),
+                ..ImportSummary::default()
+            },
+            source,
+            limit_mb: max_message_size_mb,
+        }
+    }
+
+    /// Store every frame `chunk` completes.
+    pub async fn push(&mut self, chunk: &[u8], store: &MessageStore) {
+        self.summary.bytes += chunk.len() as u64;
+        self.frames.push(chunk);
+        while let Some(frame) = self.frames.next_frame() {
+            let msg = match frame {
+                Frame::Complete(payload) => ingest(payload, &self.source),
+                Frame::Oversize(head) => oversize_message(head, self.limit_mb, &self.source),
+            };
+            self.summary.imported += 1;
+            if msg.truncated {
+                self.summary.truncated += 1;
+            } else if msg.parse_error.is_some() {
+                self.summary.parse_errors += 1;
+            }
+            store.insert(msg).await;
+        }
+    }
+
+    /// What was loaded, and what was not: bytes outside frames, and an
+    /// unfinished frame at the end of the file.
+    pub fn finish(mut self) -> ImportSummary {
+        let discarding = self.frames.discarding();
+        // Held now: only an unfinished frame (from its start byte on); the
+        // rest of an over-limit one is not held, its head is stored.
+        let unfinished = if discarding {
+            0
+        } else {
+            self.frames.held_bytes().len()
+        };
+        self.summary.skipped_bytes = self.frames.noise() + unfinished;
+        self.summary
+    }
+
+    /// Bytes read so far.
+    pub fn bytes(&self) -> u64 {
+        self.summary.bytes
+    }
+}
+
+/// The file name as a label: its last path part, no control characters, at
+/// most 64 characters; `file` when nothing is left.
+fn import_label(name: &str) -> String {
+    let last = name.rsplit(['/', '\\']).next().unwrap_or_default();
+    let label: String = last
+        .trim()
+        .chars()
+        .filter(|c| !c.is_control())
+        .take(64)
+        .collect();
+    if label.is_empty() {
+        "file".into()
+    } else {
+        label
+    }
+}
+
+/// A frame found by [`FrameSplitter`]: its payload (without the envelope),
+/// or the part received so far of one above the size limit (without the
+/// start byte), whose rest the splitter skips.
+#[derive(Debug, PartialEq, Eq)]
+pub enum Frame<'a> {
+    Complete(&'a [u8]),
+    Oversize(&'a [u8]),
+}
+
+/// Finds MLLP frames in bytes that arrive in pieces — a connection's reads,
+/// or an imported file's chunks (#281). The one frame splitter: the listener
+/// and `POST /api/import` share it.
+///
+/// Feed bytes with [`push`](Self::push), then take frames with
+/// [`next_frame`](Self::next_frame) until it returns `None` — always, before
+/// the next `push`: a frame handed out is dropped from the buffer by the next
+/// call on the splitter (any of them, the queries [`is_empty`](Self::is_empty)
+/// and [`held_bytes`](Self::held_bytes) included). A frame above
+/// `max_size` comes out as [`Frame::Oversize`] — complete, or as soon as the
+/// buffer holds more than `max_size` bytes of it — and the rest of it is
+/// skipped, never buffered (#223). Bytes before a start byte are ignored.
+pub struct FrameSplitter {
+    buf: Vec<u8>,
+    max_size: usize,
+    /// How far `buf` has been searched for the end sequence: large frames
+    /// that arrive in many small pieces are not searched again (O(n)).
+    scan_from: usize,
+    /// What the frame last handed out still occupies in `buf`; dropped on
+    /// the next call (the frame borrowed `buf`).
+    pending: Option<Consumed>,
+    /// The rest of an over-limit frame is being skipped (#223).
+    discarding: bool,
+    /// While skipping: the last byte seen was `FS` (the end may straddle
+    /// two pieces).
+    last_was_fs: bool,
+    /// For an import: bytes outside frames are dropped as they come and
+    /// their non-whitespace ones counted here, instead of being held (and
+    /// turned into an over-limit entry, as the listener does).
+    noise: Option<usize>,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum Consumed {
+    Prefix(usize),
+    All,
+}
+
+impl FrameSplitter {
+    pub fn new(max_size: usize) -> Self {
+        Self {
+            buf: Vec::with_capacity(8 * 1024),
+            max_size,
+            scan_from: 0,
+            pending: None,
+            discarding: false,
+            last_was_fs: false,
+            noise: None,
+        }
+    }
+
+    /// A splitter for a file (#281): bytes outside frames are skipped and
+    /// counted ([`noise`](Self::noise)), never stored.
+    pub fn ignoring_noise(max_size: usize) -> Self {
+        Self {
+            noise: Some(0),
+            ..Self::new(max_size)
+        }
+    }
+
+    /// Non-whitespace bytes outside frames skipped so far (only with
+    /// [`ignoring_noise`](Self::ignoring_noise)).
+    pub fn noise(&self) -> usize {
+        self.noise.unwrap_or(0)
+    }
+
+    /// Drop what precedes the next start byte, counting it as noise.
+    fn trim_noise(&mut self) {
+        let Some(noise) = self.noise.as_mut() else {
+            return;
+        };
+        let visible = |b: &[u8]| b.iter().filter(|b| !b.is_ascii_whitespace()).count();
+        match self.buf.iter().position(|&b| b == MLLP_START) {
+            Some(0) => {}
+            Some(p) => {
+                *noise += visible(&self.buf[..p]);
+                self.buf.drain(..p);
+                self.scan_from = self.scan_from.saturating_sub(p);
+            }
+            None => {
+                *noise += visible(&self.buf);
+                self.buf.clear();
+                self.scan_from = 0;
+            }
+        }
+    }
+
+    fn settle(&mut self) {
+        match self.pending.take() {
+            Some(Consumed::Prefix(n)) => {
+                self.buf.drain(..n);
+                self.scan_from = 0;
+                self.trim_noise();
+            }
+            Some(Consumed::All) => {
+                self.buf.clear();
+                self.scan_from = 0;
+            }
+            None => {}
+        }
+    }
+
+    /// Add the next piece of bytes.
+    pub fn push(&mut self, mut data: &[u8]) {
+        self.settle();
+        if self.discarding {
+            match skip_to_frame_end(data, &mut self.last_was_fs) {
+                Some(end) => {
+                    self.discarding = false;
+                    data = &data[end..];
+                }
+                None => data = &[],
+            }
+        }
+        self.buf.extend_from_slice(data);
+        self.trim_noise();
+    }
+
+    /// The next frame, or `None` until more bytes arrive.
+    pub fn next_frame(&mut self) -> Option<Frame<'_>> {
+        self.settle();
+        if let Some((start, end, consumed)) = find_mllp_frame(&self.buf, self.scan_from) {
+            self.pending = Some(Consumed::Prefix(consumed));
+            let payload = &self.buf[start..end];
+            return Some(if payload.len() > self.max_size {
+                Frame::Oversize(payload)
+            } else {
+                Frame::Complete(payload)
+            });
+        }
+        if self.buf.len() > self.max_size {
+            self.discarding = true;
+            self.last_was_fs = self.buf.last() == Some(&MLLP_END_1);
+            self.pending = Some(Consumed::All);
+            let head = match self.buf.iter().position(|&b| b == MLLP_START) {
+                Some(p) => &self.buf[p + 1..],
+                None => &self.buf[..],
+            };
+            return Some(Frame::Oversize(head));
+        }
+        // Search only the new bytes next time; minus one in case `FS CR`
+        // straddles two pieces.
+        self.scan_from = self.buf.len().saturating_sub(1);
+        None
+    }
+
+    /// No bytes of an unfinished frame are held (frames handed out count as
+    /// taken).
+    pub fn is_empty(&mut self) -> bool {
+        self.settle();
+        self.buf.is_empty()
+    }
+
+    /// The bytes held of an unfinished frame, or of anything else after
+    /// the last frame (an import that ends there reports them).
+    pub fn held_bytes(&mut self) -> &[u8] {
+        self.settle();
+        &self.buf
+    }
+
+    /// Whether the rest of an over-limit frame is being skipped.
+    pub fn discarding(&self) -> bool {
+        self.discarding
+    }
+}
+
 /// Find the end (`FS CR`) of a frame being skipped. `last_was_fs` carries a
 /// trailing `FS` across reads. Returns the index just past the `CR`.
 fn skip_to_frame_end(data: &[u8], last_was_fs: &mut bool) -> Option<usize> {
@@ -617,6 +851,12 @@ async fn send_reply(
 /// `hl7::charset::decode_payload`'s job (#188). Also reads the responses to
 /// what Harux sends (`mllp_client`, #272).
 pub(crate) fn extract_mllp_frame(buf: &[u8], scan_from: usize) -> Option<(&[u8], usize)> {
+    find_mllp_frame(buf, scan_from).map(|(start, end, consumed)| (&buf[start..end], consumed))
+}
+
+/// [`extract_mllp_frame`] as positions: the payload is `buf[start..end]`,
+/// the frame ends at `consumed`.
+fn find_mllp_frame(buf: &[u8], scan_from: usize) -> Option<(usize, usize, usize)> {
     // Find start byte
     let start_pos = buf.iter().position(|&b| b == MLLP_START)?;
 
@@ -626,7 +866,7 @@ pub(crate) fn extract_mllp_frame(buf: &[u8], scan_from: usize) -> Option<(&[u8],
     // Find end sequence (FS + CR)
     for i in search_from..buf.len().saturating_sub(1) {
         if buf[i] == MLLP_END_1 && buf[i + 1] == MLLP_END_2 {
-            return Some((&buf[start_pos + 1..i], i + 2));
+            return Some((start_pos + 1, i, i + 2));
         }
     }
 
@@ -820,5 +1060,96 @@ mod tests {
         let result_full = extract_mllp_frame(&frame, 0);
         assert!(result_incremental.is_some());
         assert_eq!(result_incremental, result_full);
+    }
+
+    /// Every frame, oversize frames as their head, fed in pieces.
+    fn split(pieces: &[&[u8]], max: usize) -> (Vec<(bool, Vec<u8>)>, usize) {
+        let mut f = FrameSplitter::new(max);
+        let mut out = Vec::new();
+        for p in pieces {
+            f.push(p);
+            while let Some(frame) = f.next_frame() {
+                out.push(match frame {
+                    Frame::Complete(b) => (true, b.to_vec()),
+                    Frame::Oversize(b) => (false, b.to_vec()),
+                });
+            }
+        }
+        let held = f.held_bytes().len();
+        (out, held)
+    }
+
+    #[test]
+    fn frame_splitter_finds_frames_in_any_pieces() {
+        let stream = b"\x0bA\x1c\r\r\n\x0bBB\x1c\r\x0bC";
+        // Whole, and one byte at a time: the same frames.
+        for pieces in [
+            vec![&stream[..]],
+            stream.chunks(1).collect::<Vec<_>>(),
+            stream.chunks(3).collect::<Vec<_>>(),
+        ] {
+            let (frames, held) = split(&pieces, 100);
+            assert_eq!(
+                frames,
+                [(true, b"A".to_vec()), (true, b"BB".to_vec())],
+                "{pieces:?}"
+            );
+            assert_eq!(held, 2, "the start of C");
+        }
+        // Bytes before a start byte are ignored.
+        let (frames, held) = split(&[b"noise\x0bX\x1c\r"], 100);
+        assert_eq!(frames, [(true, b"X".to_vec())]);
+        assert_eq!(held, 0);
+    }
+
+    #[test]
+    fn frame_splitter_cuts_oversize_frames_and_skips_their_rest() {
+        // Complete but too large.
+        let (frames, _) = split(&[b"\x0b0123456789\x1c\r\x0bok\x1c\r"], 5);
+        assert_eq!(
+            frames,
+            [(false, b"0123456789".to_vec()), (true, b"ok".to_vec())]
+        );
+        // Incomplete beyond the limit: handed out at once, the rest skipped
+        // even when FS and CR arrive in two pieces.
+        let (frames, held) = split(
+            &[b"\x0b01234567", b"89abc\x1c", b"\rmore", b"\x0bok\x1c\r"],
+            5,
+        );
+        assert_eq!(
+            frames,
+            [(false, b"01234567".to_vec()), (true, b"ok".to_vec())]
+        );
+        assert_eq!(held, 0);
+    }
+
+    /// An import skips and counts what lies outside frames — never an
+    /// over-limit entry made of noise, as the listener would.
+    #[test]
+    fn an_import_splitter_skips_noise() {
+        let mut f = FrameSplitter::ignoring_noise(4);
+        f.push(b"junk \r\n");
+        assert!(f.next_frame().is_none());
+        f.push(&[b'z'; 100]);
+        assert!(
+            f.next_frame().is_none(),
+            "noise beyond the limit is no frame"
+        );
+        f.push(b"\x0bA\x1c\rxx\x0bB\x1c\r\n");
+        assert_eq!(f.next_frame(), Some(Frame::Complete(b"A")));
+        assert_eq!(f.next_frame(), Some(Frame::Complete(b"B")));
+        assert_eq!(f.next_frame(), None);
+        assert_eq!(f.noise(), 4 + 100 + 2, "whitespace is not counted");
+        assert!(f.is_empty());
+    }
+
+    #[test]
+    fn import_labels_are_file_names() {
+        assert_eq!(import_label("export.hl7"), "export.hl7");
+        assert_eq!(import_label("../../etc/x.hl7"), "x.hl7");
+        assert_eq!(import_label("C:\\tmp\\a.hl7"), "a.hl7");
+        assert_eq!(import_label("a\nb\u{7}"), "ab");
+        assert_eq!(import_label(""), "file");
+        assert_eq!(import_label(&"x".repeat(100)).len(), 64);
     }
 }
