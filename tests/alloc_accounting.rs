@@ -225,3 +225,33 @@ fn sent_message_and_its_metadata_are_accounted() {
         a1 - a0
     );
 }
+
+/// #276: a message sent from a draft records the message the draft was made
+/// from; that is accounted too.
+#[test]
+fn sent_draft_origin_is_accounted() {
+    let mut msg = parse_message(
+        "MSH|^~\\&|A|B|C|D|20240101||ADT^A01|C1|P|2.5\rPID|||1||Muster^Max\r",
+        "10.9.9.9:6661",
+    )
+    .unwrap();
+    let payload_before = msg.estimated_bytes();
+    let (_, a0, m0) = snapshot();
+    msg.outbound = Some(Box::new(Outbound {
+        target: "orchestra-test-adt".to_string(),
+        transport: Transport::Tls,
+        origin: Origin::Draft {
+            based_on: Some("0b9e8f9c-4d2e-4f3a-9c1b-2a7d5e6f8a90".to_string()),
+        },
+        requested_by: "10.0.0.7".to_string(),
+        run: "6c1f0e2d-3b4a-4c5d-8e9f-0a1b2c3d4e5f".to_string(),
+    }));
+    let (_, a1, m1) = snapshot();
+    let modeled = (m1 - m0) as usize;
+    let estimated = msg.estimated_bytes() - payload_before;
+    assert!(
+        estimated >= modeled && estimated <= modeled + modeled / 20,
+        "estimated {estimated} B, modeled {modeled} B in {} allocations",
+        a1 - a0
+    );
+}

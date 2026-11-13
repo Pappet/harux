@@ -307,7 +307,21 @@ pub fn create_router(state: AppState) -> Router {
         .route("/api/export", get(export_raw_hl7))
         // Sending (#272) — `403` while `send.enabled` is off.
         .route("/api/send/config", get(send_config))
-        .route("/api/send", axum::routing::post(send_message))
+        .route("/api/messages/{id}/draft", get(message_draft))
+        // Routes with a message in the body (#276): a body limit above
+        // axum's 2 MB default, and a permit before a large body is read.
+        .route(
+            "/api/send",
+            large_body(&state, axum::routing::post(send_message)),
+        )
+        .route(
+            "/api/parse",
+            large_body(&state, axum::routing::post(parse_draft)),
+        )
+        .route(
+            "/api/build",
+            large_body(&state, axum::routing::post(build_draft)),
+        )
         // WebSocket
         .route("/ws", get(ws_handler))
         // Static files (SPA)
@@ -315,6 +329,64 @@ pub fn create_router(state: AppState) -> Router {
         .with_state(state.clone())
         .layer(middleware::from_fn_with_state(state, guard_cross_site))
         .layer(middleware::from_fn(add_security_headers))
+}
+
+/// The body limit of the routes that carry a message (#276): twice
+/// `mllp.max_message_size_mb` plus 1 MB. A message inside a JSON string
+/// grows by escaping (every `CR` becomes two characters, other control
+/// characters six), so a limit equal to the message cap would refuse
+/// messages the listener accepts. The size that counts is checked on the
+/// decoded message.
+pub fn message_body_limit(max_message_bytes: usize) -> usize {
+    max_message_bytes
+        .saturating_mul(2)
+        .saturating_add(1024 * 1024)
+}
+
+/// `route` with the message body limit and the large-body permit (#276).
+fn large_body(
+    state: &AppState,
+    route: axum::routing::MethodRouter<AppState>,
+) -> axum::routing::MethodRouter<AppState> {
+    route
+        .layer::<_, Infallible>(middleware::from_fn_with_state(
+            state.clone(),
+            take_large_body_permit,
+        ))
+        .layer::<_, Infallible>(axum::extract::DefaultBodyLimit::max(message_body_limit(
+            state.sender.max_message_bytes(),
+        )))
+}
+
+/// Before a large body is read (above `send::LARGE_BODY_BYTES`, or of
+/// unknown size), take a permit; none free → `429`. axum reads a body into
+/// memory before the handler runs, so many large requests at once would
+/// cost memory no size limit sees. The permit is held until the response.
+async fn take_large_body_permit(
+    State(state): State<AppState>,
+    req: axum::extract::Request,
+    next: middleware::Next,
+) -> Response {
+    let length = req
+        .headers()
+        .get(axum::http::header::CONTENT_LENGTH)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.parse::<u64>().ok());
+    if length.is_some_and(|l| l < crate::send::LARGE_BODY_BYTES) {
+        return next.run(req).await;
+    }
+    match state.sender.large_body_permit() {
+        Some(permit) => {
+            let response = next.run(req).await;
+            drop(permit);
+            response
+        }
+        None => (
+            StatusCode::TOO_MANY_REQUESTS,
+            "Too many large requests at once; try again shortly",
+        )
+            .into_response(),
+    }
 }
 
 // --- API Handlers ---
@@ -454,7 +526,6 @@ async fn send_message(
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
     body: Bytes,
 ) -> Response {
-    use crate::send::SendError;
     if !state.sender.enabled() {
         return sending_off();
     }
@@ -470,17 +541,155 @@ async fn send_message(
     };
     match state.sender.send(request, peer.ip()).await {
         Ok(result) => Json(result).into_response(),
+        Err(e) => refused(e),
+    }
+}
+
+/// A refusal as a response: its status and its reason as text.
+fn refused(e: crate::send::SendError) -> Response {
+    let status = StatusCode::from_u16(e.status()).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
+    (status, e.message()).into_response()
+}
+
+// --- Drafts (#276) ---
+
+/// `GET /api/messages/{id}/draft`: a stored message as draft text, long
+/// values as references (`draft::draft_of`). Part of sending: `403` while it
+/// is off.
+async fn message_draft(State(state): State<AppState>, Path(id): Path<String>) -> Response {
+    if !state.sender.enabled() {
+        return sending_off();
+    }
+    let Some(msg) = state.sender.stored(&id).await else {
+        return (StatusCode::NOT_FOUND, "Message not found").into_response();
+    };
+    match crate::draft::draft_of(&msg) {
+        Ok(draft) => Json(draft).into_response(),
+        Err(e) => refused(e),
+    }
+}
+
+fn is_json(headers: &axum::http::HeaderMap) -> bool {
+    headers
+        .get(axum::http::header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(|v| {
+            v.split(';')
+                .next()
+                .is_some_and(|t| t.trim().eq_ignore_ascii_case("application/json"))
+        })
+}
+
+/// `POST /api/parse`. With `Content-Type: application/json`: the preview of
+/// a draft (`draft::ParseRequest` → `draft::Preview`). With any other body:
+/// a file's bytes, decoded like a received frame (`draft::DecodedFile`).
+async fn parse_draft(
+    State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
+    body: Bytes,
+) -> Response {
+    if !state.sender.enabled() {
+        return sending_off();
+    }
+    if !is_json(&headers) {
+        return Json(crate::draft::decode_file(&body)).into_response();
+    }
+    let request: crate::draft::ParseRequest = match serde_json::from_slice(&body) {
+        Ok(r) => r,
         Err(e) => {
-            let status = match e {
-                SendError::Disabled | SendError::Forbidden(_) => StatusCode::FORBIDDEN,
-                SendError::BadRequest(_) => StatusCode::BAD_REQUEST,
-                SendError::NotFound(_) => StatusCode::NOT_FOUND,
-                SendError::TooLarge(_) => StatusCode::PAYLOAD_TOO_LARGE,
-                SendError::Unprocessable(_) => StatusCode::UNPROCESSABLE_ENTITY,
-                SendError::Busy => StatusCode::TOO_MANY_REQUESTS,
-            };
-            (status, e.message()).into_response()
+            return (
+                StatusCode::BAD_REQUEST,
+                format!("Malformed parse request: {e}"),
+            )
+                .into_response()
         }
+    };
+    drop(body);
+    let based_on = if request.fill_references {
+        match state
+            .sender
+            .based_on(request.based_on.as_deref(), &request.raw)
+            .await
+        {
+            Ok(m) => m,
+            Err(e) => return refused(e),
+        }
+    } else {
+        None
+    };
+    match crate::draft::preview(
+        &request.raw,
+        &request.set,
+        based_on.as_deref(),
+        request.fill_references,
+    ) {
+        Ok(preview) => Json(preview).into_response(),
+        Err(e) => refused(e),
+    }
+}
+
+/// `POST /api/build`.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct BuildRequest {
+    raw: String,
+    #[serde(default)]
+    charset: Option<String>,
+    #[serde(default)]
+    based_on: Option<String>,
+    #[serde(default)]
+    set: std::collections::BTreeMap<String, String>,
+}
+
+/// `POST /api/build`: *Save as file* — the bytes `POST /api/send` would
+/// write for this draft, MLLP-framed like the export, as a download. A
+/// browser writes text as UTF-8 only, so a Latin-1 draft is built here.
+async fn build_draft(State(state): State<AppState>, body: Bytes) -> Response {
+    if !state.sender.enabled() {
+        return sending_off();
+    }
+    let request: BuildRequest = match serde_json::from_slice(&body) {
+        Ok(r) => r,
+        Err(e) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                format!("Malformed build request: {e}"),
+            )
+                .into_response()
+        }
+    };
+    drop(body);
+    let built = async {
+        let (text, _) = crate::draft::apply_set(&request.raw, &request.set)?;
+        let based_on = state
+            .sender
+            .based_on(request.based_on.as_deref(), &text)
+            .await?;
+        crate::draft::build_payload(
+            &text,
+            request.charset.as_deref(),
+            based_on.as_deref(),
+            1,
+            state.sender.max_message_bytes(),
+        )
+    }
+    .await;
+    match built {
+        Ok(bytes) => (
+            [
+                (
+                    axum::http::header::CONTENT_TYPE,
+                    HeaderValue::from_static("application/octet-stream"),
+                ),
+                (
+                    axum::http::header::CONTENT_DISPOSITION,
+                    HeaderValue::from_static("attachment; filename=\"harux-draft.hl7\""),
+                ),
+            ],
+            crate::draft::framed(&bytes),
+        )
+            .into_response(),
+        Err(e) => refused(e),
     }
 }
 

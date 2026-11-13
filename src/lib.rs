@@ -1,5 +1,6 @@
 pub mod config;
 pub mod dictionary;
+pub mod draft;
 pub mod hl7;
 pub mod logging;
 pub mod mllp;

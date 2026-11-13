@@ -136,7 +136,7 @@ This document tracks all milestones and planned features. Each milestone lists i
   - [x] M4-3 Resend in the UI: a target list for every user, one-click resend, direction filter (#274)
   - [x] M4-4 Changes on resend: new control ID, current time, field overrides (#275)
 - [ ] **Message editor** — edit raw HL7 in the UI and send
-  - [ ] M4-5 Drafts on the server: preview, field write-back, building the bytes
+  - [x] M4-5 Drafts on the server: preview, field write-back, building the bytes (#276)
   - [ ] M4-6 Drafts in the UI: write or edit a message in the detail panel and send it, validated live
   - [ ] M4-7 Edit a draft field by field
 - [ ] **Test message generator** — templates for common types (ADT^A01, ORM^O01, ORU^R01) with editable fields

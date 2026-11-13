@@ -163,7 +163,7 @@ pub fn declared_charset(bytes: &[u8]) -> Option<String> {
 /// charsets we can't decode an MLLP payload with: unknown labels, and UTF-16
 /// or UTF-32, whose bytes couldn't have been framed and read as an ASCII MSH
 /// header in the first place.
-fn encoding_for(charset: &str) -> Option<&'static Encoding> {
+pub fn encoding_for(charset: &str) -> Option<&'static Encoding> {
     let upper = charset.trim().to_ascii_uppercase();
     // HL7 table 0211 names that aren't WHATWG labels.
     let label: &str = match upper.as_str() {
@@ -224,6 +224,12 @@ pub fn encode_for_send(
         WireForm::Utf8 if original_is_ascii => declared.and_then(encoding_for).unwrap_or(UTF_8),
         WireForm::Utf8 => UTF_8,
     };
+    encode_strict(text, encoding)
+}
+
+/// `text` in `encoding`. A character the encoding cannot write is an error
+/// that names it — never a silent `?` or `&#252;` (#275, #276).
+pub fn encode_strict(text: &str, encoding: &'static Encoding) -> Result<Vec<u8>, String> {
     if encoding == UTF_8 {
         return Ok(text.as_bytes().to_vec());
     }
