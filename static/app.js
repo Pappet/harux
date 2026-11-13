@@ -329,6 +329,15 @@ function handleInteraction(e) {
         closeSendMenu();
     }
 
+    // A click outside the Watch menu closes it (#282). The Watch menu and the
+    // Resend filtered menu share #run-menu-host and would overlap: they are
+    // never open together, because opening one is a click outside the other
+    // (and toggleWatchMenu closes the send menu) — keep it that way.
+    if (state.watchMenuOpen && e.type === 'click' && e.target.closest
+        && !e.target.closest('#watch-menu') && !e.target.closest('#btn-watch')) {
+        toggleWatchMenu(false);
+    }
+
     // A click outside the New message menu closes it (#277).
     if (state.newMenuOpen && e.type === 'click' && e.target.closest
         && !e.target.closest('#new-message')) {
@@ -354,6 +363,7 @@ function handleInteraction(e) {
         if (action === 'diff-pin') { toggleDiffPin(id, e); return; }
         if (action === 'trace-control') { traceControlId(actionEl.dataset.value); return; }
         if (handleSendAction(action, actionEl)) return;
+        if (handleWatchAction(action, actionEl)) return;
         if (handleComposeAction(action, actionEl)) return;
     }
 
@@ -433,6 +443,11 @@ document.addEventListener('keydown', (e) => {
         toggleNewMenu(false);
         return;
     }
+    if (state.watchMenuOpen && e.key === 'Escape') {
+        e.preventDefault();
+        toggleWatchMenu(false);
+        return;
+    }
     if (e.key === 'Enter' && activeEl.closest && activeEl.closest('.target-form') && activeEl.tagName === 'INPUT') {
         e.preventDefault();
         saveTargetForm();
@@ -499,6 +514,7 @@ document.addEventListener('keydown', (e) => {
 // Sending (#274): the user's targets from this browser, and whether the
 // server sends at all (nothing new is shown while it doesn't).
 loadTargets();
+initWatch(); // #282
 // Drafts (#277) of this tab and the ones kept on this computer; shown once
 // /api/send/config says sending is on.
 loadDrafts();

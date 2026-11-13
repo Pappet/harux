@@ -94,6 +94,13 @@ const state = {
     targetStorageWarned: false,
     directionFilter: 0,   // 0: In + Out, 1: Received, 2: Sent
     run: null,            // the run this browser follows (#280): { id, what, status, … }
+    watch: null,          // the watched filter (#282): { query, direction, validation, since }
+    watchPrefs: { sound: false, desktop: false },
+    watchCount: 0,        // matching messages while the tab was in the background
+    watchLastSound: 0,
+    watchLastNotify: 0,
+    watchBaseTitle: '',
+    watchMenuOpen: false,
 
     // Drafts (#277, compose.js): text kept in this browser tab
     // (sessionStorage; "Keep on this computer" moves one to localStorage).
