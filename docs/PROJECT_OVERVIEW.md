@@ -160,7 +160,7 @@ Key behaviors:
 - Fields show their dictionary description inline as a `.desc-text` sub-line
 - Segment diff: `diffPinnedMessage` state stores a full message fetched via `/api/messages/{id}`; `renderDiffTab()` pairs segments by name and occurrence (the n-th OBX with the n-th OBX; a segment only one side has shows as added or removed) and builds a field-level two-column table with red/green highlighting (`table-layout: fixed`); optional `diffIgnoreDynamic` toggle hides MSH-7 and MSH-10 rows and shows a count of hidden fields in the summary
 - Detail header is a layered structure: type chip + human title on row 1 (with **Resend → target** on the right while sending is on), optional description on row 2, monospace metadata row (`patient · MRN · control · v · received`) on row 3 — the control ID filters the list by it —, and a tools row with tags, Bookmark and Pin diff.
-- **Resend** (while sending is on): every user keeps a target list of their own in the browser (name, host, port, TLS, *ask before sending*), with *This Harux* always in it, and can save it to a file and load it. One click resends to the target used last; the menu lists the targets with the last result this browser saw. A sent message shows up as a row from the WebSocket like any other. A direction filter (In + Out → Received → Sent) and an `out` pill in the header (every send attempt) appear with sending. Trace by control ID shows one exchange as the original, the sent copy and what the target made of it; once a resend can take a new control ID (M4-4) it isolates one send.
+- **Resend** (while sending is on): every user keeps a target list of their own in the browser (name, host, port, TLS, *ask before sending*), with *This Harux* always in it, and can save it to a file and load it. One click resends to the target used last; the menu lists the targets with the last result this browser saw. A sent message shows up as a row from the WebSocket like any other. A direction filter (In + Out → Received → Sent) and an `out` pill in the header (every send attempt) appear with sending. The menu also chooses how a resend goes out — *as received* (byte for byte), *with a new control ID* (MSH-10) or *with a new control ID and the current time* (MSH-10, MSH-7) — remembered per browser; a sent message's description names the fields that were changed. Trace by control ID then isolates one send: the sent message and what the target made of it.
 - Full keyboard accessibility: list rows, custom interactive elements, and source chips are navigable via `Tab` and actable via `Enter`/`Space`.
 
 ---
@@ -212,7 +212,7 @@ Built-in defaults → `harux.toml` (next to the binary, then the working directo
 | `GET` | `/api/stats` | Live server stats: message counts, store bytes and limit, parse errors, connections, `sending_enabled`, `sent` (accepted, `AA`/`CA`), `send_rejected` (any other MSA code), `send_failed` (no usable answer), `active_runs` |
 | `GET` | `/api/export?direction=in` | Every stored received message as one MLLP-framed `harux-export.hl7`, byte for byte as received, oldest first (streamed); `direction=out` the sent ones, `all` both |
 | `GET` | `/api/send/config` | Whether sending is on, the loopback target, the destination and run limits, whether unverified TLS may be chosen and a client certificate is set (`403` while sending is off) |
-| `POST` | `/api/send` | Resend one stored message unchanged (below); `403` while sending is off |
+| `POST` | `/api/send` | Resend one stored message, unchanged or with field overrides (below); `403` while sending is off |
 | `POST` | `/api/clear` | Delete all messages from store |
 | `POST` | `/api/messages/{id}/bookmark` | Toggle bookmark on a message |
 | `POST` | `/api/messages/{id}/tags` | Add a tag to a message |
@@ -226,12 +226,15 @@ Built-in defaults → `harux.toml` (next to the binary, then the working directo
   "target": { "name": "orchestra-test", "host": "orchestra-test.klinik.local", "port": 6661,
               "tls": true, "verify": true },                       // or "loopback"
   "items": [{ "message_id": "…" }],   // exactly one stored message
+  "set": { "MSH-10": "{{id}}", "MSH-7": "{{now}}" },  // optional field overrides
   "await_response": true,             // false: do not wait for an answer
   "allow_invalid": false              // resend a message that did not parse
 }
 ```
 
-Answers `200` with `{ "id": "<sent message>", "delivery": { "state", "ack_code", "response", "latency_ms", "error", "control_id_matches", … } }` once the exchange ended — a refused connection or a NACK is a `200` too: the request worked, the send did not. Refusals: `400` malformed request, host or target (unknown fields such as `set` are refused) · `403` sending off, destination outside `send.allowed_destinations`, `verify: false` without `send.tls.allow_unverified` · `404` unknown message · `413` message too large · `422` a cut-off entry, or a message that did not parse without `allow_invalid` · `429` too many sends at once.
+Answers `200` with `{ "id": "<sent message>", "delivery": { "state", "ack_code", "response", "latency_ms", "error", "control_id_matches", … } }` once the exchange ended — a refused connection or a NACK is a `200` too: the request worked, the send did not. Refusals: `400` malformed request, host or target (unknown fields such as `repeat` are refused; an override path that isn't `SEG-n` / `SEG[k]-n` with a field from 1 — 3 for MSH — to 1000) · `403` sending off, destination outside `send.allowed_destinations`, `verify: false` without `send.tls.allow_unverified` · `404` unknown message · `413` message too large · `422` a cut-off entry, a message that did not parse without `allow_invalid` (with overrides: at all), an override value with the field separator, `CR`, `LF` or an MLLP frame byte, a missing segment, a character the message's encoding cannot write, a message whose bytes were kept as received (`WireForm::Original`) with overrides · `429` too many sends at once.
+
+**Overrides** (`set`, #275) are written by `src/hl7/compose.rs`, the one place that writes a field into a message: only that field's text changes — the line ends, the final terminator and every other byte stay; a missing field is created with separators. Values are the field's raw text (components, repetitions and escapes allowed) and may use the placeholders `{{now}}` (local time `YYYYMMDDHHMMSS`), `{{today}}`, `{{id}}` (a new 20-character control ID, as ACKs get), `{{n}}` (position in the run) and `{{rand:N}}` (N random digits); anything else in double braces is sent as written. A changed message is sent in the encoding the original arrived in — a pure-ASCII original in the charset its MSH-18 declares — then decoded and parsed like a received frame, and records the changed fields (`outbound.origin.changes`).
 
 ### WebSocket Events
 

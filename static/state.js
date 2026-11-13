@@ -86,6 +86,7 @@ const state = {
     targets: [],          // the user's own targets (send.js, localStorage)
     targetResults: {},    // last result per target id, this browser only
     lastTargetId: null,   // the one-click Resend target
+    sendAs: 'unchanged',  // how Resend sends (#275): see SEND_AS in send.js
     sendMenu: null,       // { pickedId, form } while the Resend menu is open
     sending: false,
     targetStorageWarned: false,

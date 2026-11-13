@@ -198,6 +198,7 @@ fn sent_message_and_its_metadata_are_accounted() {
         transport: Transport::Plain,
         origin: Origin::Resend {
             message_id: "0b9e8f9c-4d2e-4f3a-9c1b-2a7d5e6f8a90".to_string(),
+            changes: vec!["MSH-10".to_string(), "MSH-7".to_string()],
         },
         requested_by: "10.0.0.7".to_string(),
         run: "6c1f0e2d-3b4a-4c5d-8e9f-0a1b2c3d4e5f".to_string(),

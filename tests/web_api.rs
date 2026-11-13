@@ -1064,8 +1064,25 @@ async fn send_refusals_have_their_status_codes() {
             StatusCode::BAD_REQUEST,
         ),
         (
-            r#"{"target":"loopback","items":[{"message_id":"m1"}],"set":{"MSH-10":"x"}}"#,
+            r#"{"target":"loopback","items":[{"message_id":"m1"}],"repeat":2}"#,
             StatusCode::BAD_REQUEST,
+        ),
+        // #275: overrides are checked before anything is stored.
+        (
+            r#"{"target":{"host":"orchestra.local","port":6000},"items":[{"message_id":"m1"}],"set":{"MSH-2":"x"}}"#,
+            StatusCode::BAD_REQUEST,
+        ),
+        (
+            r#"{"target":{"host":"orchestra.local","port":6000},"items":[{"message_id":"m1"}],"set":{"PID-5":"a|b"}}"#,
+            StatusCode::UNPROCESSABLE_ENTITY,
+        ),
+        (
+            r#"{"target":{"host":"orchestra.local","port":6000},"items":[{"message_id":"m1"}],"set":{"MSH-10":"x\u001c"}}"#,
+            StatusCode::UNPROCESSABLE_ENTITY,
+        ),
+        (
+            r#"{"target":{"host":"orchestra.local","port":6000},"items":[{"message_id":"m1"}],"set":{"PV1-2":"I"}}"#,
+            StatusCode::UNPROCESSABLE_ENTITY,
         ),
         (
             r#"{"target":{"host":"bad host","port":6000},"items":[{"message_id":"m1"}]}"#,

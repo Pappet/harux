@@ -275,3 +275,32 @@ test('results of removed targets are forgotten', () => {
     assert.deepEqual(Object.keys(state.targetResults), ['loopback']);
     assert.ok(!storage.data.get('harux_target_results').includes(a.id));
 });
+
+// --- Send as (#275) ---
+
+test('send as: the way is part of the request and remembered', async () => {
+    const { ctx, state, requests, storage } = setup();
+    state.selectedMessage = msg;
+    ctx.updateSendButtons = () => {};
+    ctx.chooseSendAs('new_id_time');
+    await ctx.resendMessage(msg, ctx.loopbackTarget());
+    assert.deepEqual(JSON.parse(requests[0].opts.body).set, { 'MSH-10': '{{id}}', 'MSH-7': '{{now}}' });
+
+    const again = setup({ storage });
+    again.ctx.loadTargets();
+    assert.equal(again.state.sendAs, 'new_id_time', 'remembered across a reload');
+
+    ctx.chooseSendAs('unchanged');
+    await ctx.resendMessage(msg, ctx.loopbackTarget());
+    assert.equal(JSON.parse(requests[1].opts.body).set, undefined, 'as received: no `set` at all');
+    ctx.chooseSendAs('nonsense');
+    assert.equal(state.sendAs, 'unchanged');
+});
+
+test('send as: a message that did not parse goes out only as received', async () => {
+    const { ctx, state, requests, toasts } = setup();
+    state.sendAs = 'new_id';
+    assert.equal(await ctx.resendMessage({ id: 'bad', parse_error: 'x' }, ctx.loopbackTarget()), false);
+    assert.equal(requests.length, 0);
+    assert.match(toasts[0][0], /only be resent as received/);
+});

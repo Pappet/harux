@@ -382,6 +382,12 @@ fn cut_text(text: &str, max: usize) -> Cow<'_, str> {
     }
 }
 
+/// A fresh 20-character message control ID (MSH-10): what every ACK gets,
+/// and the `{{id}}` placeholder of a send (#275) — one definition for both.
+pub fn new_control_id() -> String {
+    uuid::Uuid::new_v4().simple().to_string()[..20].to_string()
+}
+
 /// Render an [`AckSpec`] as `MSH…\rMSA…[\rERR…]`. Every ACK/NACK gets a
 /// fresh 20-character MSH-10 control ID.
 fn render_ack(spec: &AckSpec) -> String {
@@ -395,7 +401,7 @@ fn render_ack(spec: &AckSpec) -> String {
     let processing_id = non_empty_or(spec.processing_id, "P");
     let version = non_empty_or(spec.version, DEFAULT_ACK_VERSION);
     let acknowledged_control_id = non_empty_or(spec.acknowledged_control_id, "UNKNOWN");
-    let control_id = &uuid::Uuid::new_v4().simple().to_string()[..20];
+    let control_id = new_control_id();
     let now = chrono::Utc::now().format("%Y%m%d%H%M%S");
     // MSH-13..17 empty, MSH-18 the charset the reply is written in.
     let msh18 = match spec.charset.filter(|c| !c.is_empty()) {
