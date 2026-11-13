@@ -160,14 +160,13 @@ async function clearMessages() {
         state.totalBookmarkCount = 0;
         state.rateWindow.length = 0;
         state.lastMessageReceivedAt = null;
-        state.selectedId = null;
+        state.selectedId = null; // an open draft stays open (#277)
         state.selectedMessage = null;
         renderMessageList();
         renderSourceLegend();
         renderHealthPills();
         updateHeaderCounters();
-        resetDetailHeader();
-        document.getElementById('detail-content').innerHTML = DETAIL_EMPTY_HTML;
+        showDetailAfterStoreChange();
     } catch (e) {
         console.error('Failed to clear messages:', e);
     }
@@ -328,6 +327,12 @@ function handleInteraction(e) {
         closeSendMenu();
     }
 
+    // A click outside the New message menu closes it (#277).
+    if (state.newMenuOpen && e.type === 'click' && e.target.closest
+        && !e.target.closest('#new-message')) {
+        toggleNewMenu(false);
+    }
+
     // data-action delegation (replaces inline onclick= handlers)
     const actionEl = e.target.closest('[data-action]');
     if (actionEl) {
@@ -347,6 +352,7 @@ function handleInteraction(e) {
         if (action === 'diff-pin') { toggleDiffPin(id, e); return; }
         if (action === 'trace-control') { traceControlId(actionEl.dataset.value); return; }
         if (handleSendAction(action, actionEl)) return;
+        if (handleComposeAction(action, actionEl)) return;
     }
 
     const segEl = e.target.closest('.segment-name');
@@ -375,6 +381,7 @@ document.getElementById('btn-validation').addEventListener('click', toggleValida
 document.getElementById('btn-direction').addEventListener('click', toggleDirectionFilter);
 document.getElementById('btn-copy-cli').addEventListener('click', function () { copyCliSnippet(this); });
 document.getElementById('btn-clear-filters').addEventListener('click', clearFilters);
+document.getElementById('btn-new-message').addEventListener('click', () => toggleNewMenu());
 
 // Tab buttons — delegate on the container via data-tab attribute.
 document.querySelector('.detail-tabs').addEventListener('click', (e) => {
@@ -387,6 +394,7 @@ document.addEventListener('change', (e) => {
     const action = e.target.dataset.action;
     if (action === 'color-by-port') toggleColorByPort(e);
     if (action === 'diff-ignore-dynamic') toggleDiffIgnoreDynamic(e);
+    if (e.target.id === 'draft-charset') setDraftCharset(e.target.value); // #277
 });
 
 // Search is purely client-side (filters the local `messages` array via matchesSearch).
@@ -407,11 +415,19 @@ document.addEventListener('keydown', (e) => {
     const activeEl = document.activeElement;
     if (!activeEl) return;
 
+    // Ctrl/Cmd+Enter sends the open draft (#277).
+    if (handleDraftKeydown(e)) return;
+
     // Escape closes the Resend menu; Enter in its form saves the target.
     // Typing in the form's inputs is left alone (they carry no data-action).
     if (state.sendMenu && e.key === 'Escape') {
         e.preventDefault();
         closeSendMenu();
+        return;
+    }
+    if (state.newMenuOpen && e.key === 'Escape') {
+        e.preventDefault();
+        toggleNewMenu(false);
         return;
     }
     if (e.key === 'Enter' && activeEl.closest && activeEl.closest('.target-form') && activeEl.tagName === 'INPUT') {
@@ -426,6 +442,10 @@ document.addEventListener('keydown', (e) => {
         addTag(activeEl.dataset.id, activeEl.value);
         return;
     }
+
+    // Text entry (a draft's text, its encoding, any input) keeps its keys:
+    // a space typed into a draft must not activate anything (#277).
+    if (isTextEntry(activeEl)) return;
 
     if (e.key === 'Enter' || e.key === ' ') {
         // Activate data-action elements with keyboard (toggle-source, remove-tag, etc.)
@@ -476,6 +496,9 @@ document.addEventListener('keydown', (e) => {
 // Sending (#274): the user's targets from this browser, and whether the
 // server sends at all (nothing new is shown while it doesn't).
 loadTargets();
+// Drafts (#277) of this tab and the ones kept on this computer; shown once
+// /api/send/config says sending is on.
+loadDrafts();
 loadSendConfig();
 
 initSplitter();

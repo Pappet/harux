@@ -235,6 +235,7 @@ function applySendingUi() {
     if (dirBtn) dirBtn.classList.toggle('hidden', !state.sendConfig && state.directionFilter === 0);
     if (!state.sendConfig) closeSendMenu();
     if (state.selectedMessage) renderDetail();
+    if (typeof applyDraftsUi === 'function') applyDraftsUi(); // #277
 }
 
 // Send `msg` to `target`: asks first for a target marked *ask before
@@ -314,12 +315,17 @@ function sendActionsHtml(msg) {
     // and resendMessage ignores clicks while a send is under way anyway.
     const busy = state.sending ? ' aria-disabled="true"' : '';
     const open = state.sendMenu ? 'true' : 'false';
+    // *Edit* (#277) opens the message as a draft.
     return `<span class="split-btn" id="send-split">
         <button class="ctl-btn" data-action="resend"${busy} title="${target ? `Send this message again to ${escAttr(target.name)}, ${escAttr(how)}` : 'Choose a target'}">${ICONS.resend}<span class="btn-label">Resend</span>${to}</button><button class="ctl-btn caret" data-action="resend-menu" aria-haspopup="dialog" aria-expanded="${open}" aria-label="Choose target" title="Choose target">${ICONS.chevronDown}</button>
-    </span>`;
+    </span><button class="ctl-btn" data-action="draft-edit" data-id="${escAttr(msg.id)}" title="Open this message as a draft to change and send it">${ICONS.edit}<span class="btn-label">Edit</span></button>`;
 }
 
 function updateSendButtons() {
+    if (typeof isDraftOpen === 'function' && isDraftOpen()) {
+        updateDraftActions(); // #277: the draft's target button
+        return;
+    }
     const split = document.getElementById('send-split');
     if (!split || !state.selectedMessage) return;
     // Keep keyboard focus on the button that had it (#286 review).
@@ -338,10 +344,14 @@ function updateSendButtons() {
 
 // --- The menu ---
 
+// The menu also picks the target of an open draft (#277); then it has no
+// "Send as" (a draft is sent as written) and its Send sends the draft.
 function openSendMenu() {
-    if (!canResend(state.selectedMessage)) return;
-    const picked = findTarget(state.lastTargetId) || allTargets()[0] || null;
+    const draft = typeof openDraftObject === 'function' ? openDraftObject() : null;
+    if (draft ? !state.sendConfig : !canResend(state.selectedMessage)) return;
+    const picked = (draft && draftTarget(draft)) || findTarget(state.lastTargetId) || allTargets()[0] || null;
     state.sendMenu = {
+        forDraft: draft ? draft.id : null,
         pickedId: picked ? picked.id : null,
         // No target at all (not even This Harux): start with the form.
         form: allTargets().length === 0 ? emptyTargetForm() : null,
@@ -428,6 +438,8 @@ function renderSendMenu() {
         menu.setAttribute('aria-label', 'Resend this message');
         header.appendChild(menu);
     }
+    const forDraft = !!m.forDraft;
+    menu.setAttribute('aria-label', forDraft ? 'Target of this draft' : 'Resend this message');
     menu.innerHTML = `
         <h4>My targets <span class="h4-actions">
             <button class="link-btn" data-action="target-add">Add</button> ·
@@ -437,10 +449,10 @@ function renderSendMenu() {
         <div class="target-list" role="radiogroup" aria-label="Targets">${options || '<div class="target-empty">No targets yet</div>'}</div>
         ${m.form ? targetFormHtml(m.form) : ''}
         <hr>
-        <h4>Send as</h4>
-        <div class="send-as" role="radiogroup" aria-label="Send as">${sendAsHtml()}</div>
+        ${forDraft ? '' : `<h4>Send as</h4>
+        <div class="send-as" role="radiogroup" aria-label="Send as">${sendAsHtml()}</div>`}
         <div class="foot">
-            <span class="hint">Target and way are remembered for the next one-click resend.</span>
+            <span class="hint">${forDraft ? 'The draft is sent as written, placeholders filled in.' : 'Target and way are remembered for the next one-click resend.'}</span>
             <button class="ctl-btn on send-btn" data-action="send-picked"${picked && !state.sending ? '' : ' disabled'}>${ICONS.resend}<span class="btn-label">Send</span></button>
         </div>`;
     if (m.form) {
@@ -536,11 +548,24 @@ function toggleTargetFlag(flag) {
 function pickTarget(id) {
     if (!state.sendMenu || !findTarget(id)) return;
     state.sendMenu.pickedId = id;
+    // A draft remembers its target (#277).
+    const draft = state.sendMenu.forDraft && findDraft(state.sendMenu.forDraft);
+    if (draft) {
+        draft.targetId = id;
+        saveDrafts();
+        renderDraftHeader();
+    }
     renderSendMenu();
 }
 
 async function sendPicked() {
     const target = state.sendMenu && findTarget(state.sendMenu.pickedId);
+    const draft = state.sendMenu && state.sendMenu.forDraft && findDraft(state.sendMenu.forDraft);
+    if (draft) {
+        if (await sendDraft(draft, target)) closeSendMenu();
+        else if (state.sendMenu) renderSendMenu();
+        return;
+    }
     const msg = state.selectedMessage;
     if (!target || !msg) return;
     if (await resendMessage(msg, target)) closeSendMenu();

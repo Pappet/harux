@@ -690,9 +690,15 @@ function matchesSearch(msg, parsedQuery) {
 
 async function selectMessage(id) {
     const prevId = state.selectedId;
-    if (prevId !== id && typeof closeSendMenu === 'function') closeSendMenu();
+    const leavingDraft = !!state.selectedDraftId;
+    if ((prevId !== id || leavingDraft) && typeof closeSendMenu === 'function') closeSendMenu();
     state.selectedId = id;
     updateRowSelection(prevId, id);
+    if (leavingDraft) {
+        // A draft was open (#277): it stays in the rail, its view goes.
+        state.draftPreview = null;
+        if (typeof renderDraftRail === 'function') renderDraftRail();
+    }
     saveSession();
 
     // Last click wins (#183): clicking A then B quickly must not let A's
@@ -741,6 +747,7 @@ function resetDetailHeader() {
         descEl.classList.add('hidden');
         descEl.textContent = '';
     }
+    resetDetailBadge();
     const dirEl = document.getElementById('detail-direction');
     if (dirEl) dirEl.classList.add('hidden');
     const ackTab = document.getElementById('tab-btn-ack');
@@ -754,6 +761,19 @@ function resetDetailHeader() {
     if (typeof closeSendMenu === 'function') closeSendMenu();
     const segBadge = document.getElementById('tab-segments-badge');
     if (segBadge) segBadge.classList.add('hidden');
+}
+
+// The badge says SENT for a message and DRAFT for a draft (#277); the JSON
+// tab exists for messages only.
+function resetDetailBadge() {
+    const dirEl = document.getElementById('detail-direction');
+    if (dirEl) {
+        dirEl.textContent = 'SENT';
+        dirEl.title = 'A message Harux sent';
+        dirEl.classList.remove('draft');
+    }
+    const jsonTab = document.getElementById('tab-btn-json');
+    if (jsonTab) jsonTab.classList.remove('hidden');
 }
 
 function buildDetailMeta(msg) {
@@ -817,6 +837,7 @@ function renderDetail() {
     // went, where it came from and who asked for it, and the ACK tab shows
     // the destination's response.
     const outbound = msg.direction === 'out';
+    resetDetailBadge();
     const dirEl = document.getElementById('detail-direction');
     if (dirEl) dirEl.classList.toggle('hidden', !outbound);
     const ackTab = document.getElementById('tab-btn-ack');
@@ -1396,6 +1417,11 @@ function renderJsonTab(content, msg) {
 
 function renderTab() {
     const content = document.getElementById('detail-content');
+    // An open draft has tabs of its own (compose.js, #277).
+    if (state.selectedDraftId && typeof renderDraftTab === 'function') {
+        renderDraftTab(content);
+        return;
+    }
     if (!state.selectedMessage) return;
     const msg = state.selectedMessage;
 

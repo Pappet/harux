@@ -142,6 +142,7 @@ Plain files, all embedded into the binary at compile time via `rust-embed`. The 
 - `render.js` — message list, health pills, detail-panel tabs
 - `diff.js` — the Diff tab
 - `send.js` — Resend: the user's own target list (browser storage, file), the split button and its menu
+- `compose.js` — drafts: the drafts rail, a draft in the detail panel, *Edit* and *New message*, the preview and the send
 - `app.js` — initialisation, UI handlers (`data-action` delegation) and the splitter
 
 The Content-Security-Policy forbids inline scripts, styles and event handlers.
@@ -161,6 +162,7 @@ Key behaviors:
 - Segment diff: `diffPinnedMessage` state stores a full message fetched via `/api/messages/{id}`; `renderDiffTab()` pairs segments by name and occurrence (the n-th OBX with the n-th OBX; a segment only one side has shows as added or removed) and builds a field-level two-column table with red/green highlighting (`table-layout: fixed`); optional `diffIgnoreDynamic` toggle hides MSH-7 and MSH-10 rows and shows a count of hidden fields in the summary
 - Detail header is a layered structure: type chip + human title on row 1 (with **Resend → target** on the right while sending is on), optional description on row 2, monospace metadata row (`patient · MRN · control · v · received`) on row 3 — the control ID filters the list by it —, and a tools row with tags, Bookmark and Pin diff.
 - **Resend** (while sending is on): every user keeps a target list of their own in the browser (name, host, port, TLS, *ask before sending*), with *This Harux* always in it, and can save it to a file and load it. One click resends to the target used last; the menu lists the targets with the last result this browser saw. A sent message shows up as a row from the WebSocket like any other. A direction filter (In + Out → Received → Sent) and an `out` pill in the header (every send attempt) appear with sending. The menu also chooses how a resend goes out — *as received* (byte for byte), *with a new control ID* (MSH-10) or *with a new control ID and the current time* (MSH-10, MSH-7) — remembered per browser; a sent message's description names the fields that were changed. Trace by control ID then isolates one send: the sent message and what the target made of it.
+- **Drafts** (while sending is on, #277): **Edit** on a stored message and **New message** (blank, clipboard, file) open a draft in the detail panel — `DRAFT` badge, target button and **Send** (`Ctrl+Enter`); a Raw tab to type in, with the field under the cursor named below it; a Segments preview with live validation; the draft's sends in the Response tab; Diff vs pinned. A long value of the original stays on the server as a reference. Drafts live in the browser tab (kept on the computer only on request) and survive a reload and *Clear*; a rail under the sources lists them.
 - Full keyboard accessibility: list rows, custom interactive elements, and source chips are navigable via `Tab` and actable via `Enter`/`Space`.
 
 ---

@@ -22,9 +22,10 @@ Orchestra (a healthcare integration platform) for development and debugging.
 MDM messages with Base64-encoded attachments are common daily traffic.
 
 **Scope today:** receive and inspect, plus — off by default — resending a
-stored message unchanged, over plain MLLP or TLS (Milestone 4, M4-1 and
-M4-2). The rest of Milestone 4 (editing, templates, runs) and persistence
-(Milestone 5) are planned —
+stored message (unchanged or with fields changed), over plain MLLP or TLS,
+and writing or editing a message as a draft and sending it (Milestone 4,
+M4-1 … M4-6). The rest of Milestone 4 (field editing, templates, runs) and
+persistence (Milestone 5) are planned —
 see the roadmap and `docs/MILESTONE_4_PLAN.md`. Do not implement roadmap
 features unless explicitly asked.
 
@@ -182,7 +183,7 @@ Off unless `send.enabled = true` (#272): every send route answers `403` and the 
 
 ### Frontend (`static/`)
 
-The SPA is split across HTML, CSS, and several JS files (see the full tree in **Source Layout** below), all embedded into the binary at compile time via `rust-embed`. The JS files are plain `<script>` includes with **no module system** — they share a single global `state` object (`state.js`) and must be loaded in dependency order (`state` → `util` → `ws` → `render` → `diff` → `send` → `app`).
+The SPA is split across HTML, CSS, and several JS files (see the full tree in **Source Layout** below), all embedded into the binary at compile time via `rust-embed`. The JS files are plain `<script>` includes with **no module system** — they share a single global `state` object (`state.js`) and must be loaded in dependency order (`state` → `util` → `ws` → `render` → `diff` → `send` → `compose` → `app`).
 
 **Important:** After any change to `static/`, a recompile is required — `rust-embed` bakes the files in at build time. There is no hot-reload.
 
@@ -201,6 +202,7 @@ Key frontend behaviors:
 - **Long values are previewed (#215):** field values, component leaves, raw lines and JSON strings above `DISPLAY_VALUE_MAX` (2000) characters show their first 1000 plus a size note (`previewText`, `truncationNote` in `util.js`). Code that needs a value must read it from the message data, never from the DOM: the field copy handler uses `fullFieldValues`, "Copy All" uses `state.selectedMessage.raw`
 - Parse errors are shown with `⚠ PARSE ERROR` in red (`var(--error)`) in the message list
 - **Resend (#274, `static/send.js`):** only while `/api/send/config` answers (sending on). Every user keeps **their own target list** in `localStorage` (`harux_targets`; no patient data), plus *This Harux* from the config, never stored; save to / load from a file. Storage that fails is never fatal — the list lasts for the session and one toast says so. The split button **Resend → target** in the title row sends to the target used last (`harux_last_target`); the first use opens the menu. A target marked *ask before sending* asks with `confirm` every time; a message that did not parse needs a second `confirm` (`allow_invalid`). The answer is only reported (toast, last result per target): **the sent row comes from the WebSocket only** — never add it from the response. Tags/Bookmark/Pin diff live in the tools row (`#detail-tools`) below the meta row. Direction filter `state.directionFilter` (In + Out → Received → Sent; `canPrependOnly` knows it), `out` pill (every send attempt, from `/api/stats`), origin link, and trace by control ID (meta row). *Send as* (`state.sendAs`, `harux_send_as`): as received, new control ID, new control ID + current time — sent as `set`; a message that did not parse only as received. IDs come from `newId()` (`util.js`) — never call `crypto.randomUUID` directly: it is missing on plain HTTP, the usual deployment. Covered by `tests/js/send.test.mjs`
+- **Drafts (#277, `static/compose.js`):** only while sending is on. **One selection:** `state.selection` is `{kind: 'message' | 'draft', id}`; `state.selectedId` is a getter/setter view of its message part, so `selectedId = null` (what `cleared`, `evicted` and a failed fetch do) never closes an open draft — `showDetailAfterStoreChange()` (`ws.js`) redraws a draft instead of emptying the panel. `state.selectedMessage` is null while a draft is open; `renderTab` hands the open draft to `renderDraftTab`. A draft is text in the tab (`sessionStorage` `harux_drafts`; *keep* → `localStorage` `harux_drafts_kept`; storage that fails toasts once and keeps them in memory), with LF line ends as a `<textarea>` keeps them. Everything HL7 is the server's (#276): preview `POST /api/parse` 300 ms after the last change (`state.draftPreviewSeq`: last wins; the Raw tab is never re-rendered by a preview — only its status line, so the cursor stays), the file `POST /api/parse` with the bytes, *Save as file* `POST /api/build`, the send a draft item in `POST /api/send`. The status line looks the cursor's UTF-16 offset up in the preview's positions (`fieldAt`), never splits the text itself. *Send anyway* arms on the first click for text that does not parse. The target menu of `send.js` also serves a draft (`sendMenu.forDraft`: no *Send as*). Keyboard: `isTextEntry()` leaves Enter/Space to text entry; `Ctrl/Cmd+Enter` sends the open draft. The sent row still comes from the WebSocket only. Covered by `tests/js/compose.test.mjs`
 
 ## Critical Knowledge — Read Before Changing Anything
 
@@ -295,6 +297,7 @@ static/
 ├── render.js        # List, legend, health pills, detail-panel tabs
 ├── diff.js          # Diff tab (renderDiffTab + builders)
 ├── send.js          # Resend: the user's target list (localStorage, file), split button and menu (#274)
+├── compose.js       # Drafts: rail, draft header and tabs, preview, Edit / New message, send (#277)
 ├── app.js           # Init + UI handlers (data-action delegation) + splitter
 └── fonts/           # Self-hosted woff2 (Inter, JetBrains Mono)
 tests/
@@ -308,7 +311,7 @@ tests/
 ├── alloc_accounting.rs           # Counting allocator: estimated_bytes() matches the real heap (#226)
 ├── doc_paths.rs                  # Paths named in the docs exist (#246)
 ├── web_api.rs                    # Axum REST/handler integration tests (incl. drafts: MDM reference, Latin-1 round trip, body limits, permits)
-├── js/                           # node:test tests for static/*.js (diff, list load queue, client buffer + counters, row builder, long-value preview, sent rows, resend + target list); fake-dom.mjs is the shared minimal DOM
+├── js/                           # node:test tests for static/*.js (diff, list load queue, client buffer + counters, row builder, long-value preview, sent rows, resend + target list, drafts); fake-dom.mjs is the shared minimal DOM
 ├── benchmark_concurrent_insert.rs # Concurrent store insert benchmark
 ├── messages/                     # .hl7 fixtures (valid / errors / unknown_types)
 ├── test.sh                       # Linux/macOS functional + load test (netcat)

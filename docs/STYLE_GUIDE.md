@@ -176,6 +176,8 @@ The `.detail-header` uses a layered structure:
 - **Row 3:** Monospace metadata string (`patient · MRN · control · version · received`)
 - **Title row, right (`#detail-actions`):** the **Resend → target** split button (#274) while sending is on — the left part sends to the target used last, the caret opens the target menu (`.send-menu`: the user's targets as radio rows with their last result, an add/edit form with toggle switches, Save to file / Load, Send). Empty while sending is off.
 - **Tools row (`#detail-tools`):** tag chips, Add tag input, Bookmark and Pin diff, below the meta row
+- **A draft (#277)** uses the same header: the badge reads `DRAFT` (`.detail-direction.draft`, warning colour, outlined), the title row's right side holds the target button (`.target-btn`, "to *name*", opens the same `.send-menu` without *Send as*) and **Send** with its `kbd.key` hint (`Ctrl ⏎`; *Send anyway* in the warning colour for text that does not parse), the meta row holds the encoding `<select>` (`.draft-charset`), and the tools row *Keep on this computer*, *Save as file*, *Delete*. The JSON tab is hidden for a draft; the ACK tab reads **Response**.
+- **Drafts rail (`#draft-rail`):** under the source rail, only while drafts exist; `.draft-chip` = type (mono, accent) + title + a warning dot for unsent changes + ✕. The Raw tab's editor is a plain `<textarea class="draft-text">` (mono, no wrapping) with `.draft-status` below it; references are dashed violet `.ref-chip`s.
 - In the meta row the control ID is a link (`.meta-link`) that filters the list by it (trace); a sent message's description links its original (`.origin-link`)
 
 ### Validation Badge Colour Semantics

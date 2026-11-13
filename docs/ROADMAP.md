@@ -137,7 +137,7 @@ This document tracks all milestones and planned features. Each milestone lists i
   - [x] M4-4 Changes on resend: new control ID, current time, field overrides (#275)
 - [ ] **Message editor** — edit raw HL7 in the UI and send
   - [x] M4-5 Drafts on the server: preview, field write-back, building the bytes (#276)
-  - [ ] M4-6 Drafts in the UI: write or edit a message in the detail panel and send it, validated live
+  - [x] M4-6 Drafts in the UI: write or edit a message in the detail panel and send it, validated live (#277)
   - [ ] M4-7 Edit a draft field by field
 - [ ] **Test message generator** — templates for common types (ADT^A01, ORM^O01, ORU^R01) with editable fields
   - [ ] M4-8 Built-in templates and a template directory
@@ -152,7 +152,7 @@ This document tracks all milestones and planned features. Each milestone lists i
 
 - [x] A received message can be replayed to a configured target address with a single click
 - [ ] A template can be filled out in the UI, sent, and the response (ACK/NAK) displayed
-- [ ] Raw HL7 can be edited and sent directly
+- [x] Raw HL7 can be edited and sent directly
 - [x] A message can be sent to a target that requires TLS
 - [x] Sending is off until `harux.toml` switches it on, and can be limited to listed destinations; everything Harux sends is visible in the message list with the address that asked for it
 

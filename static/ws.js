@@ -96,12 +96,23 @@ function applyCleared() {
     state.totalBookmarkCount = 0;
     state.rateWindow.length = 0;
     state.lastMessageReceivedAt = null;
-    state.selectedId = null;
+    state.selectedId = null; // never closes an open draft (#277)
     state.selectedMessage = null;
     renderMessageList();
     renderSourceLegend();
     renderHealthPills();
     updateHeaderCounters();
+    showDetailAfterStoreChange();
+}
+
+// After `cleared` / *Clear*: an open draft stays (#277) — it is the user's
+// work, not a stored message; only its pinned reference may be gone.
+// Otherwise the panel is emptied.
+function showDetailAfterStoreChange() {
+    if (state.selectedDraftId && typeof renderDraftDetail === 'function') {
+        renderDraftDetail();
+        return;
+    }
     resetDetailHeader();
     document.getElementById('detail-content').innerHTML = DETAIL_EMPTY_HTML;
 }
@@ -246,6 +257,7 @@ function removeEvictedMessages(ids) {
         state.diffPinRequestSeq++; // also void an in-flight pin restore
         saveSession();
         if (state.selectedMessage) renderDetail();
+        else if (state.selectedDraftId && typeof renderDraftDetail === 'function') renderDraftDetail();
     }
 
     if (removedFromList > 0) removeRowsFromList(gone);
