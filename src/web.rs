@@ -383,6 +383,10 @@ async fn take_large_body_permit(
         }
         None => (
             StatusCode::TOO_MANY_REQUESTS,
+            [(
+                axum::http::header::RETRY_AFTER,
+                HeaderValue::from_static("1"),
+            )],
             "Too many large requests at once; try again shortly",
         )
             .into_response(),
@@ -563,9 +567,16 @@ async fn message_draft(State(state): State<AppState>, Path(id): Path<String>) ->
     let Some(msg) = state.sender.stored(&id).await else {
         return (StatusCode::NOT_FOUND, "Message not found").into_response();
     };
-    match crate::draft::draft_of(&msg) {
-        Ok(draft) => Json(draft).into_response(),
-        Err(e) => refused(e),
+    // Linear in the message's size (#289 review), but up to
+    // `mllp.max_message_size_mb` of text: off the async workers.
+    match tokio::task::spawn_blocking(move || crate::draft::draft_of(&msg)).await {
+        Ok(Ok(draft)) => Json(draft).into_response(),
+        Ok(Err(e)) => refused(e),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Internal error while making the draft: {e}"),
+        )
+            .into_response(),
     }
 }
 
@@ -580,9 +591,10 @@ fn is_json(headers: &axum::http::HeaderMap) -> bool {
         })
 }
 
-/// `POST /api/parse`. With `Content-Type: application/json`: the preview of
-/// a draft (`draft::ParseRequest` → `draft::Preview`). With any other body:
-/// a file's bytes, decoded like a received frame (`draft::DecodedFile`).
+/// `POST /api/parse`. With `Content-Type: application/json`, or a body that
+/// starts with `{`: the preview of a draft (`draft::ParseRequest` →
+/// `draft::Preview`). With any other body: a file's bytes, decoded like a
+/// received frame (`draft::DecodedFile`).
 async fn parse_draft(
     State(state): State<AppState>,
     headers: axum::http::HeaderMap,
@@ -591,7 +603,10 @@ async fn parse_draft(
     if !state.sender.enabled() {
         return sending_off();
     }
-    if !is_json(&headers) {
+    // A file is HL7 (`MSH…`) or MLLP-framed; a body that starts with `{`
+    // is a JSON request whatever its `Content-Type` says (#289 review), and
+    // answered `400` if it does not parse.
+    if !is_json(&headers) && !body.trim_ascii_start().starts_with(b"{") {
         return Json(crate::draft::decode_file(&body)).into_response();
     }
     let request: crate::draft::ParseRequest = match serde_json::from_slice(&body) {

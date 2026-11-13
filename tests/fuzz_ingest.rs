@@ -158,7 +158,7 @@ fn check_draft(stored: &Hl7Message) -> Result<(), String> {
             .map(|r| t[r].to_string())
             .collect()
     };
-    if !stored.raw.contains("{{from:") && lines(&filled) != lines(&stored.raw) {
+    if lines(&filled) != lines(&stored.raw) {
         return Err("the draft with its references filled in is not the stored text".into());
     }
     let preview = harux::draft::preview(&draft.raw, &Default::default(), None, false)

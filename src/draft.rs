@@ -22,6 +22,7 @@
 
 use crate::hl7::charset;
 use crate::hl7::compose::{self, FieldPath, PlaceholderContext};
+use crate::hl7::parser::msh_split_index;
 use crate::hl7::types::{Delimiters, Hl7Message, WireForm};
 use crate::send::SendError;
 use encoding_rs::{Encoding, UTF_8};
@@ -79,14 +80,21 @@ pub fn draft_of(msg: &Hl7Message) -> Result<DraftText, SendError> {
                 .into(),
         ));
     }
-    let mut text = msg.raw.clone();
+    // The byte ranges of `raw` that become references, in text order —
+    // collected in one pass and put in with one rebuild: the cost is the
+    // message's length, not its length times its references (#289 review).
+    let mut swaps: Vec<(std::ops::Range<usize>, String)> = Vec::new();
     let mut references = Vec::new();
-    if msg.parse_error.is_none() {
+    let lines = compose::segment_lines(&msg.raw);
+    // One line per segment, as the parser reads them (#243); otherwise no
+    // references rather than wrong ones.
+    if msg.parse_error.is_none() && lines.len() == msg.segments.len() {
         let d = msg.delimiters;
         let mut seen: HashMap<&str, usize> = HashMap::new();
-        for seg in &msg.segments {
+        for (line, seg) in lines.iter().zip(&msg.segments) {
             let occurrence = seen.entry(seg.name.as_str()).or_default();
             *occurrence += 1;
+            let mut parts = None;
             for f in &seg.fields {
                 // Bytes ≥ characters: the cheap test first.
                 if f.value.len() <= DRAFT_VALUE_MAX
@@ -104,25 +112,47 @@ pub fn draft_of(msg: &Hl7Message) -> Result<DraftText, SendError> {
                 else {
                     continue;
                 };
-                if path.segment != seg.name {
+                let placeholder = format!("{REFERENCE_OPEN}{path}}}}}");
+                // Nor when the field separator is one of the reference's
+                // characters (`-`, `:`, `{`, …): it would split the field.
+                if path.segment != seg.name || placeholder.contains(d.field) {
                     continue;
                 }
-                let placeholder = format!("{REFERENCE_OPEN}{path}}}}}");
-                // A reference can't be written when the message's field
-                // separator is one of its characters (`-`, `:`, …); the
-                // value then stays in the text.
-                if let Ok(changed) = compose::set_field(&text, d, &path, &placeholder) {
-                    text = changed;
-                    references.push(Reference {
-                        path: path.to_string(),
-                        placeholder,
-                        chars: f.value.chars().count(),
-                        bytes: f.value.len(),
-                    });
+                let parts =
+                    parts.get_or_insert_with(|| field_parts(&msg.raw[line.clone()], d.field));
+                let index = if seg.name == "MSH" {
+                    msh_split_index(f.index)
+                } else {
+                    f.index
+                };
+                let Some(part) = parts.get(index) else {
+                    continue;
+                };
+                let range = line.start + part.start..line.start + part.end;
+                if msg.raw[range.clone()] != f.value {
+                    continue; // never: the parser's own field
                 }
+                references.push(Reference {
+                    path: path.to_string(),
+                    placeholder: placeholder.clone(),
+                    chars: f.value.chars().count(),
+                    bytes: f.value.len(),
+                });
+                swaps.push((range, placeholder));
             }
         }
     }
+    // Every `{{` of the stored text is written `{{open}}`, so text that
+    // merely looks like a placeholder or a reference goes out as it came in
+    // (#289 review).
+    let mut text = String::with_capacity(msg.raw.len().min(64 * 1024));
+    let mut at = 0;
+    for (range, placeholder) in &swaps {
+        push_escaped(&mut text, &msg.raw[at..range.start]);
+        text.push_str(placeholder);
+        at = range.end;
+    }
+    push_escaped(&mut text, &msg.raw[at..]);
     Ok(DraftText {
         based_on: msg.id.clone(),
         raw: lines_lf(&text),
@@ -130,6 +160,31 @@ pub fn draft_of(msg: &Hl7Message) -> Result<DraftText, SendError> {
         encoding: stored_encoding(msg).name(),
         references,
     })
+}
+
+/// The byte ranges of a segment line's parts: part 0 is the segment name.
+fn field_parts(line: &str, sep: char) -> Vec<std::ops::Range<usize>> {
+    let mut parts = Vec::new();
+    let mut start = 0;
+    for (i, c) in line.char_indices() {
+        if c == sep {
+            parts.push(start..i);
+            start = i + c.len_utf8();
+        }
+    }
+    parts.push(start..line.len());
+    parts
+}
+
+/// The escape of a literal `{{` in draft text.
+pub const ESCAPED_OPEN: &str = "{{open}}";
+
+fn push_escaped(out: &mut String, text: &str) {
+    if text.contains("{{") {
+        out.push_str(&text.replace("{{", ESCAPED_OPEN));
+    } else {
+        out.push_str(text);
+    }
 }
 
 /// The encoding `msg` arrived in — the one a draft of it keeps. A pure-ASCII
@@ -212,40 +267,78 @@ pub fn has_references(text: &str) -> bool {
     text.contains(REFERENCE_OPEN)
 }
 
-/// `text` with each reference replaced by the value of that field in
-/// `based_on`, the message the draft was made from. The value is the
-/// field's text as stored (escapes and all), so an attachment nobody
-/// touched goes out as it came in.
-pub fn fill_references(text: &str, based_on: Option<&Hl7Message>) -> Result<String, SendError> {
-    if !has_references(text) {
+/// What [`fill`] does with references.
+#[derive(Debug, Clone, Copy)]
+pub enum References<'a> {
+    /// Leave them as written.
+    Keep,
+    /// Fill them in from the message the draft was made from.
+    From(Option<&'a Hl7Message>),
+}
+
+/// Fill in a draft's text in **one pass** (#289 review): `{{open}}` becomes
+/// a literal `{{`, references are filled in as `refs` says, placeholders
+/// when `ctx` is given (else left as written); anything else in double
+/// braces stays as written. What is put in is never read again, so a
+/// reference's value or a literal `{{` from the stored text is never taken
+/// for a placeholder.
+pub fn fill(
+    text: &str,
+    ctx: Option<&PlaceholderContext>,
+    refs: References<'_>,
+) -> Result<String, SendError> {
+    if !text.contains("{{") {
         return Ok(text.to_owned());
     }
     let mut out = String::with_capacity(text.len());
     let mut rest = text;
-    while let Some(open) = rest.find(REFERENCE_OPEN) {
+    while let Some(open) = rest.find("{{") {
         out.push_str(&rest[..open]);
-        let after = &rest[open + REFERENCE_OPEN.len()..];
+        let after = &rest[open + 2..];
         let Some(close) = after.find("}}") else {
-            // Not closed: not a reference, sent as written.
+            // Not closed: sent as written.
             out.push_str(&rest[open..]);
             return Ok(out);
         };
-        let path = FieldPath::parse(&after[..close]).map_err(SendError::from)?;
-        let original = based_on.ok_or_else(|| {
-            SendError::Unprocessable(format!(
-                "The draft refers to {path} of the message it was made from, but names \
-                 no such message (based_on)"
-            ))
-        })?;
-        out.push_str(reference_value(original, &path).ok_or_else(|| {
-            SendError::Unprocessable(format!(
-                "The draft refers to {path}, which the message it was made from does not have"
-            ))
-        })?);
+        let name = &after[..close];
+        let written = &rest[open..open + 2 + close + 2];
+        match (name, name.strip_prefix("from:"), refs) {
+            ("open", _, _) => out.push_str("{{"),
+            (_, Some(path), References::From(based_on)) => out.push_str(reference(path, based_on)?),
+            (_, Some(_), References::Keep) => out.push_str(written),
+            _ => match ctx.and_then(|c| compose::placeholder(name, c)) {
+                Some(v) => out.push_str(&v),
+                None => out.push_str(written),
+            },
+        }
         rest = &after[close + 2..];
     }
     out.push_str(rest);
     Ok(out)
+}
+
+/// `text` with its references filled in from `based_on` (and `{{open}}`
+/// as `{{`), placeholders left as written.
+pub fn fill_references(text: &str, based_on: Option<&Hl7Message>) -> Result<String, SendError> {
+    fill(text, None, References::From(based_on))
+}
+
+/// The value a reference `{{from:path}}` stands for: the field's text as
+/// stored (escapes and all), so an attachment nobody touched goes out as it
+/// came in.
+fn reference<'a>(path: &str, based_on: Option<&'a Hl7Message>) -> Result<&'a str, SendError> {
+    let path = FieldPath::parse(path).map_err(SendError::from)?;
+    let original = based_on.ok_or_else(|| {
+        SendError::Unprocessable(format!(
+            "The draft refers to {path} of the message it was made from, but names \
+             no such message (based_on)"
+        ))
+    })?;
+    reference_value(original, &path).ok_or_else(|| {
+        SendError::Unprocessable(format!(
+            "The draft refers to {path}, which the message it was made from does not have"
+        ))
+    })
 }
 
 fn reference_value<'a>(msg: &'a Hl7Message, path: &FieldPath) -> Option<&'a str> {
@@ -262,8 +355,8 @@ fn reference_value<'a>(msg: &'a Hl7Message, path: &FieldPath) -> Option<&'a str>
 // --- Building the bytes ---
 
 /// The bytes a send of the draft `text` writes (plan 5.4, third row):
-/// placeholders filled in (`n` is the message's position in its run), then
-/// references from `based_on`, line ends normalized to `CR` with a final
+/// placeholders, references from `based_on` and `{{open}}` filled in in one
+/// pass ([`fill`]; `n` is the message's position in its run), line ends normalized to `CR` with a final
 /// `CR`, encoded with `charset` — `None` or `"auto"`: MSH-18, else UTF-8.
 /// Refused: a character the encoding cannot write (named), an MLLP frame
 /// byte, more than `max_bytes`.
@@ -278,10 +371,7 @@ pub fn build_payload(
         n,
         now: chrono::Local::now(),
     };
-    // Placeholders first: a reference's value is the stored text and is
-    // never read for placeholders.
-    let text = compose::fill_placeholders(text, &ctx);
-    let text = lines_cr(&fill_references(&text, based_on)?);
+    let text = lines_cr(&fill(text, Some(&ctx), References::From(based_on))?);
     let encoding = draft_encoding(&text, charset)?;
     let bytes = charset::encode_strict(&text, encoding).map_err(SendError::Unprocessable)?;
     // One frame on the wire is one stored message (rule 1).
@@ -382,7 +472,7 @@ pub struct SegmentPosition {
 }
 
 /// The preview of the draft `raw`: `set` written in, the references filled
-/// in from `based_on` when `fill`, then parsed. The fields come from the
+/// in from `based_on` when `fill_refs`, then parsed. The fields come from the
 /// text as written, so an input shows `{{now}}`; the validation warnings
 /// come from the same text with sample values for the placeholders, so
 /// `{{now}}` is not reported as an invalid timestamp — the validator knows
@@ -391,10 +481,10 @@ pub fn preview(
     raw: &str,
     set: &BTreeMap<String, String>,
     based_on: Option<&Hl7Message>,
-    fill: bool,
+    fill_refs: bool,
 ) -> Result<Preview, SendError> {
     let (mut text, changes) = apply_set(raw, set)?;
-    if fill {
+    if fill_refs {
         text = fill_references(&text, based_on)?;
     }
     let mut message = crate::mllp::parse_text(&text, DRAFT_PEER);
@@ -403,7 +493,7 @@ pub fn preview(
             n: 1,
             now: chrono::Local::now(),
         };
-        let sample = compose::fill_placeholders(&text, &ctx);
+        let sample = fill(&text, Some(&ctx), References::Keep)?;
         if sample != text {
             let checked = crate::mllp::parse_text(&sample, DRAFT_PEER);
             if checked.parse_error.is_none() {
@@ -580,6 +670,57 @@ mod tests {
         assert_eq!(d.raw.matches(&long).count(), 3);
         let filled = fill_references(&d.raw, Some(&msg)).unwrap();
         assert_eq!(lines_cr(&filled), msg.raw);
+    }
+
+    /// #289 review: text that merely looks like a reference or a
+    /// placeholder goes out as it came in — `{{` is escaped in the draft.
+    #[test]
+    fn literal_braces_survive_the_round_trip() {
+        let long = "z".repeat(DRAFT_VALUE_MAX + 500);
+        let msg = ingest(
+            format!("MSH|^~\\&|A|B|||20240101||ORU^R01|C1|P|2.5\rOBX|1|ST|X||{{{{from:OBX[2]-5}}}} {{{{now}}}} {{{{{{x\rOBX|2|ST|X||{long}\r").as_bytes(),
+        );
+        let d = draft_of(&msg).unwrap();
+        assert!(
+            d.raw.contains("OBX|1|ST|X||{{open}}from:OBX[2]-5}} {{open}}now}} {{open}}{x\nOBX|2|ST|X||{{from:OBX[2]-5}}"),
+            "{}",
+            &d.raw[..200]
+        );
+        let bytes = build_payload(&d.raw, None, Some(&msg), 1, 1 << 20).unwrap();
+        assert_eq!(bytes, msg.wire_bytes().as_ref(), "byte for byte");
+        let p = preview(&d.raw, &BTreeMap::new(), Some(&msg), true).unwrap();
+        assert_eq!(
+            p.raw,
+            lines_lf(&msg.raw),
+            "filled for the diff: the stored text"
+        );
+        // `{{open}}` is a placeholder of its own, for overrides too.
+        let ctx = PlaceholderContext {
+            n: 1,
+            now: chrono::Local::now(),
+        };
+        assert_eq!(compose::fill_placeholders("{{open}}id}}", &ctx), "{{id}}");
+    }
+
+    /// #289 review: one pass, however many references.
+    #[test]
+    fn many_references_are_made_in_one_pass() {
+        let long = "QUJD".repeat(DRAFT_VALUE_MAX / 4 + 1);
+        let mut text = String::from("MSH|^~\\&|A|B|||20240101||ORU^R01|C1|P|2.5\r");
+        for i in 1..=300 {
+            text.push_str(&format!("OBX|{i}|ED|X||{long}|{long}\r"));
+        }
+        let msg = ingest(text.as_bytes());
+        let d = draft_of(&msg).unwrap();
+        assert_eq!(d.references.len(), 600);
+        assert_eq!(d.references[599].path, "OBX[300]-6");
+        assert!(d
+            .raw
+            .ends_with("OBX|300|ED|X||{{from:OBX[300]-5}}|{{from:OBX[300]-6}}"));
+        assert_eq!(
+            lines_cr(&fill_references(&d.raw, Some(&msg)).unwrap()),
+            msg.raw
+        );
     }
 
     #[test]

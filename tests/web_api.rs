@@ -1568,6 +1568,28 @@ async fn draft_refusals_have_their_status_codes() {
     }
     assert_eq!(state.store.count().await, 0, "no refusal stores anything");
 
+    // #289 review: a JSON body without its Content-Type is still a JSON
+    // request — and a broken one is a 400, not a "file".
+    let body = serde_json::json!({"raw": simple_raw()})
+        .to_string()
+        .into_bytes();
+    for ct in ["text/plain", "application/octet-stream"] {
+        let (status, body, _) = post_raw(&state, "/api/parse", ct, body.clone(), true).await;
+        assert_eq!(status, StatusCode::OK, "{ct}");
+        assert!(
+            json_of(&body)["message"].is_object(),
+            "{ct}: a preview, not a decoded file"
+        );
+    }
+    let (status, _, _) = post_raw(
+        &state,
+        "/api/parse",
+        "text/plain",
+        b" {\"raw\": ".to_vec(),
+        true,
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
     let (status, _) = post_json(
         &state,
         "/api/parse",
@@ -1688,6 +1710,20 @@ async fn message_routes_have_a_body_limit_and_permits() {
     )
     .await;
     assert_eq!(status, StatusCode::TOO_MANY_REQUESTS, "unknown size");
+    let res = create_router(state.clone())
+        .oneshot(
+            Request::builder()
+                .method(Method::POST)
+                .uri("/api/parse")
+                .header("host", "10.1.2.3:8080")
+                .header("content-type", "application/json")
+                .body(Body::from(small.clone()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::TOO_MANY_REQUESTS);
+    assert_eq!(res.headers()[header::RETRY_AFTER], "1", "#289 review");
     let (status, _, _) = post_raw(
         &state,
         "/api/parse",
