@@ -8,7 +8,7 @@ Harux is a high-performance MLLP server with a real-time web UI for inspecting H
 
 - **Language:** Rust
 - **Latest Release:** v0.9.0 — Reliability & Security Hardening (audit Phases 0–3, v0.8.0 review) — see the [changelog](../CHANGELOG.md)
-- **Scope today:** receive and inspect (Milestones 0–3), and — once `send.enabled` switches it on — resend stored messages (unchanged or with fields changed) to an MLLP destination, plain or over TLS, write or edit a message as a draft (also field by field or from a template), send several messages in one run: the filtered list, or a draft repeated, and load an exported `.hl7` file back into the list (Milestone 4, M4-1 … M4-10). Watch (the rest of Milestone 4) and persistence (Milestone 5) are planned — see the [roadmap](ROADMAP.md)
+- **Scope today:** receive and inspect (Milestones 0–3), and — once `send.enabled` switches it on — resend stored messages (unchanged or with fields changed) to an MLLP destination, plain or over TLS, write or edit a message as a draft (also field by field or from a template), send several messages in one run: the filtered list, or a draft repeated, and load an exported `.hl7` file back into the list (Milestone 4, M4-1 … M4-10); and, for everyone, watch a filter: a background tab counts matching new messages in its title (M4-11). The release v1.0.0 and persistence (Milestone 5) are planned — see the [roadmap](ROADMAP.md)
 
 ---
 
@@ -144,6 +144,7 @@ Plain files, all embedded into the binary at compile time via `rust-embed`. The 
 - `diff.js` — the Diff tab
 - `send.js` — Resend: the user's own target list (browser storage, file), the split button and its menu
 - `compose.js` — drafts: the drafts rail, a draft in the detail panel, *Edit* and *New message*, the preview and the send
+- `watch.js` — Watch: the bell, the watched filter, the title counter, sound and desktop notification
 - `app.js` — initialisation, UI handlers (`data-action` delegation) and the splitter
 
 The Content-Security-Policy forbids inline scripts, styles and event handlers.
@@ -164,6 +165,7 @@ Key behaviors:
 - Detail header is a layered structure: type chip + human title on row 1 (with **Resend → target** on the right while sending is on), optional description on row 2, monospace metadata row (`patient · MRN · control · v · received`) on row 3 — the control ID filters the list by it —, and a tools row with tags, Bookmark and Pin diff.
 - **Resend** (while sending is on): every user keeps a target list of their own in the browser (name, host, port, TLS, *ask before sending*), with *This Harux* always in it, and can save it to a file and load it. One click resends to the target used last; the menu lists the targets with the last result this browser saw. A sent message shows up as a row from the WebSocket like any other. A direction filter (In + Out → Received → Sent) and an `out` pill in the header (every send attempt) appear with sending. The menu also chooses how a resend goes out — *as received* (byte for byte), *with a new control ID* (MSH-10) or *with a new control ID and the current time* (MSH-10, MSH-7) — remembered per browser; a sent message's description names the fields that were changed. Trace by control ID then isolates one send: the sent message and what the target made of it.
 - **Drafts** (while sending is on, #277): **Edit** on a stored message and **New message** (blank, clipboard, file) open a draft in the detail panel — `DRAFT` badge, target button and **Send** (`Ctrl+Enter`); a Raw tab to type in, with the field under the cursor named below it; a Segments preview with live validation; the draft's sends in the Response tab; Diff vs pinned. A long value of the original stays on the server as a reference. Drafts live in the browser tab (kept on the computer only on request) and survive a reload and *Clear*; a rail under the sources lists them. In the Segments tab every field is an input, written back by the server so both tabs show the same text; segments can be added from the checklist, duplicated and removed, empty fields shown from the dictionary, and MSH-7/MSH-10 set to `{{now}}`/`{{id}}` with one click (#278).
+- **Watch** (#282): the bell in the list's controls watches the current filter (a snapshot: search, direction, validation). While the tab is in the background, matching new messages count in its title (`(3) Harux`), with a short sound and a desktop notification if wanted. Browsers allow desktop notifications only on HTTPS or `localhost`; on plain HTTP the menu says so and the title counter and sound still work. A notification names type, source and control ID, never the patient. Per browser, no server code.
 - Full keyboard accessibility: list rows, custom interactive elements, and source chips are navigable via `Tab` and actable via `Enter`/`Space`.
 
 ---

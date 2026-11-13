@@ -144,8 +144,8 @@ This document tracks all milestones and planned features. Each milestone lists i
 - [x] **Several messages** — resend the filtered messages in order, repeat a draft
   - [x] M4-9 Send runs with progress and cancel (#280)
   - [x] M4-10 Import an `.hl7` file into the store (#281)
-- [ ] **Auto-refresh trigger** — desktop notification on new messages (optional)
-  - [ ] M4-11 Watch: notify about new messages that match the current filter
+- [x] **Auto-refresh trigger** — desktop notification on new messages (optional)
+  - [x] M4-11 Watch: notify about new messages that match the current filter (#282)
 - [ ] M4-12 Release v1.0.0
 
 ### Acceptance Criteria

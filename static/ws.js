@@ -67,6 +67,7 @@ function handleServerEvent(data, known = null) {
             known.add(data.data.id);
         }
         addMessage(data.data);
+        if (typeof watchNewMessage === 'function') watchNewMessage(data.data); // #282
     } else if (data.type === 'tags_updated') {
         updateMessageTags(data.data);
     } else if (data.type === 'bookmark_toggled') {

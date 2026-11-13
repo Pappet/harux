@@ -3061,3 +3061,40 @@ tr.warn .field-input {
 }
 
 .send-menu .send-btn { white-space: nowrap; }
+
+/* ── Watch (#282): the bell's menu under the list's controls ── */
+
+#btn-watch.on { color: var(--accent); border-color: var(--accent); }
+
+.send-menu.watch-menu {
+    top: 4px;
+    left: auto;
+    right: 14px;
+    width: 360px;
+    padding: 10px 12px;
+}
+
+.watch-menu p { margin: 4px 0 8px; font-size: 12px; color: var(--text-secondary); }
+.watch-menu .what b { color: var(--text-primary); font-weight: 600; }
+.watch-menu .hint { color: var(--text-muted); font-size: 11px; }
+.watch-menu .active { color: var(--text-muted); font-family: var(--font-mono); font-size: 11px; }
+
+.watch-menu .row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin: 6px 0;
+    font-size: 12px;
+}
+
+.watch-menu .row .hint { margin-left: auto; text-align: right; }
+.watch-menu .switch[disabled] { opacity: 0.4; cursor: not-allowed; }
+
+.watch-menu .foot {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-top: 10px;
+}
+
+.watch-menu .foot .spacer { flex: 1; }

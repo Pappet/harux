@@ -115,6 +115,11 @@
                     <svg class="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
                     <span class="btn-label">All</span>
                 </button>
+                <div class="ctl-divider" aria-hidden="true"></div>
+                <button class="ctl-btn" id="btn-watch" data-action="watch-menu" aria-haspopup="dialog" aria-expanded="false" aria-pressed="false" title="Tell me when a message arrives that matches the current filter">
+                    <svg class="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>
+                    <span class="btn-label">Watch</span>
+                </button>
             </div>
             <div class="run-menu-host" id="run-menu-host"></div>
             <div class="source-rail" id="source-rail"></div>
@@ -213,6 +218,7 @@
     <script src="/diff.js" defer></script>
     <script src="/send.js" defer></script>
     <script src="/compose.js" defer></script>
+    <script src="/watch.js" defer></script>
     <script src="/app.js" defer></script>
 </body>
 
