@@ -79,6 +79,17 @@ const state = {
     // Segment diff
     diffPinnedMessage: null,
     diffIgnoreDynamic: false,
+
+    // Sending (#272, #274). `sendConfig` is /api/send/config, or null while
+    // sending is off — then nothing below is shown.
+    sendConfig: null,
+    targets: [],          // the user's own targets (send.js, localStorage)
+    targetResults: {},    // last result per target id, this browser only
+    lastTargetId: null,   // the one-click Resend target
+    sendMenu: null,       // { pickedId, form } while the Resend menu is open
+    sending: false,
+    targetStorageWarned: false,
+    directionFilter: 0,   // 0: In + Out, 1: Received, 2: Sent
 };
 
 window.state = state;

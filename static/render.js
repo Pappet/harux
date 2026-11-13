@@ -372,7 +372,15 @@ function appendDeliveryChip(row1, delivery) {
 // True when no client-side filters are active, so new messages can be
 // prepended to the DOM directly instead of rebuilding the whole list.
 function canPrependOnly() {
-    return !state.searchQuery && !state.showBookmarkedOnly && state.validationFilter === 0;
+    return !state.searchQuery && !state.showBookmarkedOnly && state.validationFilter === 0
+        && state.directionFilter === 0;
+}
+
+// The direction filter (#274): 0 In + Out, 1 Received, 2 Sent.
+function matchesDirection(msg) {
+    if (state.directionFilter === 1) return msg.direction !== 'out';
+    if (state.directionFilter === 2) return msg.direction === 'out';
+    return true;
 }
 
 // Insert freshly-arrived messages at the top of the list without touching
@@ -607,6 +615,9 @@ function renderMessageList() {
     if (state.showBookmarkedOnly) {
         filtered = filtered.filter(m => m.bookmarked);
     }
+    if (state.directionFilter !== 0) {
+        filtered = filtered.filter(matchesDirection);
+    }
     if (state.validationFilter === 1) { // Any warnings
         filtered = filtered.filter(m => (m.validation_warning_count || 0) > 0 || m.has_segment_errors);
     } else if (state.validationFilter === 2) { // Errors only
@@ -679,6 +690,7 @@ function matchesSearch(msg, parsedQuery) {
 
 async function selectMessage(id) {
     const prevId = state.selectedId;
+    if (prevId !== id && typeof closeSendMenu === 'function') closeSendMenu();
     state.selectedId = id;
     updateRowSelection(prevId, id);
     saveSession();
@@ -737,6 +749,9 @@ function resetDetailHeader() {
     if (metaEl) metaEl.innerHTML = '';
     const actionsEl = document.getElementById('detail-actions');
     if (actionsEl) actionsEl.innerHTML = '';
+    const toolsEl = document.getElementById('detail-tools');
+    if (toolsEl) toolsEl.innerHTML = '';
+    if (typeof closeSendMenu === 'function') closeSendMenu();
     const segBadge = document.getElementById('tab-segments-badge');
     if (segBadge) segBadge.classList.add('hidden');
 }
@@ -752,7 +767,9 @@ function buildDetailMeta(msg) {
         items.push(`<span class="item"><span class="k">MRN</span><span class="v">${esc(msg.patient_id)}</span></span>`);
     }
     if (msg.message_control_id) {
-        items.push(`<span class="item"><span class="k">control</span><span class="v">${esc(msg.message_control_id)}</span></span>`);
+        // Trace (#274): one click filters the list by this control ID — with a
+        // new control ID per send, that isolates one exchange.
+        items.push(`<span class="item"><span class="k">control</span><button class="v meta-link" data-action="trace-control" data-value="${escAttr(msg.message_control_id)}" title="Show every loaded message with this control ID">${esc(msg.message_control_id)}</button></span>`);
     }
     if (msg.version) {
         items.push(`<span class="item"><span class="k">v</span><span class="v">${esc(msg.version)}</span></span>`);
@@ -807,9 +824,11 @@ function renderDetail() {
 
     // Description row — always populate when message_type_description is available.
     const descEl = document.getElementById('detail-desc');
-    const desc = outbound ? sentDescription(msg) : msg.message_type_description;
-    if (desc) {
-        descEl.textContent = desc;
+    if (outbound) {
+        descEl.innerHTML = sentDescriptionHtml(msg);
+        descEl.classList.remove('hidden');
+    } else if (msg.message_type_description) {
+        descEl.textContent = msg.message_type_description;
         descEl.classList.remove('hidden');
     } else {
         descEl.classList.add('hidden');
@@ -817,7 +836,9 @@ function renderDetail() {
 
     document.getElementById('detail-meta').innerHTML = buildDetailMeta(msg);
 
-    // Actions row: tag chips + add-tag input + Bookmark + Pin diff (all on the right).
+    // Title row, right: Resend (send.js, #274) — empty while sending is off.
+    // Tools row below the meta row: tag chips + add-tag input + Bookmark +
+    // Pin diff (the layout docs/STYLE_GUIDE.md describes).
     const isPinned = state.diffPinnedMessage && state.diffPinnedMessage.id === msg.id;
     const bookmarkClass = msg.bookmarked ? 'action-btn bookmark active' : 'action-btn bookmark';
     const bookmarkSvg = msg.bookmarked ? ICONS.starFilled : ICONS.starOutline;
@@ -835,7 +856,9 @@ function renderDetail() {
         </div>
     `;
 
-    document.getElementById('detail-actions').innerHTML = `
+    document.getElementById('detail-actions').innerHTML =
+        typeof sendActionsHtml === 'function' ? sendActionsHtml(msg) : '';
+    document.getElementById('detail-tools').innerHTML = `
         <div id="detail-tags" class="detail-tags-inline">${tagChipsHtml}${tagAddHtml}</div>
         <button class="${bookmarkClass}" aria-label="${bookmarkLabel}" data-action="bookmark" data-id="${msg.id}" title="Toggle bookmark">${bookmarkSvg}<span class="btn-label">${bookmarkLabel}</span></button>
         <button class="${pinClass}" aria-label="${pinLabel}" data-action="diff-pin" data-id="${msg.id}" title="Pin this message as the diff reference">${ICONS.pin}<span class="btn-label">${pinLabel}</span></button>
@@ -863,16 +886,23 @@ function renderDetail() {
         }
     }
 
+    if (state.sendMenu && typeof renderSendMenu === 'function') renderSendMenu();
     renderTab();
 }
 
-// "Sent to orchestra-test · resent unchanged · requested by 10.0.0.7".
-function sentDescription(msg) {
+// "Sent to orchestra-test · resent unchanged from the original (a link) ·
+// requested by 10.0.0.7 · Admit / Visit Notification", as HTML.
+function sentDescriptionHtml(msg) {
     const out = msg.outbound || {};
-    const parts = [`Sent to ${out.target || msg.source_addr || 'unknown'}`];
-    if (out.origin && out.origin.kind === 'resend') parts.push('resent unchanged from a stored message');
-    if (out.requested_by) parts.push(`requested by ${out.requested_by}`);
-    if (msg.message_type_description) parts.push(msg.message_type_description);
+    const parts = [`Sent to ${esc(out.target || msg.source_addr || 'unknown')}`];
+    const origin = out.origin || {};
+    if (origin.kind === 'resend') {
+        parts.push(origin.message_id
+            ? `resent unchanged from <button class="origin-link" data-action="select-message" data-id="${escAttr(origin.message_id)}" title="Open the message this one was resent from">the original</button>`
+            : 'resent unchanged');
+    }
+    if (out.requested_by) parts.push(`requested by ${esc(out.requested_by)}`);
+    if (msg.message_type_description) parts.push(esc(msg.message_type_description));
     return parts.join(' \u00b7 ');
 }
 

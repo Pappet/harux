@@ -1099,6 +1099,7 @@ body.resizing * {
 
 /* ── Detail header (restructured) ──────────────────────────────────── */
 .detail-header {
+    position: relative; /* anchors the Resend menu (#274) */
     padding: 16px 22px 14px;
     background: var(--bg-secondary);
     border-bottom: 1px solid var(--border);
@@ -1107,7 +1108,8 @@ body.resizing * {
     grid-template-areas:
         "title   actions"
         "desc    desc"
-        "meta    meta";
+        "meta    meta"
+        "tools   tools";
     column-gap: 16px;
     row-gap: 6px;
     align-items: start;
@@ -1132,6 +1134,20 @@ body.resizing * {
 
 .detail-meta {
     grid-area: meta;
+}
+
+/* Tags, Bookmark and Pin diff: a row of their own below the meta row
+   (#274), so the title row has room for Resend. */
+.detail-tools {
+    grid-area: tools;
+    display: flex;
+    gap: 6px;
+    align-items: center;
+    flex-wrap: wrap;
+}
+
+.detail-tools:empty {
+    display: none;
 }
 
 .detail-type {
@@ -1248,7 +1264,7 @@ body.resizing * {
     display: none;
 }
 
-.detail-actions .action-btn {
+.detail-tools .action-btn {
     display: inline-flex;
     align-items: center;
     gap: 6px;
@@ -1264,19 +1280,19 @@ body.resizing * {
     transition: background 0.12s, color 0.12s, border-color 0.12s;
 }
 
-.detail-actions .action-btn:hover {
+.detail-tools .action-btn:hover {
     background: var(--bg-tertiary);
     color: var(--text-primary);
     border-color: var(--border);
 }
 
-.detail-actions .action-btn.active {
+.detail-tools .action-btn.active {
     background: rgba(122, 162, 255, 0.10);
     border-color: rgba(122, 162, 255, 0.35);
     color: var(--accent);
 }
 
-.detail-actions .action-btn.bookmark.active {
+.detail-tools .action-btn.bookmark.active {
     background: rgba(229, 165, 75, 0.10);
     border-color: rgba(229, 165, 75, 0.35);
     color: var(--warning);
@@ -2213,3 +2229,301 @@ body.resizing * {
 .copy-raw-btn.copy-success {
     animation: copy-flash 0.5s ease-out;
 }
+
+/* ── Resend (#274) ─────────────────────────────────────────────────── */
+.split-btn {
+    display: inline-flex;
+}
+
+.split-btn .ctl-btn {
+    border-radius: 6px 0 0 6px;
+}
+
+.split-btn .ctl-btn.caret {
+    border-radius: 0 6px 6px 0;
+    border-left: 0;
+    padding: 0 8px;
+}
+
+.split-btn .to {
+    color: var(--text-muted);
+    font-family: var(--font-mono);
+    font-size: 11px;
+    max-width: 180px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.ctl-btn:disabled,
+.ctl-btn[aria-disabled="true"] {
+    opacity: 0.5;
+    cursor: default;
+}
+
+.send-menu {
+    position: absolute;
+    top: 52px;
+    right: 22px;
+    z-index: 60;
+    width: 420px;
+    max-width: calc(100% - 44px);
+    max-height: 70vh;
+    overflow-y: auto;
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    box-shadow: 0 18px 50px rgba(0, 0, 0, 0.55);
+    padding: 10px;
+}
+
+.send-menu h4 {
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--text-muted);
+    font-weight: 600;
+    margin: 6px;
+}
+
+.send-menu .h4-actions {
+    float: right;
+    text-transform: none;
+    letter-spacing: 0;
+    font-weight: 400;
+    color: var(--text-muted);
+}
+
+.link-btn,
+.meta-link,
+.origin-link {
+    background: none;
+    border: 0;
+    padding: 0;
+    font: inherit;
+    color: var(--accent);
+    cursor: pointer;
+}
+
+.link-btn:hover,
+.meta-link:hover,
+.origin-link:hover,
+.link-btn:focus-visible,
+.meta-link:focus-visible,
+.origin-link:focus-visible {
+    text-decoration: underline;
+}
+
+.detail-meta .meta-link {
+    font-family: var(--font-mono);
+    font-size: inherit;
+}
+
+.target-option {
+    display: grid;
+    grid-template-columns: 14px 1fr auto auto;
+    gap: 2px 10px;
+    align-items: center;
+    padding: 7px 8px;
+    border-radius: 6px;
+    cursor: pointer;
+}
+
+.target-option:hover,
+.target-option:focus-visible,
+.target-option.selected {
+    background: var(--bg-hover);
+    outline: none;
+}
+
+.target-option .radio {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    border: 1.5px solid var(--text-muted);
+}
+
+.target-option.selected .radio {
+    border-color: var(--accent);
+    background: var(--accent);
+    box-shadow: inset 0 0 0 2px var(--bg-hover);
+}
+
+.target-option .name {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text-primary);
+    min-width: 0;
+    overflow-wrap: anywhere;
+}
+
+.target-option .addr {
+    grid-column: 2;
+    font-family: var(--font-mono);
+    font-size: 10.5px;
+    color: var(--text-muted);
+}
+
+.target-option .last {
+    grid-row: 1 / span 2;
+    grid-column: 3;
+    font-family: var(--font-mono);
+    font-size: 10.5px;
+    color: var(--text-muted);
+    text-align: right;
+}
+
+.target-option .last.ok { color: var(--success); }
+.target-option .last.bad { color: var(--error); }
+
+.target-option .target-edit {
+    grid-row: 1 / span 2;
+    grid-column: 4;
+    background: none;
+    border: 1px solid transparent;
+    border-radius: 4px;
+    color: var(--text-muted);
+    font: inherit;
+    font-size: 11px;
+    padding: 2px 6px;
+    cursor: pointer;
+}
+
+.target-option .target-edit:hover,
+.target-option .target-edit:focus-visible {
+    border-color: var(--border);
+    color: var(--text-primary);
+}
+
+.target-option .guard {
+    color: var(--warning);
+    font-size: 10.5px;
+    font-weight: 600;
+}
+
+.target-option .tls {
+    font-family: var(--font-mono);
+    font-size: 9.5px;
+    font-weight: 600;
+    color: var(--success);
+    border: 1px solid rgba(79, 185, 138, 0.4);
+    border-radius: 3px;
+    padding: 0 4px;
+}
+
+.target-option .tls.unverified {
+    color: var(--warning);
+    border-color: rgba(229, 165, 75, 0.4);
+}
+
+.target-empty {
+    padding: 8px;
+    font-size: 12px;
+    color: var(--text-muted);
+}
+
+/* The user's own target: a small form in the menu (decision D2). */
+.target-form {
+    margin: 6px 4px 2px;
+    padding: 8px;
+    border: 1px dashed var(--border);
+    border-radius: 8px;
+}
+
+.target-form h4 {
+    margin: 0 2px 6px;
+}
+
+.target-form .row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 11.5px;
+    color: var(--text-secondary);
+}
+
+.target-form .row + .row {
+    margin-top: 8px;
+}
+
+.target-form input {
+    flex: 1 1 0;
+    min-width: 0;
+    background: var(--bg-primary);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    color: var(--text-primary);
+    font-family: var(--font-mono);
+    font-size: 11px;
+    padding: 6px 8px;
+}
+
+.target-form input:focus {
+    outline: none;
+    border-color: var(--accent);
+}
+
+.target-form input.host { flex: 1.6 1 0; }
+.target-form input.port { flex: 0 0 64px; }
+.target-form .spacer { flex: 1; }
+.target-form .form-error { color: var(--error); }
+
+/* Toggle switch — the style guide forbids native checkboxes. */
+.switch {
+    width: 26px;
+    height: 14px;
+    padding: 0;
+    border-radius: 7px;
+    background: var(--bg-primary);
+    border: 1px solid var(--border);
+    position: relative;
+    flex-shrink: 0;
+    cursor: pointer;
+}
+
+.switch::after {
+    content: '';
+    position: absolute;
+    top: 1px;
+    left: 1px;
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    background: var(--text-muted);
+    transition: left 0.15s, background 0.15s;
+}
+
+.switch.on {
+    background: rgba(122, 162, 255, 0.18);
+    border-color: rgba(122, 162, 255, 0.55);
+}
+
+.switch.on::after {
+    left: 13px;
+    background: var(--accent);
+}
+
+.switch:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 1px;
+}
+
+.switch + span {
+    margin-right: 8px;
+}
+
+.send-menu .foot {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 12px;
+    padding: 8px 8px 2px;
+    border-top: 1px solid var(--border);
+    margin-top: 8px;
+}
+
+.send-menu .foot .hint {
+    font-size: 10.5px;
+    color: var(--text-muted);
+}
+

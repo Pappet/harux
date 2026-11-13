@@ -76,6 +76,36 @@ function syncValidationFilterUI() {
     }
 }
 
+// In + Out → Received → Sent (#274). The button exists while sending is on
+// (or a filter other than In + Out is still active).
+const DIRECTION_LABELS = ['In + Out', 'Received', 'Sent'];
+
+function syncDirectionFilterUI() {
+    const btn = document.getElementById('btn-direction');
+    if (!btn) return;
+    btn.innerHTML = `${ICONS.updown}<span class="btn-label">${DIRECTION_LABELS[state.directionFilter]}</span>`;
+    btn.classList.toggle('on', state.directionFilter !== 0);
+    btn.classList.toggle('hidden', !state.sendConfig && state.directionFilter === 0);
+}
+
+function toggleDirectionFilter() {
+    state.directionFilter = (state.directionFilter + 1) % 3;
+    syncDirectionFilterUI();
+    renderMessageList();
+    saveSession();
+}
+
+// Trace (#274): filter the list by one control ID.
+function traceControlId(value) {
+    if (!value) return;
+    clearTimeout(state.searchDebounceTimer);
+    state.searchQuery = value;
+    const input = document.getElementById('search-input');
+    if (input) input.value = value;
+    renderMessageList();
+    saveSession();
+}
+
 function toggleValidationFilter() {
     state.validationFilter = (state.validationFilter + 1) % 3;
     syncValidationFilterUI();
@@ -93,6 +123,8 @@ function clearFilters() {
     if (state.showBookmarkedOnly) toggleBookmarkFilter(); // updates its button
     state.validationFilter = 0;
     syncValidationFilterUI();
+    state.directionFilter = 0;
+    syncDirectionFilterUI();
     renderMessageList();
     saveSession();
 }
@@ -290,6 +322,12 @@ function handleInteraction(e) {
         return;
     }
 
+    // A click outside the Resend menu closes it (#274).
+    if (state.sendMenu && e.type === 'click' && e.target.closest
+        && !e.target.closest('#send-menu') && !e.target.closest('[data-action="resend-menu"]')) {
+        closeSendMenu();
+    }
+
     // data-action delegation (replaces inline onclick= handlers)
     const actionEl = e.target.closest('[data-action]');
     if (actionEl) {
@@ -307,6 +345,8 @@ function handleInteraction(e) {
             return;
         }
         if (action === 'diff-pin') { toggleDiffPin(id, e); return; }
+        if (action === 'trace-control') { traceControlId(actionEl.dataset.value); return; }
+        if (handleSendAction(action, actionEl)) return;
     }
 
     const segEl = e.target.closest('.segment-name');
@@ -332,6 +372,7 @@ document.getElementById('btn-pause').addEventListener('click', togglePause);
 document.getElementById('btn-autoscroll').addEventListener('click', toggleAutoscroll);
 document.getElementById('btn-bookmarks').addEventListener('click', toggleBookmarkFilter);
 document.getElementById('btn-validation').addEventListener('click', toggleValidationFilter);
+document.getElementById('btn-direction').addEventListener('click', toggleDirectionFilter);
 document.getElementById('btn-copy-cli').addEventListener('click', function () { copyCliSnippet(this); });
 document.getElementById('btn-clear-filters').addEventListener('click', clearFilters);
 
@@ -365,6 +406,19 @@ document.addEventListener('click', handleInteraction);
 document.addEventListener('keydown', (e) => {
     const activeEl = document.activeElement;
     if (!activeEl) return;
+
+    // Escape closes the Resend menu; Enter in its form saves the target.
+    // Typing in the form's inputs is left alone (they carry no data-action).
+    if (state.sendMenu && e.key === 'Escape') {
+        e.preventDefault();
+        closeSendMenu();
+        return;
+    }
+    if (e.key === 'Enter' && activeEl.closest && activeEl.closest('.target-form') && activeEl.tagName === 'INPUT') {
+        e.preventDefault();
+        saveTargetForm();
+        return;
+    }
 
     // Enter in the add-tag input submits the tag.
     if (e.key === 'Enter' && activeEl.dataset.action === 'add-tag-input') {
@@ -416,7 +470,13 @@ document.addEventListener('keydown', (e) => {
     }
 
     syncValidationFilterUI();
+    syncDirectionFilterUI();
 })();
+
+// Sending (#274): the user's targets from this browser, and whether the
+// server sends at all (nothing new is shown while it doesn't).
+loadTargets();
+loadSendConfig();
 
 initSplitter();
 // Set autoscroll visual state — toggleAutoscroll flips the value, so pre-flip it

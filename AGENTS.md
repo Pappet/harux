@@ -179,7 +179,7 @@ Off unless `send.enabled = true` (#272): every send route answers `403` and the 
 
 ### Frontend (`static/`)
 
-The SPA is split across HTML, CSS, and several JS files (see the full tree in **Source Layout** below), all embedded into the binary at compile time via `rust-embed`. The JS files are plain `<script>` includes with **no module system** — they share a single global `state` object (`state.js`) and must be loaded in dependency order (`state` → `util` → `ws` → `render` → `diff` → `app`).
+The SPA is split across HTML, CSS, and several JS files (see the full tree in **Source Layout** below), all embedded into the binary at compile time via `rust-embed`. The JS files are plain `<script>` includes with **no module system** — they share a single global `state` object (`state.js`) and must be loaded in dependency order (`state` → `util` → `ws` → `render` → `diff` → `send` → `app`).
 
 **Important:** After any change to `static/`, a recompile is required — `rust-embed` bakes the files in at build time. There is no hot-reload.
 
@@ -197,6 +197,7 @@ Key frontend behaviors:
 - **Rows use `content-visibility: auto` (#216)** with `contain-intrinsic-size: auto 60px`: every row is 61 px (60 + 1 px border). If the row layout ever changes height, update the intrinsic size, or the scrollbar drifts. `tickRowRelativeTimes` only writes labels that changed; the health dot's pulse animates `transform`/`opacity` on a pseudo-element (compositor-only) — never animate `box-shadow` or other paint properties in an infinite animation
 - **Long values are previewed (#215):** field values, component leaves, raw lines and JSON strings above `DISPLAY_VALUE_MAX` (2000) characters show their first 1000 plus a size note (`previewText`, `truncationNote` in `util.js`). Code that needs a value must read it from the message data, never from the DOM: the field copy handler uses `fullFieldValues`, "Copy All" uses `state.selectedMessage.raw`
 - Parse errors are shown with `⚠ PARSE ERROR` in red (`var(--error)`) in the message list
+- **Resend (#274, `static/send.js`):** only while `/api/send/config` answers (sending on). Every user keeps **their own target list** in `localStorage` (`harux_targets`; no patient data), plus *This Harux* from the config, never stored; save to / load from a file. Storage that fails is never fatal — the list lasts for the session and one toast says so. The split button **Resend → target** in the title row sends to the target used last (`harux_last_target`); the first use opens the menu. A target marked *ask before sending* asks with `confirm` every time; a message that did not parse needs a second `confirm` (`allow_invalid`). The answer is only reported (toast, last result per target): **the sent row comes from the WebSocket only** — never add it from the response. Tags/Bookmark/Pin diff live in the tools row (`#detail-tools`) below the meta row. Direction filter `state.directionFilter` (In + Out → Received → Sent; `canPrependOnly` knows it), `out` pill (every send attempt, from `/api/stats`), origin link, and trace by control ID (meta row). IDs come from `newId()` (`util.js`) — never call `crypto.randomUUID` directly: it is missing on plain HTTP, the usual deployment. Covered by `tests/js/send.test.mjs`
 
 ## Critical Knowledge — Read Before Changing Anything
 
@@ -288,6 +289,7 @@ static/
 ├── ws.js            # WebSocket + ingestion + stats polling
 ├── render.js        # List, legend, health pills, detail-panel tabs
 ├── diff.js          # Diff tab (renderDiffTab + builders)
+├── send.js          # Resend: the user's target list (localStorage, file), split button and menu (#274)
 ├── app.js           # Init + UI handlers (data-action delegation) + splitter
 └── fonts/           # Self-hosted woff2 (Inter, JetBrains Mono)
 tests/
@@ -301,7 +303,7 @@ tests/
 ├── alloc_accounting.rs           # Counting allocator: estimated_bytes() matches the real heap (#226)
 ├── doc_paths.rs                  # Paths named in the docs exist (#246)
 ├── web_api.rs                    # Axum REST/handler integration tests
-├── js/                           # node:test tests for static/*.js (diff, list load queue, client buffer + counters, row builder, long-value preview); fake-dom.mjs is the shared minimal DOM
+├── js/                           # node:test tests for static/*.js (diff, list load queue, client buffer + counters, row builder, long-value preview, sent rows, resend + target list); fake-dom.mjs is the shared minimal DOM
 ├── benchmark_concurrent_insert.rs # Concurrent store insert benchmark
 ├── messages/                     # .hl7 fixtures (valid / errors / unknown_types)
 ├── test.sh                       # Linux/macOS functional + load test (netcat)

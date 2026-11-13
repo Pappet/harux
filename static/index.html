@@ -44,6 +44,10 @@
                 <span class="label">total</span>
                 <span class="value" id="pill-total-value">0</span>
             </div>
+            <div class="health-pill hidden" id="pill-sent" title="Messages Harux sent or tried to send">
+                <span class="label">out</span>
+                <span class="value" id="pill-sent-value">0</span>
+            </div>
             <div class="health-pill" id="pill-validation" title="Validation warnings + segment errors across all messages">
                 <span class="label">validation</span>
                 <span class="value" id="pill-validation-value">0</span>
@@ -85,6 +89,10 @@
                 <button class="ctl-btn" id="btn-bookmarks" title="Show bookmarked only">
                     <svg class="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>
                     <span class="btn-label">Bookmarks</span>
+                </button>
+                <button class="ctl-btn hidden" id="btn-direction" title="Show received and sent messages, received only, or sent only">
+                    <svg class="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="7 7 12 2 17 7"/><line x1="12" y1="2" x2="12" y2="22"/><polyline points="17 17 12 22 7 17"/></svg>
+                    <span class="btn-label">In + Out</span>
                 </button>
                 <button class="ctl-btn" id="btn-validation" title="Filter by validation state">
                     <svg class="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
@@ -144,6 +152,7 @@
                 </div>
                 <div id="detail-desc" class="detail-desc hidden"></div>
                 <div id="detail-meta" class="detail-meta"></div>
+                <div id="detail-tools" class="detail-tools"></div>
             </div>
             <div class="detail-tabs">
                 <button class="detail-tab active" data-tab="parsed">
@@ -182,6 +191,7 @@
     <script src="/ws.js" defer></script>
     <script src="/render.js" defer></script>
     <script src="/diff.js" defer></script>
+    <script src="/send.js" defer></script>
     <script src="/app.js" defer></script>
 </body>
 

@@ -37,6 +37,10 @@ function setup() {
     // Rendering is not under test here (the detail view's is, through
     // `renderDetailReal`).
     ctx.renderDetailReal = ctx.renderDetail;
+    // esc() needs a real DOM to escape; the fake one only keeps text.
+    const escape = (v) => String(v ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+    ctx.esc = escape;
+    ctx.escAttr = escape;
     Object.assign(ctx, {
         renderMessageList: noop, renderSourceLegend: noop, updateHeaderCounters: noop,
         prependMessagesToList: noop, removeRowsFromList: noop, renderDetail: noop,
@@ -180,8 +184,9 @@ test('the detail of a sent message: SENT badge, description, ACK tab relabelled'
     ctx.renderDetailReal();
     assert.ok(!byId('detail-direction').classList.contains('hidden'));
     assert.equal(byId('tab-btn-ack').textContent, 'Response');
-    assert.equal(byId('detail-desc').textContent,
-        'Sent to orchestra-test · resent unchanged from a stored message · requested by 10.0.0.7 · Admit / Visit Notification');
+    const desc = byId('detail-desc').innerHTML;
+    assert.match(desc, /^Sent to orchestra-test · resent unchanged from <button class="origin-link" data-action="select-message" data-id="m1"/);
+    assert.match(desc, /the original<\/button> · requested by 10\.0\.0\.7 · Admit \/ Visit Notification$/);
     assert.equal(texts(byId('detail-content').children[0])[0], '…', 'the Response tab is shown');
 
     // A received message turns both back.
