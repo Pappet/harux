@@ -233,6 +233,8 @@ async function loadSendConfig() {
 function applySendingUi() {
     const dirBtn = document.getElementById('btn-direction');
     if (dirBtn) dirBtn.classList.toggle('hidden', !state.sendConfig && state.directionFilter === 0);
+    const runBtn = document.getElementById('btn-resend-filtered');
+    if (runBtn) runBtn.classList.toggle('hidden', !state.sendConfig);
     if (!state.sendConfig) closeSendMenu();
     if (state.selectedMessage) renderDetail();
     if (typeof applyDraftsUi === 'function') applyDraftsUi(); // #277
@@ -314,7 +316,7 @@ function sendActionsHtml(msg) {
     // aria-disabled, not disabled: a disabled button drops keyboard focus,
     // and resendMessage ignores clicks while a send is under way anyway.
     const busy = state.sending ? ' aria-disabled="true"' : '';
-    const open = state.sendMenu ? 'true' : 'false';
+    const open = state.sendMenu && !state.sendMenu.forRun ? 'true' : 'false';
     // *Edit* (#277) opens the message as a draft.
     return `<span class="split-btn" id="send-split">
         <button class="ctl-btn" data-action="resend"${busy} title="${target ? `Send this message again to ${escAttr(target.name)}, ${escAttr(how)}` : 'Choose a target'}">${ICONS.resend}<span class="btn-label">Resend</span>${to}</button><button class="ctl-btn caret" data-action="resend-menu" aria-haspopup="dialog" aria-expanded="${open}" aria-label="Choose target" title="Choose target">${ICONS.chevronDown}</button>
@@ -351,6 +353,7 @@ function openSendMenu() {
     if (draft ? !state.sendConfig : !canResend(state.selectedMessage)) return;
     const picked = (draft && draftTarget(draft)) || findTarget(state.lastTargetId) || allTargets()[0] || null;
     state.sendMenu = {
+        forRun: false,
         forDraft: draft ? draft.id : null,
         pickedId: picked ? picked.id : null,
         // No target at all (not even This Harux): start with the form.
@@ -360,17 +363,42 @@ function openSendMenu() {
     updateSendButtons();
 }
 
+// The same menu for *Resend filtered* (#280), under the list's controls:
+// the target, *Send as*, and the number of messages the run sends.
+function openRunMenu() {
+    if (!state.sendConfig) return;
+    if (state.sendMenu && typeof closeSendMenu === 'function') closeSendMenu();
+    const last = findTarget(state.lastTargetId);
+    const picked = (last && !last.ask ? last : null) || allTargets().find((t) => !t.ask) || allTargets()[0] || null;
+    state.sendMenu = {
+        forRun: true,
+        forDraft: null,
+        pickedId: picked ? picked.id : null,
+        form: allTargets().length === 0 ? emptyTargetForm() : null,
+    };
+    renderSendMenu();
+    updateRunButton();
+}
+
 function closeSendMenu() {
     if (!state.sendMenu) return;
+    const wasRun = state.sendMenu.forRun;
     state.sendMenu = null;
     const menu = document.getElementById('send-menu');
     if (menu) menu.remove();
-    updateSendButtons();
+    if (wasRun) updateRunButton();
+    else updateSendButtons();
 }
 
 function toggleSendMenu() {
-    if (state.sendMenu) closeSendMenu();
+    if (state.sendMenu && !state.sendMenu.forRun) closeSendMenu();
     else openSendMenu();
+}
+
+function toggleRunMenu() {
+    if (state.sendMenu && state.sendMenu.forRun) closeSendMenu();
+    else if (runUnderWay()) showToast('A run is under way — wait for it or cancel it first');
+    else openRunMenu();
 }
 
 function emptyTargetForm() {
@@ -381,10 +409,11 @@ function switchHtml(flag, on, label) {
     return `<button class="switch${on ? ' on' : ''}" role="switch" aria-checked="${on}" data-action="target-flag" data-flag="${flag}" aria-label="${escAttr(label)}"></button><span>${esc(label)}</span>`;
 }
 
-function targetOptionHtml(t, picked, now) {
+function targetOptionHtml(t, picked, now, forRun = false) {
     const r = describeTargetResult(state.targetResults[t.id], now);
     const tls = t.tls ? `<span class="tls${t.verify ? '' : ' unverified'}">${t.verify ? 'TLS' : 'TLS unverified'}</span>` : '';
-    const guard = t.ask ? '<span class="guard">⚠ asks before sending</span>' : '';
+    // Decision D3: a target that asks before every message takes no runs.
+    const guard = t.ask ? `<span class="guard">${forRun ? '⚠ asks before sending — no runs' : '⚠ asks before sending'}</span>` : '';
     const addr = `${t.host}:${t.port}${t.loopback ? ' · loopback' : ''}`;
     const edit = t.loopback ? '' : `<button class="target-edit" data-action="target-edit" data-target-id="${escAttr(t.id)}" title="Edit ${escAttr(t.name)}" aria-label="Edit ${escAttr(t.name)}">Edit</button>`;
     return `<div class="target-option${picked ? ' selected' : ''}" role="radio" aria-checked="${picked}" tabindex="0" data-action="target-pick" data-target-id="${escAttr(t.id)}">
@@ -422,24 +451,33 @@ function targetFormHtml(f) {
 }
 
 function renderSendMenu() {
-    const header = document.getElementById('detail-header');
-    if (!header || !state.sendMenu) return;
     const m = state.sendMenu;
+    const host = m && document.getElementById(m.forRun ? 'run-menu-host' : 'detail-header');
+    if (!host || !m) return;
     const now = Date.now();
     const targets = allTargets();
-    const options = targets.map((t) => targetOptionHtml(t, t.id === m.pickedId, now)).join('');
+    const options = targets.map((t) => targetOptionHtml(t, t.id === m.pickedId, now, m.forRun)).join('');
     const picked = findTarget(m.pickedId);
     let menu = document.getElementById('send-menu');
+    if (menu && menu.parentNode !== host) {
+        menu.remove();
+        menu = null;
+    }
     if (!menu) {
         menu = document.createElement('div');
         menu.id = 'send-menu';
         menu.className = 'send-menu';
         menu.setAttribute('role', 'dialog');
-        menu.setAttribute('aria-label', 'Resend this message');
-        header.appendChild(menu);
+        host.appendChild(menu);
     }
+    menu.classList.toggle('run-menu', !!m.forRun);
     const forDraft = !!m.forDraft;
-    menu.setAttribute('aria-label', forDraft ? 'Target of this draft' : 'Resend this message');
+    menu.setAttribute('aria-label', m.forRun ? 'Resend the filtered messages' : (forDraft ? 'Target of this draft' : 'Resend this message'));
+    const run = m.forRun ? runCandidates(filteredForRun()) : null;
+    const canSend = picked && !state.sending && (!run || (run.send.length > 0 && !picked.ask));
+    const hint = run ? runMenuHint(run, picked)
+        : (forDraft ? 'The draft is sent as written, placeholders filled in.' : 'Target and way are remembered for the next one-click resend.');
+    const label = run ? `Resend ${run.send.length}` : 'Send';
     menu.innerHTML = `
         <h4>My targets <span class="h4-actions">
             <button class="link-btn" data-action="target-add">Add</button> ·
@@ -452,8 +490,8 @@ function renderSendMenu() {
         ${forDraft ? '' : `<h4>Send as</h4>
         <div class="send-as" role="radiogroup" aria-label="Send as">${sendAsHtml()}</div>`}
         <div class="foot">
-            <span class="hint">${forDraft ? 'The draft is sent as written, placeholders filled in.' : 'Target and way are remembered for the next one-click resend.'}</span>
-            <button class="ctl-btn on send-btn" data-action="send-picked"${picked && !state.sending ? '' : ' disabled'}>${ICONS.resend}<span class="btn-label">Send</span></button>
+            <span class="hint">${esc(hint)}</span>
+            <button class="ctl-btn on send-btn" data-action="send-picked"${canSend ? '' : ' disabled'}>${ICONS.resend}<span class="btn-label">${esc(label)}</span></button>
         </div>`;
     if (m.form) {
         const first = document.getElementById(m.form.host ? 'tf-name' : (m.form.name ? 'tf-host' : 'tf-name'));
@@ -560,6 +598,11 @@ function pickTarget(id) {
 
 async function sendPicked() {
     const target = state.sendMenu && findTarget(state.sendMenu.pickedId);
+    if (state.sendMenu && state.sendMenu.forRun) {
+        if (await resendFiltered(target)) closeSendMenu();
+        else if (state.sendMenu) renderSendMenu();
+        return;
+    }
     const draft = state.sendMenu && state.sendMenu.forDraft && findDraft(state.sendMenu.forDraft);
     if (draft) {
         if (await sendDraft(draft, target)) closeSendMenu();
@@ -570,6 +613,270 @@ async function sendPicked() {
     if (!target || !msg) return;
     if (await resendMessage(msg, target)) closeSendMenu();
     else if (state.sendMenu) renderSendMenu();
+}
+
+// --- Runs (#280): several messages in order over one connection ---
+
+const RUN_POLL_MS = 500;
+const RUN_END_TEXT = {
+    done: 'Done',
+    cancelled: 'Cancelled',
+    gave_up: 'Gave up',
+    stopped_on_nack: 'Stopped at an error',
+    shutdown: 'Harux shut down',
+    lost: 'No longer known to the server',
+};
+
+// The loaded messages the filters show, oldest first: the order a run
+// sends them in.
+function filteredForRun() {
+    return typeof filteredMessages === 'function' ? filteredMessages().slice().reverse() : [];
+}
+
+// What a run of `list` sends: an over-limit entry (#223) holds only the
+// beginning of its frame and is left out; a message that did not parse
+// goes out as received, after a second confirmation.
+function runCandidates(list) {
+    const send = list.filter((m) => m.id && !m.truncated);
+    return {
+        send,
+        truncated: list.length - send.length,
+        unparsed: send.filter((m) => m.parse_error).length,
+    };
+}
+
+function runMenuHint(run, target) {
+    if (run.send.length === 0) return 'The filters show no message to resend.';
+    if (target && target.ask) return `${target.name} asks before every message — it takes no runs. Pick another target.`;
+    const max = state.sendConfig ? state.sendConfig.max_run_messages : 0;
+    const parts = [`The ${run.send.length} loaded message${run.send.length === 1 ? '' : 's'} the filters show, oldest first, over one connection.`];
+    if (run.truncated) parts.push(`${run.truncated} cut-off ${run.truncated === 1 ? 'entry is' : 'entries are'} left out.`);
+    if (max && run.send.length > max) parts.push(`At most ${max} per run (send.max_run_messages) — narrow the filter.`);
+    return parts.join(' ');
+}
+
+// *Resend filtered*: asks first, naming target and number (always).
+async function resendFiltered(target) {
+    if (!target) return false;
+    const run = runCandidates(filteredForRun());
+    const n = run.send.length;
+    if (n === 0) {
+        showToast('The filters show no message to resend');
+        return false;
+    }
+    if (target.ask) {
+        showToast(`${target.name} asks before every message — it takes no runs`);
+        return false;
+    }
+    const max = state.sendConfig ? state.sendConfig.max_run_messages : n;
+    if (n > max) {
+        showToast(`${n} messages are more than one run takes (${max}, send.max_run_messages) — narrow the filter`);
+        return false;
+    }
+    const way = SEND_AS[state.sendAs] || SEND_AS.unchanged;
+    const changes = Object.keys(way.set).length > 0;
+    if (changes && run.unparsed) {
+        showToast(`${run.unparsed} of them did not parse and can only be resent as received — choose "As received" or filter them out`);
+        return false;
+    }
+    const how = state.sendAs === 'unchanged' ? 'byte for byte' : way.label.toLowerCase();
+    const left = run.truncated ? ` ${run.truncated} cut-off ${run.truncated === 1 ? 'entry is' : 'entries are'} left out.` : '';
+    if (!confirm(`Resend ${n} message${n === 1 ? '' : 's'} to ${target.name} (${target.host}:${target.port}), oldest first, ${how}?${left}`)) return false;
+    let allowInvalid = false;
+    if (run.unparsed) {
+        if (!confirm(`${run.unparsed} of them did not parse. Send them exactly as they were received anyway?`)) return false;
+        allowInvalid = true;
+    }
+    return startRun({
+        target,
+        items: run.send.map((m) => ({ message_id: m.id })),
+        set: changes ? way.set : null,
+        allowInvalid,
+        what: `Resending ${n} message${n === 1 ? '' : 's'} → ${target.name}`,
+    });
+}
+
+function runUnderWay() {
+    return !!(state.run && state.run.status && state.run.status.state === 'running');
+}
+
+// Start a run of `items` (each `repeat` times) to `target`. The rows come
+// over the WebSocket; the bar under the list follows the run's status.
+// `onEnd(status)` is called once it has ended. A request that turns out to
+// be one message is answered like a resend.
+async function startRun({ target, items, repeat = 1, set = null, allowInvalid = false, what, onEnd = null }) {
+    if (!target || !items.length || state.sending) return false;
+    if (runUnderWay()) {
+        showToast('A run is under way — wait for it or cancel it first');
+        return false;
+    }
+    if (target.ask) {
+        showToast(`${target.name} asks before every message — it takes no runs`);
+        return false;
+    }
+    state.sending = true;
+    updateSendButtons();
+    updateRunButton();
+    try {
+        const body = { target: targetRequest(target), items, allow_invalid: allowInvalid };
+        if (repeat > 1) body.repeat = repeat;
+        if (set) body.set = set;
+        const resp = await fetch('/api/send', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body),
+        });
+        if (!resp.ok) {
+            showToast(`Not sent: ${(await resp.text()) || `HTTP ${resp.status}`}`);
+            return false;
+        }
+        const result = await resp.json();
+        state.lastTargetId = target.id;
+        writeStored(LAST_TARGET_KEY, target.id);
+        if (resp.status !== 202) {
+            // One message after all: its outcome, as a resend reports it.
+            recordTargetResult(target.id, result.delivery);
+            const chip = deliveryChip(result.delivery);
+            showToast(`Sent to ${target.name} · ${chip.text}`, result.delivery.state === 'failed' ? 'error' : 'info');
+            if (onEnd) onEnd(null, result);
+            return true;
+        }
+        if (state.run && state.run.timer) clearTimeout(state.run.timer);
+        state.run = { id: result.id, what, targetId: target.id, status: result, onEnd, cancelling: false, timer: null };
+        renderRunBar();
+        state.run.timer = setTimeout(pollRun, RUN_POLL_MS);
+        return true;
+    } catch (e) {
+        showToast('Not sent: ' + (e.message || e));
+        return false;
+    } finally {
+        state.sending = false;
+        updateSendButtons();
+        updateRunButton();
+    }
+}
+
+async function pollRun() {
+    const run = state.run;
+    if (!run) return;
+    run.timer = null;
+    try {
+        const resp = await fetch(`/api/send/runs/${encodeURIComponent(run.id)}`);
+        if (resp.ok) run.status = await resp.json();
+        else if (resp.status === 404 || resp.status === 403) {
+            // A restarted server (or sending switched off) knows no run.
+            run.status = { ...run.status, state: 'lost', reason: 'The server no longer knows this run' };
+        }
+    } catch (e) {
+        console.debug('Could not read the run:', e); // asked again below
+    }
+    if (state.run !== run) return;
+    renderRunBar();
+    if (run.status.state === 'running') run.timer = setTimeout(pollRun, RUN_POLL_MS);
+    else finishRun(run);
+}
+
+function finishRun(run) {
+    const s = run.status;
+    const end = RUN_END_TEXT[s.state] || s.state;
+    const summary = runSummaryParts(s).map((p) => p.text).join(' · ');
+    const ok = s.state === 'done' && !s.failed && runAllAccepted(s);
+    showToast(`${run.what}: ${end} · ${s.done} / ${s.total}${summary ? ' · ' + summary : ''}`, ok ? 'info' : 'error');
+    updateRunButton();
+    if (run.onEnd) {
+        const onEnd = run.onEnd;
+        run.onEnd = null;
+        onEnd(s, null);
+    }
+}
+
+function runAllAccepted(s) {
+    return Object.keys(s.codes || {}).every((c) => c === 'AA' || c === 'CA');
+}
+
+async function cancelRun() {
+    const run = state.run;
+    if (!runUnderWay() || run.cancelling) return;
+    run.cancelling = true;
+    renderRunBar();
+    try {
+        const resp = await fetch(`/api/send/runs/${encodeURIComponent(run.id)}/cancel`, { method: 'POST' });
+        if (resp.ok && state.run === run) run.status = await resp.json();
+    } catch (e) {
+        console.debug('Could not cancel the run:', e);
+        run.cancelling = false;
+    }
+    if (state.run === run) renderRunBar();
+}
+
+function closeRunBar() {
+    if (runUnderWay()) return;
+    if (state.run && state.run.timer) clearTimeout(state.run.timer);
+    state.run = null;
+    renderRunBar();
+}
+
+// `24 AA`, `2 AE`, `1 failed`, `avg 38 ms` — the bar's counts.
+function runSummaryParts(s) {
+    const parts = [];
+    for (const [code, n] of Object.entries(s.codes || {})) {
+        parts.push({ text: `${n} ${code}`, cls: code === 'AA' || code === 'CA' ? 'ok' : 'bad' });
+    }
+    if (s.written) parts.push({ text: `${s.written} written`, cls: 'ok' });
+    if (s.failed) parts.push({ text: `${s.failed} failed`, cls: 'bad' });
+    if (s.avg_latency_ms != null) parts.push({ text: `avg ${formatLatency(s.avg_latency_ms)}`, cls: '' });
+    return parts;
+}
+
+function runBarHtml(run) {
+    const s = run.status;
+    const running = s.state === 'running';
+    const parts = runSummaryParts(s)
+        .map((p) => `<span class="mono${p.cls ? ' ' + p.cls : ''}">${esc(p.text)}</span>`).join('');
+    const end = running ? ''
+        : `<span class="mono end ${s.state === 'done' ? 'ok' : 'bad'}">${esc(RUN_END_TEXT[s.state] || s.state)}</span>`;
+    const reason = !running && s.reason && s.state !== 'done'
+        ? `<span class="reason" title="${escAttr(s.reason)}">${esc(s.reason)}</span>` : '';
+    const button = running
+        ? `<button class="ctl-btn" data-action="run-cancel"${run.cancelling ? ' aria-disabled="true"' : ''} title="Stop before the next message; the one in flight ends as it would">${run.cancelling ? 'Cancelling…' : 'Cancel'}</button>`
+        : '<button class="ctl-btn" data-action="run-close" title="Close" aria-label="Close the run bar">✕</button>';
+    return `<span class="mono what" title="${escAttr(run.what)}">${esc(run.what)}</span>`
+        + `<span class="track" role="progressbar" aria-label="Progress" aria-valuemin="0" aria-valuemax="${s.total}" aria-valuenow="${s.done}"><i></i></span>`
+        + `<span class="mono">${s.done} / ${s.total}</span>${parts}${end}${reason}<span class="spacer"></span>${button}`;
+}
+
+function renderRunBar() {
+    const bar = document.getElementById('run-bar');
+    if (!bar) return;
+    const run = state.run;
+    if (!run) {
+        bar.classList.add('hidden');
+        bar.replaceChildren();
+        return;
+    }
+    // Keep focus on the button while it changes from Cancel to ✕.
+    const hadFocus = bar.contains && document.activeElement && bar.contains(document.activeElement);
+    bar.innerHTML = runBarHtml(run);
+    bar.classList.remove('hidden');
+    const s = run.status;
+    const track = bar.querySelector('.track');
+    const fill = track && track.firstElementChild;
+    // Set through the CSSOM: the CSP forbids style attributes.
+    if (fill && fill.style) fill.style.width = `${s.total ? Math.round((100 * s.done) / s.total) : 0}%`;
+    if (hadFocus) {
+        const btn = bar.querySelector('button');
+        if (btn && btn.focus) btn.focus();
+    }
+}
+
+// The list's *Resend filtered* button: off while a run is under way.
+function updateRunButton() {
+    const btn = document.getElementById('btn-resend-filtered');
+    if (!btn) return;
+    btn.classList.toggle('hidden', !state.sendConfig);
+    btn.setAttribute('aria-expanded', state.sendMenu && state.sendMenu.forRun ? 'true' : 'false');
+    if (runUnderWay() || state.sending) btn.setAttribute('aria-disabled', 'true');
+    else btn.removeAttribute('aria-disabled');
 }
 
 // --- Target list as a file (to keep it, or to pass it to a colleague) ---
@@ -617,6 +924,9 @@ function handleSendAction(action, el) {
     switch (action) {
         case 'resend': resendOneClick(); return true;
         case 'resend-menu': toggleSendMenu(); return true;
+        case 'resend-filtered': toggleRunMenu(); return true;
+        case 'run-cancel': cancelRun(); return true;
+        case 'run-close': closeRunBar(); return true;
         case 'target-pick': pickTarget(el.dataset.targetId); return true;
         case 'target-edit': editTarget(el.dataset.targetId); return true;
         case 'target-add':

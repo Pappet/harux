@@ -976,6 +976,14 @@ async fn send_routes_are_forbidden_while_sending_is_off() {
         .await
         .unwrap();
     assert_eq!(res.status(), StatusCode::FORBIDDEN);
+    // Runs (#280).
+    for (method, uri) in [
+        (Method::GET, "/api/send/runs/r1"),
+        (Method::POST, "/api/send/runs/r1/cancel"),
+    ] {
+        let (status, _) = call(&state, method, uri).await;
+        assert_eq!(status, StatusCode::FORBIDDEN, "{uri}");
+    }
     let stats = get_json(&state, "/api/stats").await;
     assert_eq!(stats["sending_enabled"], false);
     assert_eq!(stats["sent"], 0);
@@ -1063,8 +1071,25 @@ async fn send_refusals_have_their_status_codes() {
             r#"{"target":"loopback","items":[]}"#,
             StatusCode::BAD_REQUEST,
         ),
+        // Runs (#280): the limits are checked before anything is stored.
         (
-            r#"{"target":"loopback","items":[{"message_id":"m1"}],"repeat":2}"#,
+            r#"{"target":"loopback","items":[{"message_id":"m1"}],"repeat":0}"#,
+            StatusCode::BAD_REQUEST,
+        ),
+        (
+            r#"{"target":"loopback","items":[{"message_id":"m1"}],"repeat":1001}"#,
+            StatusCode::PAYLOAD_TOO_LARGE,
+        ),
+        (
+            r#"{"target":"loopback","items":[{"message_id":"m1"}],"interval_ms":60001}"#,
+            StatusCode::BAD_REQUEST,
+        ),
+        (
+            r#"{"target":"loopback","items":[{"message_id":"m1"},{"message_id":"gone"}]}"#,
+            StatusCode::NOT_FOUND,
+        ),
+        (
+            r#"{"target":"loopback","items":[{"message_id":"m1"}],"loop":true}"#,
             StatusCode::BAD_REQUEST,
         ),
         // #275: overrides are checked before anything is stored.
@@ -1970,4 +1995,106 @@ async fn unknown_api_paths_are_404_not_the_spa() {
         .unwrap();
     assert_eq!(res.status(), StatusCode::METHOD_NOT_ALLOWED);
     assert_eq!(get_status(&state, "/").await, StatusCode::OK);
+}
+
+/// A request with a `Host` the guard allows; status and body as text.
+async fn call(state: &AppState, method: Method, uri: &str) -> (StatusCode, String) {
+    let res = create_router(state.clone())
+        .oneshot(
+            Request::builder()
+                .method(method)
+                .uri(uri)
+                .header("host", "10.1.2.3:8080")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = res.status();
+    let body = collect_body(res.into_body()).await;
+    (status, String::from_utf8_lossy(&body).into_owned())
+}
+
+/// A run (#280): `202` with its status, progress from
+/// `GET /api/send/runs/{id}`, cancel by `POST …/cancel`; unknown runs 404.
+#[tokio::test]
+async fn a_run_is_started_followed_and_cancelled() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    // A receiver that answers AA to every frame.
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    tokio::spawn(async move {
+        while let Ok((mut s, _)) = listener.accept().await {
+            tokio::spawn(async move {
+                let mut acc = Vec::new();
+                let mut buf = [0u8; 4096];
+                while let Ok(n) = s.read(&mut buf).await {
+                    if n == 0 {
+                        break;
+                    }
+                    acc.extend_from_slice(&buf[..n]);
+                    while let Some(end) = acc.windows(2).position(|w| w == [0x1C, 0x0D]) {
+                        acc.drain(..end + 2);
+                        let ack =
+                            b"\x0bMSH|^~\\&|R|F|H|H|20260101||ACK|A|P|2.5\rMSA|AA|MSG001\r\x1c\r";
+                        let _ = s.write_all(ack).await;
+                    }
+                }
+            });
+        }
+    });
+    let state = sending_state(|_| {});
+    stored_received(&state, "m1").await;
+    let body = format!(
+        r#"{{"target":{{"name":"t","host":"127.0.0.1","port":{port}}},"items":[{{"message_id":"m1"}}],"repeat":3}}"#
+    );
+    let (status, text) = post_send(&state, &body, None).await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{text}");
+    let run: serde_json::Value = serde_json::from_str(&text).unwrap();
+    assert_eq!(run["total"], 3);
+    assert_eq!(run["target"], "t");
+    assert_eq!(run["requested_by"], "10.0.0.7");
+    let id = run["id"].as_str().unwrap().to_string();
+
+    let mut last = serde_json::Value::Null;
+    for _ in 0..300 {
+        let (status, text) = call(&state, Method::GET, &format!("/api/send/runs/{id}")).await;
+        assert_eq!(status, StatusCode::OK);
+        last = serde_json::from_str(&text).unwrap();
+        if last["state"] != "running" {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    assert_eq!(last["state"], "done", "{last}");
+    assert_eq!(last["done"], 3);
+    assert_eq!(last["codes"]["AA"], 3);
+    assert!(
+        last.get("latency_sum").is_none(),
+        "internal counters stay inside"
+    );
+    // Three sent rows besides the received one.
+    assert_eq!(state.store.count().await, 4);
+
+    // Cancel of a finished run: its status, unchanged.
+    let (status, text) = call(&state, Method::POST, &format!("/api/send/runs/{id}/cancel")).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(text.contains(r#""state":"done""#), "{text}");
+    for (method, uri) in [
+        (Method::GET, "/api/send/runs/nope"),
+        (Method::POST, "/api/send/runs/nope/cancel"),
+    ] {
+        assert_eq!(
+            call(&state, method, uri).await.0,
+            StatusCode::NOT_FOUND,
+            "{uri}"
+        );
+    }
+    // Cancel changes something: a GET is not enough (#227).
+    assert_eq!(
+        call(&state, Method::GET, &format!("/api/send/runs/{id}/cancel"))
+            .await
+            .0,
+        StatusCode::METHOD_NOT_ALLOWED
+    );
 }

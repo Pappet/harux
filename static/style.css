@@ -2974,3 +2974,90 @@ tr.warn .field-input {
     border-top: 1px solid var(--border);
     margin-top: 4px;
 }
+
+/* ── Runs (#280): the bar under the list, the menu of Resend filtered ── */
+
+.run-bar {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 9px 14px;
+    border-top: 1px solid var(--border);
+    background: var(--bg-secondary);
+    font-size: 12px;
+    color: var(--text-secondary);
+    min-width: 0;
+}
+
+.run-bar .track {
+    flex: 0 0 120px;
+    height: 6px;
+    border-radius: 3px;
+    background: var(--bg-tertiary);
+    overflow: hidden;
+}
+
+.run-bar .track i {
+    display: block;
+    height: 100%;
+    width: 0;
+    background: var(--accent);
+}
+
+.run-bar .mono {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    white-space: nowrap;
+}
+
+.run-bar .what {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    min-width: 0;
+    flex: 0 1 auto;
+}
+
+.run-bar .ok { color: var(--success); }
+.run-bar .bad { color: var(--warning); }
+
+.run-bar .reason {
+    flex: 1 1 0;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--text-muted);
+}
+
+.run-bar .spacer { flex: 1; }
+
+.run-menu-host { position: relative; }
+
+.send-menu.run-menu {
+    top: 4px;
+    left: 14px;
+    right: auto;
+}
+
+/* *Repeat* of a draft (#280) */
+.repeat-ctl {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    font-size: 12px;
+    color: var(--text-secondary);
+    margin-right: 6px;
+}
+
+.repeat-input {
+    width: 64px;
+    background: var(--bg-tertiary);
+    color: var(--text-primary);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    font-family: var(--font-mono);
+    font-size: 11px;
+    padding: 2px 4px;
+}
+
+.send-menu .send-btn { white-space: nowrap; }

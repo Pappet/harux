@@ -683,3 +683,57 @@ test('a template becomes a draft on its Segments tab; the send names the templat
     const html = ctx.sentDescriptionHtml({ outbound: { target: 't', origin: { kind: 'template', name: 'Site <ADT>' } } });
     assert.equal(html, 'Sent to t · from the template Site &lt;ADT&gt;');
 });
+
+test('Repeat (#280): the draft n times in one run, asked first; noted when the run ends', async () => {
+    const run = { id: 'run-7', target: 'This Harux', total: 3, done: 0, state: 'running', codes: {}, written: 0, failed: 0, avg_latency_ms: null, reason: null };
+    const { ctx, state, requests, confirms, toasts } = setup({
+        responses: { '/api/send': async () => ({ ok: true, status: 202, json: async () => run, text: async () => '' }) },
+    });
+    ctx.renderDraftHeader = () => {};
+    state.sendConfig.max_run_messages = 1000;
+    const d = ctx.addDraft({ raw: 'MSH|^~\\&|A|B|||{{now}}||ADT^A01|X{{n}}|P|2.5' });
+    state.selection = { kind: 'draft', id: d.id };
+    assert.equal(d.repeat, 1);
+    ctx.setDraftRepeat('3');
+    assert.equal(d.repeat, 3);
+    assert.match(ctx.draftActionsHtml(d), /Send 3×/);
+    assert.match(ctx.draftToolsHtml(d), /id="draft-repeat"[^>]*value="3"/);
+
+    const target = ctx.loopbackTarget();
+    assert.equal(await ctx.sendDraft(d, target), true);
+    assert.match(confirms[0], /Send this draft 3 times to This Harux \(127\.0\.0\.1:2575\)/);
+    const body = JSON.parse(requests.find((r) => r.url === '/api/send').opts.body);
+    assert.equal(body.repeat, 3);
+    assert.deepEqual(plain(body.items), [{ raw: d.raw, charset: 'auto' }]);
+    assert.equal(state.run.id, 'run-7');
+    assert.equal(d.sends.length, 0, 'noted when it has ended');
+
+    // The run ends: one entry in the draft's history, no link (its rows are in the list).
+    state.run.status = { ...run, done: 3, state: 'done', codes: { AA: 3 }, avg_latency_ms: 4 };
+    ctx.finishRun(state.run);
+    assert.deepEqual(plain(d.sends.map((s) => [s.run, s.done, s.total, s.ok, s.summary])), [['run-7', 3, 3, true, '3 AA · avg 4 ms']]);
+    assert.equal(ctx.sendChip(d.sends[0]).text, '3 / 3');
+    assert.match(ctx.sendFacts(d.sends[0]), /run to This Harux · 3 AA/);
+    assert.match(toasts.at(-1)[0], /: Done · 3 \/ 3/);
+
+    // Out of range: kept within 1 … the run limit.
+    ctx.setDraftRepeat('0');
+    assert.equal(d.repeat, 1);
+    ctx.setDraftRepeat('5000');
+    assert.equal(d.repeat, 1000);
+    ctx.setDraftRepeat('abc');
+    assert.equal(d.repeat, 1);
+});
+
+test('Repeat: a target that asks before sending takes no runs', async () => {
+    const { ctx, state, requests, confirms, toasts } = setup();
+    ctx.renderDraftHeader = () => {};
+    const d = ctx.addDraft({ raw: 'MSH|1' });
+    state.selection = { kind: 'draft', id: d.id };
+    d.repeat = 4;
+    const prod = ctx.normalizeTarget({ name: 'prod', host: 'prod.local', port: 6661, ask: true });
+    assert.equal(await ctx.sendDraft(d, prod), false);
+    assert.equal(confirms.length, 0);
+    assert.equal(requests.length, 0);
+    assert.match(toasts.at(-1)[0], /takes no runs/);
+});

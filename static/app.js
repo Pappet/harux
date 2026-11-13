@@ -324,7 +324,8 @@ function handleInteraction(e) {
 
     // A click outside the Resend menu closes it (#274).
     if (state.sendMenu && e.type === 'click' && e.target.closest
-        && !e.target.closest('#send-menu') && !e.target.closest('[data-action="resend-menu"]')) {
+        && !e.target.closest('#send-menu') && !e.target.closest('[data-action="resend-menu"]')
+        && !e.target.closest('[data-action="resend-filtered"]')) {
         closeSendMenu();
     }
 
@@ -396,6 +397,7 @@ document.addEventListener('change', (e) => {
     if (action === 'color-by-port') toggleColorByPort(e);
     if (action === 'diff-ignore-dynamic') toggleDiffIgnoreDynamic(e);
     if (e.target.id === 'draft-charset') setDraftCharset(e.target.value); // #277
+    if (e.target.id === 'draft-repeat') setDraftRepeat(e.target.value); // #280
 });
 
 // Search is purely client-side (filters the local `messages` array via matchesSearch).

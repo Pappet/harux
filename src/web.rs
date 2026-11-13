@@ -307,6 +307,11 @@ pub fn create_router(state: AppState) -> Router {
         .route("/api/export", get(export_raw_hl7))
         // Sending (#272) — `403` while `send.enabled` is off.
         .route("/api/send/config", get(send_config))
+        .route("/api/send/runs/{id}", get(run_status))
+        .route(
+            "/api/send/runs/{id}/cancel",
+            axum::routing::post(cancel_run),
+        )
         .route("/api/messages/{id}/draft", get(message_draft))
         .route("/api/dictionary/{segment}", get(dictionary_segment))
         .route("/api/templates", get(list_templates))
@@ -527,10 +532,12 @@ async fn send_config(State(state): State<AppState>) -> Response {
     Json(state.sender.config_response()).into_response()
 }
 
-/// `POST /api/send`: send one stored message, unchanged, to the target the
-/// request names, and answer with the sent message's ID and outcome. The
-/// requesting address comes from the connection (`ConnectInfo`) and is
-/// recorded on the sent message; behind a reverse proxy it is the proxy's.
+/// `POST /api/send`: send stored messages or drafts to the target the
+/// request names. One message: `200` with the sent message's ID and outcome.
+/// Several (a run, #280): `202` with the run's status; its progress from
+/// `GET /api/send/runs/{id}`. The requesting address comes from the
+/// connection (`ConnectInfo`) and is recorded on every sent message; behind
+/// a reverse proxy it is the proxy's.
 async fn send_message(
     State(state): State<AppState>,
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
@@ -549,9 +556,36 @@ async fn send_message(
                 .into_response()
         }
     };
-    match state.sender.send(request, peer.ip()).await {
-        Ok(result) => Json(result).into_response(),
+    match state.sender.start(request, peer.ip()).await {
+        Ok(crate::send::SendOutcome::One(result)) => Json(result).into_response(),
+        Ok(crate::send::SendOutcome::Run(status)) => {
+            (StatusCode::ACCEPTED, Json(status)).into_response()
+        }
         Err(e) => refused(e),
+    }
+}
+
+/// `GET /api/send/runs/{id}` (#280): a run's progress and result, while the
+/// server keeps it (every run under way, the newest finished ones).
+async fn run_status(State(state): State<AppState>, Path(id): Path<String>) -> Response {
+    if !state.sender.enabled() {
+        return sending_off();
+    }
+    match state.sender.run_status(&id) {
+        Some(status) => Json(status).into_response(),
+        None => (StatusCode::NOT_FOUND, "No such run").into_response(),
+    }
+}
+
+/// `POST /api/send/runs/{id}/cancel` (#280): stop a run before its next
+/// message. Answers the run's status; a finished run stays as it was.
+async fn cancel_run(State(state): State<AppState>, Path(id): Path<String>) -> Response {
+    if !state.sender.enabled() {
+        return sending_off();
+    }
+    match state.sender.cancel_run(&id) {
+        Some(status) => Json(status).into_response(),
+        None => (StatusCode::NOT_FOUND, "No such run").into_response(),
     }
 }
 

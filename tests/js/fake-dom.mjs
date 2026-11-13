@@ -20,6 +20,7 @@ export class El {
     }
     setAttribute(k, v) { (this.attrs ||= {})[k] = String(v); }
     getAttribute(k) { return (this.attrs || {})[k] ?? null; }
+    removeAttribute(k) { if (this.attrs) delete this.attrs[k]; }
     get firstChild() { return this.children[0] || null; }
     cloneNode(deep) {
         const c = new El(this.className, this.id);

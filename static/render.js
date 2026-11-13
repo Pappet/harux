@@ -597,10 +597,9 @@ function updateRowSelection(prevId, newId) {
     }
 }
 
-function renderMessageList() {
-    const list = document.getElementById('message-list');
-    const empty = document.getElementById('empty-state');
-
+// The loaded messages the current search and filters show, newest first —
+// the list, and what *Resend filtered* sends (#280).
+function filteredMessages() {
     // Lifted search query parsing out of the filter loop.
     // Reduces query parse operations from O(N) to O(1), significantly
     // speeding up list rendering when searching large message buffers.
@@ -623,6 +622,13 @@ function renderMessageList() {
     } else if (state.validationFilter === 2) { // Errors only
         filtered = filtered.filter(m => m.has_segment_errors);
     }
+    return filtered;
+}
+
+function renderMessageList() {
+    const list = document.getElementById('message-list');
+    const empty = document.getElementById('empty-state');
+    const filtered = filteredMessages();
 
     if (filtered.length === 0) {
         showEmptyState();
@@ -653,6 +659,8 @@ function renderMessageList() {
     list.querySelectorAll('.message-row, .group-header').forEach(r => r.remove());
     list.appendChild(fragment);
     updateTruncationNote(); // rows were appended after it — move it back to the end
+    // The *Resend filtered* menu names how many the filters show (#280).
+    if (state.sendMenu && state.sendMenu.forRun && typeof renderSendMenu === 'function') renderSendMenu();
 
     if (state.autoscroll) {
         list.scrollTop = 0;

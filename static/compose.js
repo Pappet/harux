@@ -62,6 +62,21 @@ function writeDraftStore(storage, key, list) {
     }
 }
 
+// *Repeat* (#280): how many copies a send makes, 1 … the run limit.
+function draftRepeatValue(v) {
+    const max = state.sendConfig && state.sendConfig.max_run_messages ? state.sendConfig.max_run_messages : 1000;
+    const n = Math.floor(Number(v));
+    return Number.isFinite(n) ? Math.min(Math.max(n, 1), max) : 1;
+}
+
+function setDraftRepeat(value) {
+    const d = openDraftObject();
+    if (!d) return;
+    d.repeat = draftRepeatValue(value);
+    saveDrafts();
+    renderDraftHeader();
+}
+
 // A draft as stored, or null if `raw` is not one.
 function normalizeDraft(raw) {
     if (!raw || typeof raw !== 'object' || typeof raw.raw !== 'string') return null;
@@ -78,6 +93,7 @@ function normalizeDraft(raw) {
         sends: Array.isArray(raw.sends) ? raw.sends.slice(-MAX_DRAFT_HISTORY) : [],
         sentRaw: typeof raw.sentRaw === 'string' ? raw.sentRaw : null,
         keep: raw.keep === true,
+        repeat: draftRepeatValue(raw.repeat),
         originGone: raw.originGone === true,
         created: typeof raw.created === 'number' ? raw.created : Date.now(),
     };
@@ -464,15 +480,16 @@ async function sendDraft(d, target) {
         showToast('This draft does not parse. "Send anyway" sends it as it is — it is stored with its parse error.', 'info');
         return false;
     }
+    const raw = d.raw;
+    const item = { raw, charset: d.charset };
+    if (d.basedOn) item.based_on = d.basedOn;
+    // The sent message names the template it came from (#279).
+    else if (d.origin && d.origin.kind === 'template' && d.origin.name) item.template = d.origin.name;
+    if (d.repeat > 1) return repeatDraft(d, target, item, broken);
     if (target.ask && !confirm(`Send this draft to ${target.name} (${target.host}:${target.port})?`)) return false;
     state.sending = true;
     renderDraftHeader();
-    const raw = d.raw;
     try {
-        const item = { raw, charset: d.charset };
-        if (d.basedOn) item.based_on = d.basedOn;
-        // The sent message names the template it came from (#279).
-        else if (d.origin && d.origin.kind === 'template' && d.origin.name) item.template = d.origin.name;
         const resp = await fetch('/api/send', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -518,6 +535,55 @@ async function sendDraft(d, target) {
         }
         renderDraftRail();
     }
+}
+
+// *Repeat* (#280): the draft `d.repeat` times in one run, after a
+// confirmation naming target and number. A target that asks before every
+// message takes no runs (decision D3). The run is noted in the draft's
+// history when it has ended.
+async function repeatDraft(d, target, item, broken) {
+    const n = d.repeat;
+    if (target.ask) {
+        showToast(`${target.name} asks before every message — it takes no runs. Set Repeat to 1 or pick another target.`);
+        return false;
+    }
+    if (!confirm(`Send this draft ${n} times to ${target.name} (${target.host}:${target.port}), over one connection?`)) return false;
+    const raw = d.raw;
+    const started = await startRun({
+        target,
+        items: [item],
+        repeat: n,
+        allowInvalid: broken,
+        what: `Sending ${d.type || 'the draft'} ${n}× → ${target.name}`,
+        onEnd: (status) => {
+            if (!status) return;
+            d.sends.push({
+                id: null,
+                run: status.id,
+                at: Date.now(),
+                target: target.name,
+                state: status.state,
+                done: status.done,
+                total: status.total,
+                ok: status.state === 'done' && !status.failed && runAllAccepted(status),
+                summary: runSummaryParts(status).map((p) => p.text).join(' · '),
+            });
+            d.sends = d.sends.slice(-MAX_DRAFT_HISTORY);
+            saveDrafts();
+            if (state.selectedDraftId === d.id) {
+                renderDraftHeader();
+                if (state.activeTab === 'ack') renderDraftTab(document.getElementById('detail-content'));
+            }
+        },
+    });
+    if (!started) return false;
+    d.sentRaw = raw;
+    d.targetId = target.id;
+    state.draftSendAnyway = null;
+    saveDrafts();
+    if (state.selectedDraftId === d.id) renderDraftHeader();
+    renderDraftRail();
+    return true;
 }
 
 async function sendOpenDraft() {
@@ -644,17 +710,22 @@ function draftMetaHtml(d) {
 function draftActionsHtml(d) {
     const target = draftTarget(d);
     const busy = state.sending ? ' aria-disabled="true"' : '';
-    const open = state.sendMenu ? 'true' : 'false';
+    const open = state.sendMenu && !state.sendMenu.forRun ? 'true' : 'false';
     const anyway = state.draftSendAnyway === d.id;
     const to = target ? esc(target.name) : 'choose a target';
     return `<button class="ctl-btn target-btn" data-action="resend-menu" aria-haspopup="dialog" aria-expanded="${open}" title="Choose the target">`
         + `<span class="k">to</span> <span class="to">${to}</span>${ICONS.chevronDown}</button>`
         + `<button class="ctl-btn on send-draft${anyway ? ' anyway' : ''}" data-action="draft-send"${busy} title="Send the draft (Ctrl+Enter)">`
-        + `${ICONS.resend}<span class="btn-label">${anyway ? 'Send anyway' : 'Send'}</span><kbd class="key">Ctrl ⏎</kbd></button>`;
+        + `${ICONS.resend}<span class="btn-label">${anyway ? 'Send anyway' : (d.repeat > 1 ? `Send ${d.repeat}×` : 'Send')}</span><kbd class="key">Ctrl ⏎</kbd></button>`;
 }
 
 function draftToolsHtml(d) {
-    return `<button class="action-btn${d.keep ? ' active' : ''}" data-action="draft-keep" title="${d.keep ? 'Kept on this computer — click to keep it in this tab only' : 'Keep this draft on this computer (it holds patient data if made from a real message)'}">`
+    const max = state.sendConfig && state.sendConfig.max_run_messages ? state.sendConfig.max_run_messages : 1000;
+    // *Repeat* (#280): the draft goes out n times over one connection, its
+    // placeholders filled in for every copy ({{n}} counts).
+    const repeat = `<label class="repeat-ctl" title="Send the draft this many times in one run; placeholders are filled in for every copy, {{n}} counts">`
+        + `<span>Repeat</span><input type="number" id="draft-repeat" class="repeat-input" min="1" max="${max}" step="1" value="${d.repeat || 1}" aria-label="Repeat the draft this many times"><span>×</span></label>`;
+    return repeat + `<button class="action-btn${d.keep ? ' active' : ''}" data-action="draft-keep" title="${d.keep ? 'Kept on this computer — click to keep it in this tab only' : 'Keep this draft on this computer (it holds patient data if made from a real message)'}">`
         + `${d.keep ? ICONS.starFilled : ICONS.starOutline}<span class="btn-label">${d.keep ? 'Kept' : 'Keep on this computer'}</span></button>`
         + `<button class="action-btn" data-action="draft-save-file" title="Download the bytes a send would write">${ICONS.download}<span class="btn-label">Save as file</span></button>`
         + `<button class="action-btn" data-action="draft-delete" data-draft-id="${escAttr(d.id)}" title="Delete the draft">${ICONS.trash}<span class="btn-label">Delete</span></button>`;
@@ -1209,6 +1280,24 @@ function renderDraftRawTab(content, d) {
     updateDraftStatus();
 }
 
+// The chip of one entry of a draft's history: a send's response, or a
+// run's end (#280).
+function sendChip(s) {
+    if (s.run) {
+        return {
+            cls: s.ok ? 'msg-ack aa' : 'msg-ack ae',
+            text: `${s.done} / ${s.total}`,
+            title: `A run: ${(typeof RUN_END_TEXT === 'object' && RUN_END_TEXT[s.state]) || s.state}`,
+        };
+    }
+    return deliveryChip({ state: s.state, ack_code: s.code, error: s.error });
+}
+
+function sendFacts(s) {
+    if (s.run) return [`run to ${s.target}`, s.summary].filter(Boolean).join(' · ');
+    return [`to ${s.target}`, formatLatency(s.ms)].filter(Boolean).join(' · ');
+}
+
 // The draft's last result and its earlier sends, each a link to the sent
 // message (the rows themselves come over the WebSocket).
 function renderDraftResponseTab(content, d) {
@@ -1218,11 +1307,11 @@ function renderDraftResponseTab(content, d) {
     }
     const children = [];
     const last = d.sends[d.sends.length - 1];
-    const chip = deliveryChip({ state: last.state, ack_code: last.code, error: last.error });
+    const chip = sendChip(last);
     const result = document.createElement('div');
     result.className = 'response-result';
     result.appendChild(textSpan(chip.cls, chip.text, chip.title));
-    result.appendChild(textSpan('response-facts', [`to ${last.target}`, formatLatency(last.ms)].filter(Boolean).join(' · ')));
+    result.appendChild(textSpan('response-facts', sendFacts(last)));
     children.push(result);
     const history = document.createElement('div');
     history.className = 'send-history';
@@ -1233,9 +1322,13 @@ function renderDraftResponseTab(content, d) {
         const row = document.createElement('div');
         row.className = 'h-row';
         row.appendChild(textSpan('when', new Date(s.at).toLocaleTimeString()));
-        const c = deliveryChip({ state: s.state, ack_code: s.code, error: s.error });
+        const c = sendChip(s);
         row.appendChild(textSpan(c.cls, c.text, c.title));
-        row.appendChild(textSpan('what', `to ${s.target}${s.ms != null ? ' · ' + formatLatency(s.ms) : ''}`));
+        row.appendChild(textSpan('what', sendFacts(s)));
+        if (!s.id) { // a run (#280): its rows are in the list
+            history.appendChild(row);
+            continue;
+        }
         const link = document.createElement('button');
         link.className = 'origin-link';
         link.dataset.action = 'select-message';
