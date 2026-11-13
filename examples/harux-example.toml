@@ -28,3 +28,16 @@
 # read_timeout_secs = 60
 # write_timeout_secs = 30
 # max_connections = 100
+
+# [send]
+# Off unless switched on: with it on, everyone who can open the web UI can
+# make this server send HL7 messages to any destination it reaches (or to
+# the ones listed in allowed_destinations). See SECURITY.md -> Sending.
+# enabled = false
+# loopback_target = true          # offer Harux's own MLLP listener as a target
+# connect_timeout_secs = 5
+# response_timeout_secs = 30
+# max_run_messages = 1000         # limits of one run
+# max_run_store_percent = 25      # share of store.max_memory_mb a run may take
+# max_concurrent_runs = 4
+# allowed_destinations = ["orchestra-test.klinik.local:6000-6999"]  # empty = anywhere

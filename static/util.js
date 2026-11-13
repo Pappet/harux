@@ -174,15 +174,33 @@ function hashString(str) {
     return Math.abs(hash);
 }
 
-function getSourceColor(addr) {
-    if (!addr) return 'var(--text-muted)';
-    const colorKey = state.colorByPort ? addr : addr.split(':')[0];
+// --- The peer a row is grouped and coloured by (#272) ---
+// A received message is keyed by its sender's address, a sent message by its
+// target's name with this prefix — a destination is never shown as a sender.
+// The source rail, its counters, the row bar and the highlight all use the
+// key; `srcLabelFor` turns it into the label shown.
+const TARGET_PREFIX = '\u2192 '; // "→ "
+
+function sourceKeyOf(msg) {
+    if (msg && msg.direction === 'out') return TARGET_PREFIX + (msg.target || msg.source_addr || '');
+    return (msg && msg.source_addr) || '';
+}
+
+function isTargetKey(key) {
+    return typeof key === 'string' && key.startsWith(TARGET_PREFIX);
+}
+
+function getSourceColor(key) {
+    if (!key) return 'var(--text-muted)';
+    if (isTargetKey(key)) return 'var(--accent)';
+    const colorKey = state.colorByPort ? key : key.split(':')[0];
     return SOURCE_PALETTE[hashString(colorKey) % SOURCE_PALETTE.length];
 }
 
-function srcLabelFor(addr) {
-    if (!addr) return '';
-    return state.colorByPort ? addr : addr.split(':')[0];
+function srcLabelFor(key) {
+    if (!key) return '';
+    if (isTargetKey(key)) return key;
+    return state.colorByPort ? key : key.split(':')[0];
 }
 
 // --- Time formatting ---
@@ -263,6 +281,30 @@ function ackChipClass(code) {
     return 'msg-ack none';
 }
 
+// The chip of a sent row (#272), from its delivery: the response code, `…`
+// while pending, `✕ reason` for a failure, `sent` when no response was
+// awaited. Commit-accept codes (CA/CE/CR) are coloured like AA/AE/AR.
+function deliveryChip(delivery) {
+    const d = delivery || { state: 'pending' };
+    if (d.state === 'failed') {
+        return { cls: 'msg-ack failed', text: `\u2715 ${d.error || 'failed'}`, title: 'Send failed' };
+    }
+    if (d.state === 'sent') {
+        return { cls: 'msg-ack none', text: 'sent', title: 'Written; no response awaited' };
+    }
+    if (d.state !== 'acked') {
+        return { cls: 'msg-ack pending', text: '\u2026', title: 'Waiting for the response' };
+    }
+    const code = (d.ack_code || '').toUpperCase();
+    return { cls: ackChipClass(code.replace(/^C/, 'A')), text: code || '?', title: `Response ${code}` };
+}
+
+// Round-trip time of a sent message, e.g. "42 ms" / "1.3 s"; '' if unknown.
+function formatLatency(ms) {
+    if (typeof ms !== 'number') return '';
+    return ms < 1000 ? `${ms} ms` : `${(ms / 1000).toFixed(1)} s`;
+}
+
 // Memoize parsed search queries so the `has:warnings` / `has:errors` prefix
 // stripping and the lowercasing of the residual query happen once per query
 // instead of once per message during each filter pass. Bounded at 100 entries
@@ -275,18 +317,31 @@ function getParsedQuery(query) {
     const cached = parsedQueryCache.get(query);
     if (cached) return cached;
 
+    // Prefixes in any order, like `SearchQuery::parse` (src/store.rs):
+    // has:warnings / has:errors, is:sent / is:received (#272).
     let q = query.toLowerCase().trim();
     let hasWarnings = false;
     let hasErrors = false;
-    if (q.startsWith('has:warnings')) {
-        hasWarnings = true;
-        q = q.slice('has:warnings'.length).trim();
-    } else if (q.startsWith('has:errors')) {
-        hasErrors = true;
-        q = q.slice('has:errors'.length).trim();
+    let direction = null;
+    for (;;) {
+        if (q.startsWith('has:warnings')) {
+            hasWarnings = true; hasErrors = false;
+            q = q.slice('has:warnings'.length).trim();
+        } else if (q.startsWith('has:errors')) {
+            hasErrors = true; hasWarnings = false;
+            q = q.slice('has:errors'.length).trim();
+        } else if (q.startsWith('is:sent')) {
+            direction = 'out';
+            q = q.slice('is:sent'.length).trim();
+        } else if (q.startsWith('is:received')) {
+            direction = 'in';
+            q = q.slice('is:received'.length).trim();
+        } else {
+            break;
+        }
     }
 
-    const result = { q, hasWarnings, hasErrors };
+    const result = { q, hasWarnings, hasErrors, direction };
     if (parsedQueryCache.size >= PARSED_QUERY_CACHE_MAX) parsedQueryCache.clear();
     parsedQueryCache.set(query, result);
     return result;

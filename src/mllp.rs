@@ -538,6 +538,8 @@ fn oversize_message(frame: &[u8], limit_mb: usize, peer: &str) -> Hl7Message {
 
     let mut msg = Hl7Message::new_empty(head, peer.to_string());
     msg.message_type = "UNKNOWN".to_string();
+    // Only the beginning is kept: it can't be resent (#272).
+    msg.truncated = true;
     let header_line = msg
         .raw
         .trim_start()
@@ -597,8 +599,9 @@ async fn send_reply(
 ///
 /// Returns `(payload, bytes_consumed)`, or `None` if the frame is incomplete.
 /// The payload is still raw bytes: decoding by MSH-18 is
-/// `hl7::charset::decode_payload`'s job (#188).
-fn extract_mllp_frame(buf: &[u8], scan_from: usize) -> Option<(&[u8], usize)> {
+/// `hl7::charset::decode_payload`'s job (#188). Also reads the responses to
+/// what Harux sends (`mllp_client`, #272).
+pub(crate) fn extract_mllp_frame(buf: &[u8], scan_from: usize) -> Option<(&[u8], usize)> {
     // Find start byte
     let start_pos = buf.iter().position(|&b| b == MLLP_START)?;
 
@@ -752,6 +755,7 @@ mod tests {
         frame.extend(std::iter::repeat_n(b'Q', 100_000));
         let m = oversize_message(&frame, 1, "t");
         assert_eq!(m.raw.len(), OVERSIZE_KEEP_BYTES);
+        assert!(m.truncated, "cut entries can't be resent (#272)");
         assert_eq!(m.message_type, "MDM^T02");
         assert_eq!(m.message_control_id, "BIG1");
         assert!(m

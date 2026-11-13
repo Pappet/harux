@@ -1,19 +1,28 @@
 use axum::body::Body;
 use axum::http::{header, Method, Request, StatusCode};
-use harux::config::StoreConfig;
+use harux::config::{Config, StoreConfig};
 use harux::hl7::types::Hl7Message;
 use harux::mllp::MllpStats;
+use harux::send::{SendSettings, Sender};
 use harux::store::MessageStore;
 use harux::web::{create_router, AppState};
 use tower::ServiceExt;
 
 fn make_state() -> AppState {
+    state_with(Config::default())
+}
+
+/// The state for `config` (its `[send]` section matters; the store limits
+/// are the tests' own).
+fn state_with(config: Config) -> AppState {
+    let store = MessageStore::new(StoreConfig {
+        max_messages: 1000,
+        max_memory_mb: 10,
+        ..StoreConfig::default()
+    });
     AppState {
-        store: MessageStore::new(StoreConfig {
-            max_messages: 1000,
-            max_memory_mb: 10,
-            ..StoreConfig::default()
-        }),
+        sender: Sender::new(SendSettings::from_config(&config).unwrap(), store.clone()),
+        store,
         stats: MllpStats::new(),
         mllp_port: 2575,
         max_connections: 10,
@@ -876,5 +885,267 @@ async fn search_matches_like_the_ui_filter() {
     assert_eq!(
         ids(&get_json(&state, &format!("{}&limit=1", q("adt"))).await),
         ["m4"]
+    );
+}
+
+// ── Sending (#272) ────────────────────────────────────────────────────────────
+
+/// A state with `send.enabled` (and whatever `edit` adds).
+fn sending_state(edit: impl FnOnce(&mut Config)) -> AppState {
+    let mut config = Config::default();
+    config.send.enabled = true;
+    edit(&mut config);
+    state_with(config)
+}
+
+/// `POST /api/send` with `body`, from client 10.0.0.7 (the `ConnectInfo`
+/// the real server provides), optionally with an `Origin`.
+async fn post_send(state: &AppState, body: &str, origin: Option<&str>) -> (StatusCode, String) {
+    let mut b = Request::builder()
+        .method(Method::POST)
+        .uri("/api/send")
+        .header("host", "10.1.2.3:8080")
+        .header("content-type", "application/json");
+    if let Some(o) = origin {
+        b = b.header("origin", o);
+    }
+    let client: std::net::SocketAddr = "10.0.0.7:50000".parse().unwrap();
+    let res = create_router(state.clone())
+        .layer(axum::extract::connect_info::MockConnectInfo(client))
+        .oneshot(b.body(Body::from(body.to_string())).unwrap())
+        .await
+        .unwrap();
+    let status = res.status();
+    let body = collect_body(res.into_body()).await;
+    (status, String::from_utf8_lossy(&body).into_owned())
+}
+
+async fn stored_received(state: &AppState, id: &str) {
+    let mut msg = harux::mllp::ingest(simple_raw().as_bytes(), "10.9.9.9:5000");
+    msg.id = id.to_string();
+    state.store.insert(msg).await;
+}
+
+/// A receiver on 127.0.0.1 that answers one frame with `AA`.
+async fn ack_receiver() -> std::net::SocketAddr {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        while let Ok((mut s, _)) = listener.accept().await {
+            let mut buf = vec![0u8; 4096];
+            let mut acc = Vec::new();
+            while !acc.ends_with(&[0x1c, 0x0d]) {
+                let Ok(n) = s.read(&mut buf).await else { break };
+                if n == 0 {
+                    break;
+                }
+                acc.extend_from_slice(&buf[..n]);
+            }
+            let _ = s
+                .write_all(
+                    b"\x0bMSH|^~\\&|R|RF|||20260101||ACK^A01|A|P|2.5\rMSA|AA|MSG001\r\x1c\x0d",
+                )
+                .await;
+        }
+    });
+    addr
+}
+
+/// D11: without the switch every send route answers 403, and the stats say
+/// sending is off.
+#[tokio::test]
+async fn send_routes_are_forbidden_while_sending_is_off() {
+    let state = make_state();
+    stored_received(&state, "m1").await;
+    let (status, body) = post_send(
+        &state,
+        r#"{"target":"loopback","items":[{"message_id":"m1"}]}"#,
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    assert!(body.contains("send.enabled"), "{body}");
+    let res = create_router(state.clone())
+        .oneshot(
+            Request::builder()
+                .uri("/api/send/config")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::FORBIDDEN);
+    let stats = get_json(&state, "/api/stats").await;
+    assert_eq!(stats["sending_enabled"], false);
+    assert_eq!(stats["sent"], 0);
+    assert_eq!(state.store.count().await, 1, "nothing was stored");
+}
+
+#[tokio::test]
+async fn send_config_describes_the_limits() {
+    let state = sending_state(|c| {
+        c.send.allowed_destinations = vec!["Orchestra.Local:6000-6999".into()];
+    });
+    let json = get_json(&state, "/api/send/config").await;
+    assert_eq!(json["enabled"], true);
+    assert_eq!(json["loopback"]["name"], "This Harux");
+    assert_eq!(json["loopback"]["host"], "127.0.0.1");
+    assert_eq!(json["loopback"]["port"], 2575);
+    assert_eq!(
+        json["allowed_destinations"],
+        serde_json::json!(["orchestra.local:6000-6999"])
+    );
+    assert_eq!(json["max_run_store_percent"], 25);
+}
+
+/// `curl -X POST /api/send` resends a stored message to a plain MLLP
+/// target; the answer carries the sent message's ID and its delivery, and
+/// the sent message records who asked for it.
+#[tokio::test]
+async fn send_a_stored_message_to_a_target() {
+    let state = sending_state(|_| {});
+    stored_received(&state, "m1").await;
+    let addr = ack_receiver().await;
+    let (status, body) = post_send(
+        &state,
+        &format!(
+            r#"{{"target":{{"name":"fake receiver","host":"127.0.0.1","port":{}}},"items":[{{"message_id":"m1"}}]}}"#,
+            addr.port()
+        ),
+        Some("http://10.1.2.3:8080"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let json: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(json["delivery"]["state"], "acked");
+    assert_eq!(json["delivery"]["ack_code"], "AA");
+    assert_eq!(json["delivery"]["control_id_matches"], true);
+    let id = json["id"].as_str().unwrap();
+
+    let detail = get_json(&state, &format!("/api/messages/{id}")).await;
+    assert_eq!(detail["direction"], "out");
+    assert_eq!(detail["source_addr"], addr.to_string());
+    assert_eq!(detail["outbound"]["target"], "fake receiver");
+    assert_eq!(detail["outbound"]["requested_by"], "10.0.0.7");
+    assert_eq!(detail["outbound"]["origin"]["message_id"], "m1");
+    let list = get_json(&state, "/api/messages").await;
+    assert_eq!(list[0]["direction"], "out");
+    assert_eq!(list[0]["target"], "fake receiver");
+    assert_eq!(list[0]["delivery"]["ack_code"], "AA");
+    assert!(list[0]["delivery"].get("response").is_none());
+    assert_eq!(list[1]["direction"], "in");
+
+    let stats = get_json(&state, "/api/stats").await;
+    assert_eq!(stats["sending_enabled"], true);
+    assert_eq!(stats["sent"], 1);
+    assert_eq!(stats["send_rejected"], 0);
+    assert_eq!(stats["send_failed"], 0);
+    assert_eq!(stats["active_runs"], 0);
+}
+
+#[tokio::test]
+async fn send_refusals_have_their_status_codes() {
+    let state = sending_state(|c| {
+        c.send.allowed_destinations = vec!["orchestra.local:6000".into()];
+    });
+    stored_received(&state, "m1").await;
+    let cases = [
+        ("not json", StatusCode::BAD_REQUEST),
+        (
+            r#"{"target":"loopback","items":[]}"#,
+            StatusCode::BAD_REQUEST,
+        ),
+        (
+            r#"{"target":"loopback","items":[{"message_id":"m1"}],"set":{"MSH-10":"x"}}"#,
+            StatusCode::BAD_REQUEST,
+        ),
+        (
+            r#"{"target":{"host":"bad host","port":6000},"items":[{"message_id":"m1"}]}"#,
+            StatusCode::BAD_REQUEST,
+        ),
+        (
+            r#"{"target":{"host":"orchestra.local","port":6000,"tls":true},"items":[{"message_id":"m1"}]}"#,
+            StatusCode::BAD_REQUEST,
+        ),
+        (
+            r#"{"target":{"host":"elsewhere.local","port":6000},"items":[{"message_id":"m1"}]}"#,
+            StatusCode::FORBIDDEN,
+        ),
+        (
+            r#"{"target":{"host":"orchestra.local","port":6001},"items":[{"message_id":"m1"}]}"#,
+            StatusCode::FORBIDDEN,
+        ),
+        (
+            r#"{"target":{"host":"orchestra.local","port":6000},"items":[{"message_id":"gone"}]}"#,
+            StatusCode::NOT_FOUND,
+        ),
+    ];
+    for (body, expect) in cases {
+        let (status, text) = post_send(&state, body, None).await;
+        assert_eq!(status, expect, "{body}: {text}");
+    }
+    assert_eq!(state.store.count().await, 1, "no refusal stores anything");
+}
+
+/// The origin guard covers the new state-changing route (#227).
+#[tokio::test]
+async fn cross_origin_send_is_refused() {
+    let state = sending_state(|_| {});
+    stored_received(&state, "m1").await;
+    let (status, _) = post_send(
+        &state,
+        r#"{"target":"loopback","items":[{"message_id":"m1"}]}"#,
+        Some("https://evil.example"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    assert_eq!(state.store.count().await, 1);
+}
+
+/// The export keeps its meaning (received messages) unless asked otherwise.
+#[tokio::test]
+async fn export_by_direction() {
+    let state = sending_state(|_| {});
+    stored_received(&state, "m1").await;
+    let addr = ack_receiver().await;
+    let (status, _) = post_send(
+        &state,
+        &format!(
+            r#"{{"target":{{"host":"127.0.0.1","port":{}}},"items":[{{"message_id":"m1"}}]}}"#,
+            addr.port()
+        ),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let frames = |uri: &'static str| {
+        let state = state.clone();
+        async move {
+            let res = create_router(state)
+                .oneshot(Request::builder().uri(uri).body(Body::empty()).unwrap())
+                .await
+                .unwrap();
+            let status = res.status();
+            let body = collect_body(res.into_body()).await;
+            (status, body.iter().filter(|&&b| b == 0x0b).count())
+        }
+    };
+    assert_eq!(frames("/api/export").await, (StatusCode::OK, 1));
+    assert_eq!(
+        frames("/api/export?direction=in").await,
+        (StatusCode::OK, 1)
+    );
+    assert_eq!(
+        frames("/api/export?direction=out").await,
+        (StatusCode::OK, 1)
+    );
+    assert_eq!(
+        frames("/api/export?direction=all").await,
+        (StatusCode::OK, 2)
+    );
+    assert_eq!(
+        frames("/api/export?direction=sideways").await.0,
+        StatusCode::BAD_REQUEST
     );
 }

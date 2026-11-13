@@ -4,14 +4,16 @@
 // `collapsedSegments`.
 
 // --- Source legend ---
-function registerSource(addr) {
-    if (addr) state.seenSources.add(addr);
+// Keys come from `sourceKeyOf` (util.js): a sender's address, or "→ target"
+// for a sent message (#272).
+function registerSource(key) {
+    if (key) state.seenSources.add(key);
 }
 
 function recomputeSourceCounts() {
     state.sourceCounts.clear();
     for (const m of state.messages) {
-        const label = srcLabelFor(m.source_addr);
+        const label = srcLabelFor(sourceKeyOf(m));
         if (!label) continue;
         state.sourceCounts.set(label, (state.sourceCounts.get(label) || 0) + 1);
     }
@@ -67,7 +69,7 @@ function renderSourceLegend() {
     const chipsHtml = sortedLabels.map(label => {
         const isActive = state.highlightedSource === label;
         const isDimmed = state.highlightedSource && state.highlightedSource !== label;
-        const classes = `source-chip${isActive ? ' active' : ''}${isDimmed ? ' dimmed' : ''}`;
+        const classes = `source-chip${isTargetKey(label) ? ' target' : ''}${isActive ? ' active' : ''}${isDimmed ? ' dimmed' : ''}`;
         const num = state.sourceCounts.get(label) || 0;
         return `<span class="${classes}" tabindex="0" role="button" aria-label="Filter by source ${escAttr(label)}" data-action="toggle-source" data-source="${escAttr(label)}">
             <span class="dot"></span>
@@ -94,7 +96,7 @@ function renderSourceLegend() {
     sortedLabels.forEach(label => {
         const chip = container.querySelector(`[data-source="${CSS.escape(label)}"]`);
         if (!chip) return;
-        const color = SOURCE_PALETTE[hashString(label) % SOURCE_PALETTE.length];
+        const color = isTargetKey(label) ? 'var(--accent)' : SOURCE_PALETTE[hashString(label) % SOURCE_PALETTE.length];
         const dot = chip.querySelector('.dot');
         if (dot) { dot.style.background = color; dot.style.color = color; }
     });
@@ -283,16 +285,22 @@ function buildMessageRow(msg) {
     const row = rowSkeleton();
     if (msg.id === state.selectedId) row.classList.add('selected');
     if (msg.bookmarked) row.classList.add('bookmarked');
-    const srcKey = state.colorByPort ? msg.source_addr : (msg.source_addr ? msg.source_addr.split(':')[0] : '');
-    if (state.highlightedSource && srcKey !== state.highlightedSource) row.classList.add('dimmed');
+    const outbound = msg.direction === 'out';
+    if (outbound) row.classList.add('outbound');
+    const sourceKey = sourceKeyOf(msg);
+    if (state.highlightedSource && srcLabelFor(sourceKey) !== state.highlightedSource) row.classList.add('dimmed');
 
     row.dataset.id = msg.id;
     row.dataset.received = msg.received_at || '';
-    row.setAttribute('aria-label', `Message from ${msg.sending_facility || 'unknown'}, type ${msg.message_type || 'unknown'}, received ${msg.received_at}`);
+    row.setAttribute('aria-label', outbound
+        ? `Message sent to ${msg.target || msg.source_addr}, type ${msg.message_type || 'unknown'}, sent ${msg.received_at}`
+        : `Message from ${msg.sending_facility || 'unknown'}, type ${msg.message_type || 'unknown'}, received ${msg.received_at}`);
 
     const [bar, body, actions] = row.children;
     bar.title = msg.source_addr || '';
-    bar.style.background = getSourceColor(msg.source_addr);
+    // A sent row's bar is dashed in the accent colour (style.css), never a
+    // sender's colour.
+    if (!outbound) bar.style.background = getSourceColor(sourceKey);
 
     const [row1, row2] = body.children;
     const [type, patient] = row1.children;
@@ -303,6 +311,7 @@ function buildMessageRow(msg) {
     } else {
         type.textContent = msg.message_type || '—';
     }
+    if (outbound) type.textContent = '\u2191 ' + type.textContent; // ↑ sent
     patient.textContent = msg.patient_name || msg.patient_id || '—';
 
     const warnCount = msg.validation_warning_count || 0;
@@ -318,12 +327,23 @@ function buildMessageRow(msg) {
         if (tagsArr.length > 2) tags.appendChild(textSpan('msg-tag-small', `+${tagsArr.length - 2}`));
         row1.appendChild(tags);
     }
-    const ackCode = (msg.ack_code || '').toUpperCase();
-    row1.appendChild(ackCode ? textSpan(ackChipClass(ackCode), ackCode) : textSpan('msg-ack none', '—'));
+    if (outbound) {
+        // What the destination answered, where a received row shows the ACK
+        // Harux wrote (#272), followed by the round-trip time.
+        appendDeliveryChip(row1, msg.delivery);
+    } else {
+        const ackCode = (msg.ack_code || '').toUpperCase();
+        row1.appendChild(ackCode ? textSpan(ackChipClass(ackCode), ackCode) : textSpan('msg-ack none', '—'));
+    }
 
     const [facility, , src, , segs, time] = row2.children;
     facility.textContent = msg.sending_facility || 'unknown';
-    src.textContent = msg.source_addr || '';
+    if (outbound) {
+        src.textContent = TARGET_PREFIX + (msg.target || msg.source_addr || '');
+        src.title = `Sent to ${msg.source_addr || ''}`;
+    } else {
+        src.textContent = msg.source_addr || '';
+    }
     segs.textContent = msg.segment_count != null ? `${msg.segment_count} segs` : '—';
     time.textContent = rowTimeLabel(msg, Date.now());
 
@@ -333,6 +353,14 @@ function buildMessageRow(msg) {
     if (msg.bookmarked) btn.classList.add('active');
     btn.appendChild(iconNode(msg.bookmarked ? 'starFilled' : 'starOutline'));
     return row;
+}
+
+// The chip (and the round-trip time) of a sent row, from its delivery.
+function appendDeliveryChip(row1, delivery) {
+    const chip = deliveryChip(delivery);
+    row1.appendChild(textSpan(chip.cls, chip.text, chip.title));
+    const latency = delivery && delivery.state !== 'pending' ? formatLatency(delivery.latency_ms) : '';
+    if (latency) row1.appendChild(textSpan('msg-latency', latency, 'Round-trip time'));
 }
 
 // True when no client-side filters are active, so new messages can be
@@ -501,6 +529,16 @@ function patchRow(id, mutations) {
         }
     }
 
+    if ('delivery' in mutations) {
+        const row1 = row.querySelector('.msg-row1');
+        if (row1) {
+            for (const el of [row1.querySelector('.msg-ack'), row1.querySelector('.msg-latency')]) {
+                if (el) el.remove();
+            }
+            appendDeliveryChip(row1, mutations.delivery);
+        }
+    }
+
     if ('tags' in mutations) {
         const row1 = row.querySelector('.msg-row1');
         if (!row1) return;
@@ -609,6 +647,7 @@ function renderMessageList() {
 // matches. Empty-string fields are skipped before the lowercasing — saves a
 // no-op call per absent property.
 function matchesSearch(msg, parsedQuery) {
+    if (parsedQuery.direction && (msg.direction || 'in') !== parsedQuery.direction) return false;
     if (parsedQuery.hasWarnings) {
         // Any warning; a segment error is one, too (same in SearchQuery).
         if ((msg.validation_warning_count || 0) === 0) return false;
@@ -624,7 +663,9 @@ function matchesSearch(msg, parsedQuery) {
     if (msg.sending_facility && msg.sending_facility.toLowerCase().includes(q)) return true;
     if (msg.patient_id && msg.patient_id.toLowerCase().includes(q)) return true;
     if (msg.message_control_id && msg.message_control_id.toLowerCase().includes(q)) return true;
+    // For a sent message the source is its destination and its target's name.
     if (msg.source_addr && msg.source_addr.toLowerCase().includes(q)) return true;
+    if (msg.target && msg.target.toLowerCase().includes(q)) return true;
     if (msg.tags && msg.tags.some(t => t.toLowerCase().includes(q))) return true;
 
     return false;
@@ -682,6 +723,10 @@ function resetDetailHeader() {
         descEl.classList.add('hidden');
         descEl.textContent = '';
     }
+    const dirEl = document.getElementById('detail-direction');
+    if (dirEl) dirEl.classList.add('hidden');
+    const ackTab = document.getElementById('tab-btn-ack');
+    if (ackTab) ackTab.textContent = 'ACK';
     const metaEl = document.getElementById('detail-meta');
     if (metaEl) metaEl.innerHTML = '';
     const actionsEl = document.getElementById('detail-actions');
@@ -706,15 +751,21 @@ function buildDetailMeta(msg) {
     if (msg.version) {
         items.push(`<span class="item"><span class="k">v</span><span class="v">${esc(msg.version)}</span></span>`);
     }
+    // A sent message (#272): its destination and when the send began.
+    const outbound = msg.direction === 'out';
     if (msg.source_addr) {
-        items.push(`<span class="item"><span class="k">from</span><span class="v">${esc(msg.source_addr)}</span></span>`);
+        items.push(`<span class="item"><span class="k">${outbound ? 'to' : 'from'}</span><span class="v">${esc(msg.source_addr)}</span></span>`);
     }
     if (msg.charset) {
         items.push(`<span class="item"><span class="k">charset</span><span class="v">${esc(msg.charset)}</span></span>`);
     }
     const received = formatDetailReceived(msg.received_at);
     if (received) {
-        items.push(`<span class="item"><span class="k">received</span><span class="v">${esc(received)}</span></span>`);
+        items.push(`<span class="item"><span class="k">${outbound ? 'sent' : 'received'}</span><span class="v">${esc(received)}</span></span>`);
+    }
+    const latency = outbound && msg.delivery ? formatLatency(msg.delivery.latency_ms) : '';
+    if (latency) {
+        items.push(`<span class="item"><span class="k">round trip</span><span class="v">${esc(latency)}</span></span>`);
     }
     return items.join('<span class="sep">·</span>');
 }
@@ -734,10 +785,20 @@ function renderDetail() {
     document.getElementById('detail-title').textContent =
         msg.patient_name || msg.patient_id || msg.message_type || 'Message';
 
+    // A sent message (#272) is badged SENT; its description says where it
+    // went, where it came from and who asked for it, and the ACK tab shows
+    // the destination's response.
+    const outbound = msg.direction === 'out';
+    const dirEl = document.getElementById('detail-direction');
+    if (dirEl) dirEl.classList.toggle('hidden', !outbound);
+    const ackTab = document.getElementById('tab-btn-ack');
+    if (ackTab) ackTab.textContent = outbound ? 'Response' : 'ACK';
+
     // Description row — always populate when message_type_description is available.
     const descEl = document.getElementById('detail-desc');
-    if (msg.message_type_description) {
-        descEl.textContent = msg.message_type_description;
+    const desc = outbound ? sentDescription(msg) : msg.message_type_description;
+    if (desc) {
+        descEl.textContent = desc;
         descEl.classList.remove('hidden');
     } else {
         descEl.classList.add('hidden');
@@ -792,6 +853,16 @@ function renderDetail() {
     }
 
     renderTab();
+}
+
+// "Sent to orchestra-test · resent unchanged · requested by 10.0.0.7".
+function sentDescription(msg) {
+    const out = msg.outbound || {};
+    const parts = [`Sent to ${out.target || msg.source_addr || 'unknown'}`];
+    if (out.origin && out.origin.kind === 'resend') parts.push('resent unchanged from a stored message');
+    if (out.requested_by) parts.push(`requested by ${out.requested_by}`);
+    if (msg.message_type_description) parts.push(msg.message_type_description);
+    return parts.join(' \u00b7 ');
 }
 
 function switchTab(tab) {
@@ -1183,6 +1254,38 @@ function renderAckTab(content, ack) {
     renderRawLinesView(content, ack, false);
 }
 
+// The Response tab of a sent message (#272): a result line, then the
+// response as raw lines. The response text is only in the detail JSON, never
+// in a list summary.
+function renderResponseTab(content, msg) {
+    const d = msg.delivery || { state: 'pending' };
+    const chip = deliveryChip(d);
+    const result = document.createElement('div');
+    result.className = 'response-result';
+    result.appendChild(textSpan(chip.cls, chip.text, chip.title));
+    const facts = [];
+    if (d.state === 'pending') facts.push('Waiting for the response');
+    if (d.state === 'sent') facts.push('Written; no response was awaited');
+    const latency = formatLatency(d.latency_ms);
+    if (latency) facts.push(latency);
+    if (d.error_detail) facts.push(d.error_detail);
+    if (d.control_id_matches === true) facts.push('MSA-2 repeats the control ID that was sent');
+    if (d.control_id_matches === false) facts.push('MSA-2 does not repeat the control ID that was sent');
+    if (d.response_truncated) {
+        // response_size counts bytes on the wire; the kept text's length is
+        // characters, so the two are not compared (#284 review).
+        facts.push(`the response was ${formatSize(d.response_size || 0)}; only its beginning is kept`);
+    }
+    result.appendChild(textSpan('response-facts', facts.join(' \u00b7 ')));
+    const children = [result];
+    if (d.response) {
+        const view = document.createElement('div');
+        renderRawLinesView(view, d.response, false);
+        children.push(view);
+    }
+    content.replaceChildren(...children);
+}
+
 // Highlights a pretty-printed JSON string. Walks via regex so whitespace and
 // indentation are preserved verbatim; non-token text is HTML-escaped to keep
 // arbitrary string values safe.
@@ -1251,7 +1354,8 @@ function renderTab() {
     } else if (state.activeTab === 'raw') {
         renderRawLinesView(content, msg.raw, true);
     } else if (state.activeTab === 'ack') {
-        renderAckTab(content, msg.ack_response);
+        if (msg.direction === 'out') renderResponseTab(content, msg);
+        else renderAckTab(content, msg.ack_response);
     } else if (state.activeTab === 'json') {
         renderJsonTab(content, msg);
     } else if (state.activeTab === 'diff') {

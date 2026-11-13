@@ -1,9 +1,9 @@
-use crate::hl7::types::{Hl7Message, WireForm};
+use crate::hl7::types::{Direction, Hl7Message, WireForm};
 use crate::mllp::{MllpStats, MLLP_END_1, MLLP_END_2, MLLP_START};
 use crate::store::{MessageStore, StoreEvent};
 use axum::body::{Body, Bytes};
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
-use axum::extract::{Path, Query, State};
+use axum::extract::{ConnectInfo, Path, Query, State};
 use axum::http::{HeaderName, HeaderValue, StatusCode};
 use axum::middleware;
 use axum::response::{Html, IntoResponse, Response};
@@ -13,6 +13,7 @@ use rust_embed::Embed;
 use serde::Deserialize;
 use std::collections::VecDeque;
 use std::convert::Infallible;
+use std::net::SocketAddr;
 use std::pin::Pin;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
@@ -32,6 +33,16 @@ struct StatsResponse {
     rejected_connections: u64,
     max_connections: usize,
     mllp_port: u16,
+    /// Sending (#272): whether it is switched on, messages sent and failed
+    /// since start or *Clear*, runs under way.
+    sending_enabled: bool,
+    /// Accepted (`AA`/`CA`) or written without awaiting a response.
+    sent: u64,
+    /// Answered with another code (`AE`, `AR`, …).
+    send_rejected: u64,
+    /// No usable answer (refused, timeout, no MSA, …).
+    send_failed: u64,
+    active_runs: usize,
 }
 
 #[cfg(test)]
@@ -120,6 +131,9 @@ pub struct AppState {
     /// `server.allowed_hosts`: names accepted in `Host` besides IP literals
     /// and `localhost` (#227).
     pub allowed_hosts: Arc<Vec<String>>,
+    /// Sending stored messages (#272); answers `403` while `send.enabled`
+    /// is off.
+    pub sender: crate::send::Sender,
 }
 
 async fn add_security_headers(req: axum::extract::Request, next: middleware::Next) -> Response {
@@ -291,6 +305,9 @@ pub fn create_router(state: AppState) -> Router {
         )
         .route("/api/clear", axum::routing::post(clear_messages))
         .route("/api/export", get(export_raw_hl7))
+        // Sending (#272) — `403` while `send.enabled` is off.
+        .route("/api/send/config", get(send_config))
+        .route("/api/send", axum::routing::post(send_message))
         // WebSocket
         .route("/ws", get(ws_handler))
         // Static files (SPA)
@@ -384,6 +401,7 @@ async fn search_messages(
 
 async fn get_stats(State(state): State<AppState>) -> impl IntoResponse {
     let (store_bytes, store_max_bytes) = state.store.memory_usage().await;
+    let send = state.sender.counters();
     Json(StatsResponse {
         total_messages: state.store.count().await,
         store_bytes,
@@ -395,13 +413,81 @@ async fn get_stats(State(state): State<AppState>) -> impl IntoResponse {
         rejected_connections: state.stats.rejected_connections.load(Ordering::Relaxed),
         max_connections: state.max_connections,
         mllp_port: state.mllp_port,
+        sending_enabled: state.sender.enabled(),
+        sent: send.sent,
+        send_rejected: send.rejected,
+        send_failed: send.failed,
+        active_runs: state.sender.active_runs(),
     })
 }
 
 async fn clear_messages(State(state): State<AppState>) -> impl IntoResponse {
     state.store.clear().await;
     state.stats.reset_message_counters();
+    state.sender.reset_counters();
     Json(serde_json::json!({"status": "cleared"}))
+}
+
+// --- Sending (#272) ---
+
+fn sending_off() -> Response {
+    (
+        StatusCode::FORBIDDEN,
+        crate::send::SendError::Disabled.message(),
+    )
+        .into_response()
+}
+
+async fn send_config(State(state): State<AppState>) -> Response {
+    if !state.sender.enabled() {
+        return sending_off();
+    }
+    Json(state.sender.config_response()).into_response()
+}
+
+/// `POST /api/send`: send one stored message, unchanged, to the target the
+/// request names, and answer with the sent message's ID and outcome. The
+/// requesting address comes from the connection (`ConnectInfo`) and is
+/// recorded on the sent message; behind a reverse proxy it is the proxy's.
+async fn send_message(
+    State(state): State<AppState>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    body: Bytes,
+) -> Response {
+    use crate::send::SendError;
+    if !state.sender.enabled() {
+        return sending_off();
+    }
+    let request: crate::send::SendRequest = match serde_json::from_slice(&body) {
+        Ok(r) => r,
+        Err(e) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                format!("Malformed send request: {e}"),
+            )
+                .into_response()
+        }
+    };
+    match state.sender.send(request, peer.ip()).await {
+        Ok(result) => Json(result).into_response(),
+        Err(e) => {
+            let status = match e {
+                SendError::Disabled | SendError::Forbidden(_) => StatusCode::FORBIDDEN,
+                SendError::BadRequest(_) => StatusCode::BAD_REQUEST,
+                SendError::NotFound(_) => StatusCode::NOT_FOUND,
+                SendError::TooLarge(_) => StatusCode::PAYLOAD_TOO_LARGE,
+                SendError::Unprocessable(_) => StatusCode::UNPROCESSABLE_ENTITY,
+                SendError::Busy => StatusCode::TOO_MANY_REQUESTS,
+            };
+            (status, e.message()).into_response()
+        }
+    }
+}
+
+#[derive(Deserialize)]
+struct ExportParams {
+    /// `in` (default: received messages, as before #272), `out` or `all`.
+    direction: Option<String>,
 }
 
 /// Stream every stored message as a single MLLP-framed payload.
@@ -417,8 +503,27 @@ async fn clear_messages(State(state): State<AppState>) -> impl IntoResponse {
 /// payloads go out zero-copy straight from the stored message; small ones are
 /// coalesced into ~64 KiB chunks. Peak extra memory is one chunk instead of
 /// two full copies of the store.
-async fn export_raw_hl7(State(state): State<AppState>) -> impl IntoResponse {
-    let messages = state.store.payload_snapshot().await;
+///
+/// `?direction=` (#272): `in` (default) exports received messages only, so
+/// the export keeps its meaning once Harux sends; `out` the sent ones, `all`
+/// both.
+async fn export_raw_hl7(
+    State(state): State<AppState>,
+    Query(params): Query<ExportParams>,
+) -> Response {
+    let direction = match params.direction.as_deref().unwrap_or("in") {
+        "in" => Some(Direction::In),
+        "out" => Some(Direction::Out),
+        "all" => None,
+        other => {
+            return (
+                StatusCode::BAD_REQUEST,
+                format!("direction {other:?}: use in, out or all"),
+            )
+                .into_response()
+        }
+    };
+    let messages = state.store.payload_snapshot(direction).await;
     let content_length: usize = messages.iter().map(|m| m.wire_len() + 3).sum();
 
     (
@@ -438,6 +543,7 @@ async fn export_raw_hl7(State(state): State<AppState>) -> impl IntoResponse {
         ],
         Body::from_stream(MllpExportStream::new(messages)),
     )
+        .into_response()
 }
 
 /// Chunks of at most this size are built by copying small payloads; a payload
@@ -612,6 +718,7 @@ pub fn ws_event_json(event: &StoreEvent) -> String {
         StoreEvent::NewMessage(s) => frame_json("new_message", Some(&**s)),
         StoreEvent::TagsUpdated(s) => frame_json("tags_updated", Some(&**s)),
         StoreEvent::BookmarkToggled(s) => frame_json("bookmark_toggled", Some(&**s)),
+        StoreEvent::DeliveryUpdated(s) => frame_json("delivery_updated", Some(&**s)),
         StoreEvent::Evicted(ids) => frame_json("evicted", Some(&**ids)),
         StoreEvent::Cleared => frame_json::<()>("cleared", None),
     }

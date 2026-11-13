@@ -1,5 +1,7 @@
 use crate::config::StoreConfig;
-use crate::hl7::types::{heap_bytes, Hl7Message, Hl7MessageSummary, MessageMeta, MessageSnapshot};
+use crate::hl7::types::{
+    heap_bytes, Delivery, Direction, Hl7Message, Hl7MessageSummary, MessageMeta, MessageSnapshot,
+};
 use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 use tokio::sync::{broadcast, RwLock};
@@ -9,36 +11,55 @@ const BROADCAST_CAPACITY: usize = 4096;
 
 /// A search query as the UI writes it — parsed like `getParsedQuery` in
 /// `static/util.js`, and matched like `matchesSearch` in `static/render.js`,
-/// so a server search finds what the client filter shows (#197): an optional
-/// `has:warnings` / `has:errors` prefix, then a case-insensitive substring of
-/// the patient name or ID, message type, facility, control ID, source
-/// address or a tag.
+/// so a server search finds what the client filter shows (#197): optional
+/// prefixes — `has:warnings` / `has:errors`, `is:sent` / `is:received`
+/// (#272), in any order — then a case-insensitive substring of the patient
+/// name or ID, message type, facility, control ID, source address (for a
+/// sent message: its destination and its target's name) or a tag.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SearchQuery {
     text: String,
     has_warnings: bool,
     has_errors: bool,
+    direction: Option<Direction>,
 }
 
 impl SearchQuery {
     pub fn parse(query: &str) -> Self {
         let lower = query.trim().to_lowercase();
-        let (rest, has_warnings, has_errors) = if let Some(r) = lower.strip_prefix("has:warnings") {
-            (r, true, false)
-        } else if let Some(r) = lower.strip_prefix("has:errors") {
-            (r, false, true)
-        } else {
-            (lower.as_str(), false, false)
-        };
+        let mut rest = lower.as_str();
+        let (mut has_warnings, mut has_errors, mut direction) = (false, false, None);
+        loop {
+            rest = rest.trim_start();
+            if let Some(r) = rest.strip_prefix("has:warnings") {
+                (has_warnings, has_errors) = (true, false);
+                rest = r;
+            } else if let Some(r) = rest.strip_prefix("has:errors") {
+                (has_warnings, has_errors) = (false, true);
+                rest = r;
+            } else if let Some(r) = rest.strip_prefix("is:sent") {
+                direction = Some(Direction::Out);
+                rest = r;
+            } else if let Some(r) = rest.strip_prefix("is:received") {
+                direction = Some(Direction::In);
+                rest = r;
+            } else {
+                break;
+            }
+        }
         Self {
             text: rest.trim().to_string(),
             has_warnings,
             has_errors,
+            direction,
         }
     }
 
     fn matches(&self, entry: &StoredEntry) -> bool {
         let m = &entry.message;
+        if self.direction.is_some_and(|d| d != m.direction()) {
+            return false;
+        }
         // has:warnings = any warning; a segment error is one, too.
         if self.has_warnings && m.validation_warnings.is_empty() {
             return false;
@@ -65,6 +86,7 @@ impl SearchQuery {
             || opt(&m.patient_id)
             || hit(&m.message_control_id)
             || hit(&m.source_addr)
+            || m.outbound.as_ref().is_some_and(|o| hit(&o.target))
             || entry.meta.tags.iter().any(|t| hit(t))
     }
 }
@@ -89,6 +111,9 @@ pub enum StoreEvent {
     NewMessage(Box<Hl7MessageSummary>),
     TagsUpdated(Box<Hl7MessageSummary>),
     BookmarkToggled(Box<Hl7MessageSummary>),
+    /// A sent message's delivery changed (#272): the summary, which carries
+    /// no response text.
+    DeliveryUpdated(Box<Hl7MessageSummary>),
     /// IDs removed by an eviction pass (oldest first). Shared via `Arc` so the
     /// broadcast clone per subscriber does not copy the ID list.
     Evicted(Arc<Vec<String>>),
@@ -382,13 +407,30 @@ impl MessageStore {
 
     /// Insert a message and broadcast summary to all WebSocket subscribers
     pub async fn insert(&self, msg: Hl7Message) {
-        let meta = MessageMeta::default();
+        self.insert_entry(msg, MessageMeta::default()).await;
+    }
+
+    /// Insert a message Harux is about to send (#272), with delivery
+    /// `pending`, and return the stored payload: the sender writes its bytes
+    /// from this `Arc` instead of holding a copy of its own. Stored **before**
+    /// the connection is opened, so what the destination forwards because of
+    /// the send can never be listed above it.
+    pub async fn insert_sent(&self, msg: Hl7Message) -> Arc<Hl7Message> {
+        let meta = MessageMeta {
+            delivery: Some(Box::new(Delivery::pending())),
+            ..MessageMeta::default()
+        };
+        self.insert_entry(msg, meta).await
+    }
+
+    async fn insert_entry(&self, msg: Hl7Message, meta: MessageMeta) -> Arc<Hl7Message> {
         let summary = Hl7MessageSummary::new(&msg, &meta);
         // Walk the parsed message once, outside the lock.
         let bytes = entry_bytes(&msg, &meta);
         let id = msg.id.clone();
+        let message = Arc::new(msg);
         let entry = StoredEntry {
-            message: Arc::new(msg),
+            message: Arc::clone(&message),
             meta,
             bytes,
         };
@@ -410,17 +452,24 @@ impl MessageStore {
             .send(EventFrame::new(StoreEvent::NewMessage(Box::new(summary))));
         drop(inner);
 
-        if needs_eviction
-            // Ordering::Relaxed is sufficient because notify_one() handles the necessary memory barriers
-            && !self
-                .eviction_flag
-                .swap(true, std::sync::atomic::Ordering::Relaxed)
-        {
-            self.eviction_notify.notify_one();
+        if needs_eviction {
+            self.wake_eviction();
         }
 
         if count % 1000 == 0 {
             info!("Store now holds {} messages", count);
+        }
+        message
+    }
+
+    /// Wake the background eviction task (once per pass).
+    fn wake_eviction(&self) {
+        // Ordering::Relaxed is sufficient because notify_one() handles the necessary memory barriers
+        if !self
+            .eviction_flag
+            .swap(true, std::sync::atomic::Ordering::Relaxed)
+        {
+            self.eviction_notify.notify_one();
         }
     }
 
@@ -479,6 +528,7 @@ impl MessageStore {
             .map(|e| MessageSnapshot {
                 message: Arc::clone(&e.message),
                 meta: e.meta.clone(),
+                direction: e.message.direction(),
             })
     }
 
@@ -494,12 +544,16 @@ impl MessageStore {
     /// `MessageMeta`, not in the payload (#192): the extra `Arc` references
     /// never trigger a copy-on-write. Do not move mutable fields back into
     /// `Hl7Message`.
-    pub async fn payload_snapshot(&self) -> Vec<Arc<Hl7Message>> {
+    ///
+    /// `direction` limits it to received or sent messages (#272); `None`
+    /// takes both.
+    pub async fn payload_snapshot(&self, direction: Option<Direction>) -> Vec<Arc<Hl7Message>> {
         let inner = self.inner.read().await;
         inner
             .order
             .iter()
             .filter_map(|id| inner.messages.get(id))
+            .filter(|e| direction.is_none_or(|d| d == e.message.direction()))
             .map(|e| Arc::clone(&e.message))
             .collect()
     }
@@ -595,7 +649,29 @@ impl MessageStore {
 
         // Moved into the event — nothing else needs it (no clone under the lock).
         let _ = self.tx.send(EventFrame::new(event(Box::new(summary))));
+        // Metadata can grow an entry (a response, #272): check the limits as
+        // `insert` does instead of waiting for the next insert.
+        let needs_eviction = inner.over_limit();
+        drop(guard);
+        if needs_eviction {
+            self.wake_eviction();
+        }
         true
+    }
+
+    /// Record what became of a sent message (#272) and broadcast
+    /// `DeliveryUpdated`. `false` when the message is gone (evicted or
+    /// cleared before its outcome arrived): the caller only logs it.
+    pub async fn set_delivery(&self, id: &str, delivery: Delivery) -> bool {
+        self.mutate_meta(
+            id,
+            |meta| {
+                meta.delivery = Some(Box::new(delivery));
+                true
+            },
+            StoreEvent::DeliveryUpdated,
+        )
+        .await
     }
 
     /// Add a tag to a message and broadcast the update
@@ -1359,7 +1435,7 @@ mod tests {
         for i in 0..3 {
             store.insert(make_msg(&format!("p-{i}"))).await;
         }
-        let snap = store.payload_snapshot().await;
+        let snap = store.payload_snapshot(None).await;
         let ids: Vec<&str> = snap.iter().map(|m| m.id.as_str()).collect();
         assert_eq!(ids, ["p-0", "p-1", "p-2"]);
         let detail = store.get_by_id("p-1").await.unwrap();
@@ -1381,5 +1457,170 @@ mod tests {
         assert_eq!(v["tags"], serde_json::json!(["t1"]));
         assert_eq!(v["bookmarked"], true);
         assert!(v.get("message").is_none() && v.get("meta").is_none());
+    }
+
+    // --- Sent messages (#272) ---
+
+    fn make_sent(id: &str, target: &str) -> Hl7Message {
+        use crate::hl7::types::{Origin, Outbound};
+        let mut msg = make_msg(id);
+        msg.source_addr = "10.9.9.9:6661".into();
+        msg.outbound = Some(Box::new(Outbound {
+            target: target.into(),
+            tls: false,
+            origin: Origin::Resend {
+                message_id: "orig".into(),
+            },
+            requested_by: "10.0.0.7".into(),
+            run: "run-1".into(),
+        }));
+        msg
+    }
+
+    fn acked(response: &str) -> Delivery {
+        Delivery {
+            state: crate::hl7::types::DeliveryState::Acked,
+            ack_code: Some("AA".into()),
+            response: Some(response.into()),
+            latency_ms: Some(12),
+            control_id_matches: Some(true),
+            ..Delivery::pending()
+        }
+    }
+
+    /// A sent message is inserted pending; its outcome arrives as
+    /// `delivery_updated`, in store order, and the summary never carries the
+    /// response text — only the detail does.
+    #[tokio::test]
+    async fn test_sent_message_delivery_flow() {
+        let store = manual_store(100, 512);
+        let mut rx = store.subscribe();
+        let sent = store.insert_sent(make_sent("s1", "orchestra-test")).await;
+        assert_eq!(sent.id, "s1");
+        let response = "MSH|^~\\&|R|RF|||20260101||ACK|X|P|2.5\rMSA|AA|C1\rSECRET-RESPONSE";
+        assert!(store.set_delivery("s1", acked(response)).await);
+
+        let first = rx.recv().await.unwrap();
+        let StoreEvent::NewMessage(s) = &first.event else {
+            panic!("expected new_message first")
+        };
+        assert_eq!(s.direction, Direction::Out);
+        assert_eq!(s.target.as_deref(), Some("orchestra-test"));
+        assert_eq!(s.origin_id.as_deref(), Some("orig"));
+        assert_eq!(
+            s.delivery.as_ref().unwrap().state,
+            crate::hl7::types::DeliveryState::Pending
+        );
+        let second = rx.recv().await.unwrap();
+        let json = second.cached_json(crate::web::ws_event_json).to_string();
+        assert!(json.starts_with(r#"{"type":"delivery_updated""#), "{json}");
+        assert!(json.contains(r#""ack_code":"AA""#), "{json}");
+        assert!(
+            !json.contains("SECRET-RESPONSE"),
+            "no response text in a summary"
+        );
+        let listed = serde_json::to_string(&store.list_summaries(0, 10).await).unwrap();
+        assert!(!listed.contains("SECRET-RESPONSE"));
+
+        let detail = serde_json::to_value(store.get_by_id("s1").await.unwrap()).unwrap();
+        assert_eq!(detail["direction"], "out");
+        assert_eq!(detail["delivery"]["response"], response);
+        assert_eq!(detail["outbound"]["target"], "orchestra-test");
+        assert_eq!(detail["outbound"]["origin"]["kind"], "resend");
+        assert!(
+            detail["ack_code"].is_null(),
+            "ack_code stays what Harux wrote back"
+        );
+        store.assert_bytes_in_sync().await;
+    }
+
+    /// A response grows an entry: the bytes stay exact and the eviction task
+    /// is woken without waiting for the next insert.
+    #[tokio::test]
+    async fn test_delivery_bytes_and_eviction_wakeup() {
+        let store = make_store(10_000);
+        {
+            let mut inner = store.inner.write().await;
+            inner.max_bytes = 200 * 1024;
+        }
+        store.insert(make_big_msg("old", 60)).await;
+        store.insert_sent(make_sent("s", "t")).await;
+        store.assert_bytes_in_sync().await;
+        assert!(!store.inner.read().await.over_limit());
+        // A 150 KB response puts the store over its limit.
+        assert!(
+            store
+                .set_delivery("s", acked(&"x".repeat(150 * 1024)))
+                .await
+        );
+        store.wait_until_within_limits().await;
+        store.assert_bytes_in_sync().await;
+        assert!(store.get_by_id("old").await.is_none(), "oldest evicted");
+    }
+
+    /// The outcome of a message evicted or cleared before it arrived is a
+    /// no-op.
+    #[tokio::test]
+    async fn test_delivery_for_a_message_that_is_gone() {
+        let store = manual_store(100, 512);
+        store.insert_sent(make_sent("s", "t")).await;
+        store.clear().await;
+        assert!(!store.set_delivery("s", acked("x")).await);
+        assert_eq!(store.current_bytes().await, 0);
+    }
+
+    #[tokio::test]
+    async fn test_search_and_export_by_direction() {
+        let store = manual_store(100, 512);
+        store.insert(make_msg("in1")).await;
+        store
+            .insert_sent(make_sent("out1", "Orchestra-Test-ADT"))
+            .await;
+        let ids = |v: Vec<Hl7MessageSummary>| v.into_iter().map(|s| s.id).collect::<Vec<_>>();
+        let search = |q: &str| SearchQuery::parse(q);
+        assert_eq!(
+            ids(store.older_than(None, Some(&search("is:sent")), 10).await),
+            ["out1"]
+        );
+        assert_eq!(
+            ids(store
+                .older_than(None, Some(&search("is:received")), 10)
+                .await),
+            ["in1"]
+        );
+        // The target's name and the destination are a sent message's source.
+        assert_eq!(
+            ids(store
+                .older_than(None, Some(&search("orchestra-test")), 10)
+                .await),
+            ["out1"]
+        );
+        assert_eq!(
+            ids(store.older_than(None, Some(&search("10.9.9.9")), 10).await),
+            ["out1"]
+        );
+        // Prefixes in any order.
+        assert_eq!(
+            search("has:warnings is:sent foo"),
+            search("is:sent has:warnings foo")
+        );
+        assert!(store
+            .older_than(None, Some(&search("is:sent has:warnings")), 10)
+            .await
+            .is_empty());
+
+        for (d, expect) in [
+            (Some(Direction::In), vec!["in1"]),
+            (Some(Direction::Out), vec!["out1"]),
+            (None, vec!["in1", "out1"]),
+        ] {
+            let got: Vec<String> = store
+                .payload_snapshot(d)
+                .await
+                .iter()
+                .map(|m| m.id.clone())
+                .collect();
+            assert_eq!(got, expect, "{d:?}");
+        }
     }
 }

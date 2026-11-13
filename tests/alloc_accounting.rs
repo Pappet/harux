@@ -19,7 +19,9 @@
 //! question (see `heap_bytes`).
 
 use harux::hl7::parser::{build_ack, parse_message};
-use harux::hl7::types::{heap_bytes, WireForm};
+use harux::hl7::types::{
+    heap_bytes, Delivery, DeliveryState, MessageMeta, Origin, Outbound, WireForm,
+};
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::cell::Cell;
 
@@ -177,4 +179,48 @@ fn estimated_bytes_tracks_the_real_heap() {
         report.join("\n")
     );
     println!("{}", report.join("\n"));
+}
+
+/// #272: what a sent message adds — the `Outbound` facts on the payload and
+/// the `Delivery` with its response in the metadata — is accounted too.
+#[test]
+fn sent_message_and_its_metadata_are_accounted() {
+    let mut msg = parse_message(
+        "MSH|^~\\&|A|B|C|D|20240101||ADT^A01|C1|P|2.5\rPID|||1||Muster^Max\r",
+        "10.9.9.9:6661",
+    )
+    .unwrap();
+    let payload_before = msg.estimated_bytes();
+
+    let (_, a0, m0) = snapshot();
+    msg.outbound = Some(Box::new(Outbound {
+        target: "orchestra-test-adt".to_string(),
+        tls: false,
+        origin: Origin::Resend {
+            message_id: "0b9e8f9c-4d2e-4f3a-9c1b-2a7d5e6f8a90".to_string(),
+        },
+        requested_by: "10.0.0.7".to_string(),
+        run: "6c1f0e2d-3b4a-4c5d-8e9f-0a1b2c3d4e5f".to_string(),
+    }));
+    let meta = MessageMeta {
+        tags: vec!["Bug 1234".to_string()],
+        bookmarked: true,
+        delivery: Some(Box::new(Delivery {
+            state: DeliveryState::Acked,
+            ack_code: Some("AA".to_string()),
+            response: Some("MSH|^~\\&|R|RF|||20260101||ACK^A01|A1|P|2.5\rMSA|AA|C1\r".to_string()),
+            response_size: Some(52),
+            latency_ms: Some(42),
+            control_id_matches: Some(true),
+            ..Delivery::pending()
+        })),
+    };
+    let (_, a1, m1) = snapshot();
+    let modeled = (m1 - m0) as usize;
+    let estimated = msg.estimated_bytes() - payload_before + meta.estimated_bytes();
+    assert!(
+        estimated >= modeled && estimated <= modeled + modeled / 20,
+        "estimated {estimated} B, modeled {modeled} B in {} allocations",
+        a1 - a0
+    );
 }

@@ -16,6 +16,8 @@ pub struct Config {
     pub logging: LoggingConfig,
     pub store: StoreConfig,
     pub mllp: MllpConfig,
+    /// Sending from the web UI and the API (Milestone 4). Off by default.
+    pub send: SendConfig,
     /// The file the configuration was read from, if any — logged at startup.
     #[serde(skip)]
     pub source: Option<PathBuf>,
@@ -82,6 +84,140 @@ pub struct MllpConfig {
     pub max_connections: usize,
 }
 
+/// `[send]`: sending stored messages to other MLLP receivers (#272).
+///
+/// Off unless `enabled` is set. Targets are not configured here — every user
+/// keeps a list of their own in the browser and the request names the
+/// destination; this section only switches sending on and narrows it.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct SendConfig {
+    /// With it on, everyone who can open the web UI can make Harux connect
+    /// to any destination it reaches (or to the ones listed in
+    /// `allowed_destinations`) and send an HL7 message there.
+    pub enabled: bool,
+    /// Offer Harux's own MLLP listener as a target ("This Harux").
+    pub loopback_target: bool,
+    pub connect_timeout_secs: u64,
+    pub response_timeout_secs: u64,
+    /// Limits of one run (several messages in one request).
+    pub max_run_messages: usize,
+    /// Share of `store.max_memory_mb` the messages of one run may take
+    /// together: every one of them is stored again as a sent message.
+    pub max_run_store_percent: usize,
+    pub max_concurrent_runs: usize,
+    /// Where users may send. Empty = any host and port. Entries are
+    /// `host:port` or `host:from-to` (`[v6]:port` for IPv6 addresses).
+    pub allowed_destinations: Vec<String>,
+}
+
+/// One `send.allowed_destinations` entry: a host (normalized by
+/// [`normalize_host`]) and a port range. Nothing is resolved for the check.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DestinationRule {
+    pub host: String,
+    pub ports: std::ops::RangeInclusive<u16>,
+}
+
+impl DestinationRule {
+    /// Parse `host:port` or `host:from-to`. A bare host is refused: it would
+    /// allow every port on that machine.
+    pub fn parse(entry: &str) -> Result<Self, String> {
+        let entry = entry.trim();
+        let (host, ports) = if let Some(rest) = entry.strip_prefix('[') {
+            let (host, after) = rest
+                .split_once(']')
+                .ok_or("an IPv6 address in [ ] needs the closing ]")?;
+            let ports = after
+                .strip_prefix(':')
+                .ok_or("names no port; write host:port or host:from-to")?;
+            (host, ports)
+        } else {
+            let (host, ports) = entry
+                .rsplit_once(':')
+                .ok_or("names no port; write host:port or host:from-to")?;
+            if host.contains(':') {
+                return Err("write an IPv6 address in brackets, e.g. [::1]:2575".into());
+            }
+            (host, ports)
+        };
+        let host = normalize_host(host).ok_or("is not a host name or IP address")?;
+        let port = |p: &str| {
+            p.trim()
+                .parse::<u16>()
+                .ok()
+                .filter(|&p| p > 0)
+                .ok_or_else(|| format!("{p:?} is not a port (1-65535)"))
+        };
+        let ports = match ports.split_once('-') {
+            Some((from, to)) => {
+                let (from, to) = (port(from)?, port(to)?);
+                if from > to {
+                    return Err(format!("the port range {from}-{to} is reversed"));
+                }
+                from..=to
+            }
+            None => {
+                let p = port(ports)?;
+                p..=p
+            }
+        };
+        Ok(Self { host, ports })
+    }
+
+    /// Whether `host` (already normalized) and `port` fall under this rule.
+    pub fn allows(&self, host: &str, port: u16) -> bool {
+        self.host == host && self.ports.contains(&port)
+    }
+}
+
+impl std::fmt::Display for DestinationRule {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let host = if self.host.contains(':') {
+            format!("[{}]", self.host)
+        } else {
+            self.host.clone()
+        };
+        if self.ports.start() == self.ports.end() {
+            write!(f, "{host}:{}", self.ports.start())
+        } else {
+            write!(f, "{host}:{}-{}", self.ports.start(), self.ports.end())
+        }
+    }
+}
+
+/// The one form a host is compared in (#272): an IP address in canonical
+/// form (`::ffff:10.0.0.1` is `10.0.0.1`, brackets removed), a name in
+/// lower case without its trailing dot. `None` for anything that is neither
+/// — including names whose last label is all digits (`2130706433`,
+/// `10.0.0.01`), which a resolver may read as an address.
+pub fn normalize_host(host: &str) -> Option<String> {
+    let h = host.trim();
+    let h = h
+        .strip_prefix('[')
+        .and_then(|r| r.strip_suffix(']'))
+        .unwrap_or(h);
+    if let Ok(ip) = h.parse::<IpAddr>() {
+        return Some(ip.to_canonical().to_string());
+    }
+    let name = h.strip_suffix('.').unwrap_or(h);
+    let labels_ok = !name.is_empty()
+        && name.len() <= 253
+        && name.split('.').all(|l| {
+            !l.is_empty()
+                && l.len() <= 63
+                && l.bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+                && !l.starts_with('-')
+                && !l.ends_with('-')
+        });
+    let numeric_tld = name
+        .rsplit('.')
+        .next()
+        .is_some_and(|l| l.bytes().all(|b| b.is_ascii_digit()));
+    (labels_ok && !numeric_tld).then(|| name.to_ascii_lowercase())
+}
+
 // --- Defaults ---
 
 impl Default for ServerConfig {
@@ -129,6 +265,21 @@ impl Default for MllpConfig {
     }
 }
 
+impl Default for SendConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            loopback_target: true,
+            connect_timeout_secs: 5,
+            response_timeout_secs: 30,
+            max_run_messages: 1000,
+            max_run_store_percent: 25,
+            max_concurrent_runs: 4,
+            allowed_destinations: Vec::new(),
+        }
+    }
+}
+
 // --- Convenience methods ---
 
 impl StoreConfig {
@@ -165,6 +316,37 @@ impl MllpConfig {
 
     pub fn write_timeout(&self) -> Duration {
         Duration::from_secs(self.write_timeout_secs)
+    }
+}
+
+impl SendConfig {
+    /// The parsed `allowed_destinations` (validated at load, so the first
+    /// bad entry is an error only for a configuration built by hand).
+    pub fn destination_rules(&self) -> Result<Vec<DestinationRule>, String> {
+        self.allowed_destinations
+            .iter()
+            .map(|e| {
+                DestinationRule::parse(e)
+                    .map_err(|why| format!("send.allowed_destinations entry {e:?} {why}"))
+            })
+            .collect()
+    }
+}
+
+impl Config {
+    /// The loopback target (#272): Harux's own MLLP listener. A listener on
+    /// every interface is reached on `127.0.0.1` (`0.0.0.0`) or `::1` (`::`).
+    /// `None` when `send.loopback_target` is off.
+    pub fn loopback_destination(&self) -> Option<std::net::SocketAddr> {
+        if !self.send.loopback_target {
+            return None;
+        }
+        let ip = match self.server.mllp_bind {
+            IpAddr::V4(v4) if v4.is_unspecified() => IpAddr::V4(Ipv4Addr::LOCALHOST),
+            IpAddr::V6(v6) if v6.is_unspecified() => IpAddr::V6(std::net::Ipv6Addr::LOCALHOST),
+            ip => ip,
+        };
+        Some(std::net::SocketAddr::new(ip, self.server.mllp_port))
     }
 }
 
@@ -248,6 +430,27 @@ impl Config {
         at_least_1("mllp.read_timeout_secs", self.mllp.read_timeout_secs);
         at_least_1("mllp.write_timeout_secs", self.mllp.write_timeout_secs);
         at_least_1("mllp.max_connections", self.mllp.max_connections as u64);
+        at_least_1("send.connect_timeout_secs", self.send.connect_timeout_secs);
+        at_least_1(
+            "send.response_timeout_secs",
+            self.send.response_timeout_secs,
+        );
+        at_least_1("send.max_run_messages", self.send.max_run_messages as u64);
+        at_least_1(
+            "send.max_concurrent_runs",
+            self.send.max_concurrent_runs as u64,
+        );
+        if !(1..=100).contains(&self.send.max_run_store_percent) {
+            problems.push(format!(
+                "send.max_run_store_percent ({}) must be between 1 and 100",
+                self.send.max_run_store_percent
+            ));
+        }
+        for entry in &self.send.allowed_destinations {
+            if let Err(why) = DestinationRule::parse(entry) {
+                problems.push(format!("send.allowed_destinations entry {entry:?} {why}"));
+            }
+        }
         // Two listeners can share a port only on different addresses; an
         // unspecified address (0.0.0.0, ::) overlaps every other one.
         let (m, w) = (self.server.mllp_addr(), self.server.web_addr());
@@ -420,7 +623,39 @@ impl std::fmt::Display for Config {
         )?;
         writeln!(f, "  Read timeout:       {}s", self.mllp.read_timeout_secs)?;
         writeln!(f, "  Write timeout:      {}s", self.mllp.write_timeout_secs)?;
-        write!(f, "  Max connections:    {}", self.mllp.max_connections)
+        writeln!(f, "  Max connections:    {}", self.mllp.max_connections)?;
+        if !self.send.enabled {
+            return write!(f, "  Sending:            off (send.enabled = false)");
+        }
+        let limit = match self.send.allowed_destinations.len() {
+            0 => "to any destination".to_string(),
+            _ => format!(
+                "only to {}",
+                self.send.destination_rules().map_or_else(
+                    |e| e,
+                    |r| r
+                        .iter()
+                        .map(ToString::to_string)
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                )
+            ),
+        };
+        writeln!(f, "  Sending:            ON, {limit}")?;
+        match self.loopback_destination() {
+            Some(addr) => writeln!(f, "  Loopback target:    {addr}")?,
+            None => writeln!(f, "  Loopback target:    off")?,
+        }
+        write!(
+            f,
+            "  Send limits:        connect {}s, response {}s, {} runs at a time, \
+             {} messages / {}% of the store per run",
+            self.send.connect_timeout_secs,
+            self.send.response_timeout_secs,
+            self.send.max_concurrent_runs,
+            self.send.max_run_messages,
+            self.send.max_run_store_percent
+        )
     }
 }
 
@@ -670,6 +905,108 @@ mllp_port = 4000
         }
         let cfg = load("[server]\nmllp_bind = \"::\"\n", &[]).unwrap();
         assert_eq!(cfg.server.mllp_addr().to_string(), "[::]:2575");
+    }
+
+    /// #272: sending is off by default; the section fails closed.
+    #[test]
+    fn send_section_defaults_and_validation() {
+        let cfg = load("", &[]).unwrap();
+        assert!(!cfg.send.enabled, "sending is off by default (D11)");
+        assert!(cfg.send.loopback_target);
+        assert_eq!(cfg.send.connect_timeout_secs, 5);
+        assert_eq!(cfg.send.response_timeout_secs, 30);
+        assert_eq!(cfg.send.max_run_messages, 1000);
+        assert_eq!(cfg.send.max_run_store_percent, 25);
+        assert_eq!(cfg.send.max_concurrent_runs, 4);
+        assert!(cfg.to_string().contains("Sending:            off"));
+
+        let err = load(
+            "[send]\nconnect_timeout_secs = 0\nmax_run_store_percent = 101\nmax_concurrent_runs = 0\n",
+            &[],
+        )
+        .unwrap_err();
+        for key in [
+            "send.connect_timeout_secs",
+            "send.max_run_store_percent",
+            "send.max_concurrent_runs",
+        ] {
+            assert!(err.contains(key), "{key} missing in: {err}");
+        }
+        let err = load("[send]\nenabeld = true\n", &[]).unwrap_err();
+        assert!(err.contains("enabeld"), "{err}");
+        for bad in [
+            "orchestra.local",
+            "orchestra.local:",
+            "orchestra.local:0",
+            "orchestra.local:7000-6000",
+            "::1:2575",
+            "[::1",
+            "bad host:6000",
+            "2130706433:6000",
+        ] {
+            let err = load(
+                &format!("[send]\nallowed_destinations = [\"{bad}\"]\n"),
+                &[],
+            )
+            .unwrap_err();
+            assert!(err.contains("send.allowed_destinations"), "{bad}: {err}");
+        }
+        let cfg = load(
+            "[send]\nenabled = true\nallowed_destinations = [\"Orchestra.Klinik.Local.:6000-6999\", \"[::ffff:10.0.0.1]:2575\"]\n",
+            &[],
+        )
+        .unwrap();
+        let rules = cfg.send.destination_rules().unwrap();
+        assert_eq!(rules[0].host, "orchestra.klinik.local");
+        assert_eq!(rules[0].ports, 6000..=6999);
+        assert_eq!(rules[1].host, "10.0.0.1", "canonical form");
+        assert!(rules[1].allows("10.0.0.1", 2575));
+        assert!(!rules[1].allows("10.0.0.1", 2576));
+        let shown = cfg.to_string();
+        assert!(
+            shown.contains("only to orchestra.klinik.local:6000-6999, 10.0.0.1:2575"),
+            "{shown}"
+        );
+    }
+
+    #[test]
+    fn hosts_are_normalized() {
+        for (input, expect) in [
+            ("Orchestra.Local.", Some("orchestra.local")),
+            ("[::1]", Some("::1")),
+            ("::ffff:127.0.0.1", Some("127.0.0.1")),
+            ("10.1.2.3", Some("10.1.2.3")),
+            ("host_1-a", Some("host_1-a")),
+            ("", None),
+            ("a..b", None),
+            ("-a.b", None),
+            ("10.0.0.01", None),
+            ("evil/path", None),
+            ("a b", None),
+        ] {
+            assert_eq!(normalize_host(input).as_deref(), expect, "{input:?}");
+        }
+    }
+
+    #[test]
+    fn loopback_destination_follows_the_listener() {
+        let cfg = load("[server]\nmllp_port = 3000\n", &[]).unwrap();
+        assert_eq!(
+            cfg.loopback_destination().unwrap().to_string(),
+            "127.0.0.1:3000"
+        );
+        let cfg = load("[server]\nmllp_bind = \"::\"\n", &[]).unwrap();
+        assert_eq!(
+            cfg.loopback_destination().unwrap().to_string(),
+            "[::1]:2575"
+        );
+        let cfg = load("[server]\nmllp_bind = \"10.0.0.5\"\n", &[]).unwrap();
+        assert_eq!(
+            cfg.loopback_destination().unwrap().to_string(),
+            "10.0.0.5:2575"
+        );
+        let cfg = load("[send]\nloopback_target = false\n", &[]).unwrap();
+        assert!(cfg.loopback_destination().is_none());
     }
 
     #[test]

@@ -8,7 +8,7 @@ Harux is a high-performance MLLP server with a real-time web UI for inspecting H
 
 - **Language:** Rust
 - **Latest Release:** v0.9.0 — Reliability & Security Hardening (audit Phases 0–3, v0.8.0 review) — see the [changelog](../CHANGELOG.md)
-- **Scope today:** receive and inspect (Milestones 0–3). Sending, editing and replay (Milestone 4) and persistence (Milestone 5) are planned — see the [roadmap](ROADMAP.md)
+- **Scope today:** receive and inspect (Milestones 0–3), and — once `send.enabled` switches it on — resend a stored message unchanged to an MLLP destination (Milestone 4, first package). Editing, templates, runs (the rest of Milestone 4) and persistence (Milestone 5) are planned — see the [roadmap](ROADMAP.md)
 
 ---
 
@@ -79,6 +79,16 @@ Listens on `server.mllp_bind:mllp_port`, handles MLLP framing (`0x0B` start, `0x
 - **Limits:** `mllp.max_message_size_mb` (10 MB) — a larger frame gets an `AR` reject, its first 4 KB are stored as a parse error, and the connection stays usable; 60 s read and 30 s write timeout; `mllp.max_connections` (100) — connections beyond it are closed and counted as rejected.
 - **Robustness:** an `accept()` error (e.g. out of file descriptors) is logged and retried, never fatal; on Ctrl+C or SIGTERM the server stops accepting and waits up to `server.shutdown_timeout_secs` for open connections to drain.
 
+### Sending (`src/send.rs`, `src/mllp_client.rs`)
+
+Off unless `send.enabled = true` (#272). `POST /api/send` resends one stored message, unchanged — the bytes it arrived as — to the destination the request names (every user keeps their own targets in the browser; the server keeps none). `send.allowed_destinations` can limit where users may send.
+
+- **Everything sent is stored first:** the sent message is inserted with delivery `pending` **before** the connection is opened, so a refused or timed-out send is a row too, and what the destination forwards because of it is listed after it. The outcome (`acked` with the MSA-1 code, `failed` with a reason, `sent` when no response is awaited) is recorded in the entry's metadata and broadcast as `delivery_updated`.
+- **A sent message is a message:** same list, detail, tags, bookmark, search and eviction. It has `direction: "out"`, `outbound` (target name, origin, requesting client address, run) and its response in `delivery`. Its `source_addr` is the destination. The UI shows it with `↑`, a dashed bar and `→ target`, and the ACK tab becomes **Response**.
+- **The exchange** (`mllp_client.rs`): one frame out, one frame back, `TCP_NODELAY`; connect timeout `send.connect_timeout_secs`, response timeout `send.response_timeout_secs`, write timeout `mllp.write_timeout_secs`; responses above 1 MB are refused, at most 64 KB of a response is stored. A message whose type starts with `ACK` is written without waiting for an answer.
+- **Limits:** `send.max_concurrent_runs` runs at a time (`429` beyond); a message may take at most `send.max_run_store_percent` of the store when it is stored again. A frame above the size limit (stored cut off, `truncated`) cannot be resent; one that did not parse only with `allow_invalid`.
+- Every send is logged at `info` (failure: `warn`) with type, control ID, size, target, destination and requesting address — never with content.
+
 ### Web Server (`src/web.rs`)
 
 An Axum-based HTTP server on `server.web_bind:web_port` providing REST API endpoints, the export and a WebSocket endpoint for real-time updates. The embedded SPA is served from the binary.
@@ -94,7 +104,7 @@ A thread-safe in-memory buffer with dual eviction:
 - **Trigger:** either limit hit → the oldest messages are evicted until both bytes and count are at or below 90 % of their limits
 - **Bookmarks** are skipped by eviction, but only within `store.bookmark_budget_percent` (default 50 %, at most 80 %) of either limit; beyond it the oldest bookmarks go too, so bookmarking can never lift the memory cap
 - **Payload vs. metadata:** each message is an immutable payload plus mutable tags/bookmark, so tagging never copies a message
-- **Change events** (new, tags, bookmark, evicted, cleared) are broadcast to the WebSocket clients in the order the store changed
+- **Change events** (new, tags, bookmark, delivery, evicted, cleared) are broadcast to the WebSocket clients in the order the store changed
 - **Rationale:** MDM messages with Base64-encoded attachments can be several MB each; count-only eviction is insufficient.
 
 ### HL7 Parser & Dictionary (`src/hl7/`, `src/dictionary.rs`, `src/validation.rs`)
@@ -177,6 +187,12 @@ Built-in defaults → `harux.toml` (next to the binary, then the working directo
 | `mllp.max_message_size_mb` | `10` | Largest accepted frame |
 | `mllp.read_timeout_secs` / `mllp.write_timeout_secs` | `60` / `30` | MLLP timeouts |
 | `mllp.max_connections` | `100` | Concurrent MLLP connections |
+| `send.enabled` | `false` | Sending from the web UI and the API (`SECURITY.md` → *Sending*) |
+| `send.allowed_destinations` | `[]` | Where users may send: `host:port` or `host:from-to`; empty = anywhere |
+| `send.loopback_target` | `true` | Offer Harux's own MLLP listener as the target "This Harux" (always allowed) |
+| `send.connect_timeout_secs` / `send.response_timeout_secs` | `5` / `30` | Send timeouts |
+| `send.max_concurrent_runs` | `4` | Sends at a time |
+| `send.max_run_messages` / `send.max_run_store_percent` | `1000` / `25` | Limits of one run; a run's messages may take at most this share of `store.max_memory_mb` |
 
 ---
 
@@ -187,13 +203,28 @@ Built-in defaults → `harux.toml` (next to the binary, then the working directo
 | `GET` | `/api/messages?offset=0&limit=100&include_bookmarks=true` | Paginated message list, newest first (`limit` capped at 1000); `include_bookmarks` adds every older bookmarked message; `before=<id>` instead of `offset` pages through older history (the UI's "Load older") |
 | `GET` | `/api/messages/{id}` | Full message with all segments and fields |
 | `GET` | `/api/search?q=ADT&limit=100&before=<id>` | Search like the UI filter (`has:warnings`/`has:errors`, type, patient, facility, control ID, source, tags), newest first; `before` searches only older messages. The UI uses it for "Search older on the server" |
-| `GET` | `/api/stats` | Live server stats: message counts, store bytes and limit, parse errors, connections |
-| `GET` | `/api/export` | Every stored message as one MLLP-framed `harux-export.hl7`, byte for byte as received, oldest first (streamed) |
+| `GET` | `/api/stats` | Live server stats: message counts, store bytes and limit, parse errors, connections, `sending_enabled`, `sent` (accepted, `AA`/`CA`), `send_rejected` (any other MSA code), `send_failed` (no usable answer), `active_runs` |
+| `GET` | `/api/export?direction=in` | Every stored received message as one MLLP-framed `harux-export.hl7`, byte for byte as received, oldest first (streamed); `direction=out` the sent ones, `all` both |
+| `GET` | `/api/send/config` | Whether sending is on, the loopback target, the destination and run limits (`403` while sending is off) |
+| `POST` | `/api/send` | Resend one stored message unchanged (below); `403` while sending is off |
 | `POST` | `/api/clear` | Delete all messages from store |
 | `POST` | `/api/messages/{id}/bookmark` | Toggle bookmark on a message |
 | `POST` | `/api/messages/{id}/tags` | Add a tag to a message |
 | `DELETE` | `/api/messages/{id}/tags/{tag}` | Remove a tag from a message |
 | `WS` | `/ws` | Real-time updates (events below) |
+
+### `POST /api/send`
+
+```jsonc
+{
+  "target": { "name": "orchestra-test", "host": "orchestra-test.klinik.local", "port": 6661 },  // or "loopback"
+  "items": [{ "message_id": "…" }],   // exactly one stored message
+  "await_response": true,             // false: do not wait for an answer
+  "allow_invalid": false              // resend a message that did not parse
+}
+```
+
+Answers `200` with `{ "id": "<sent message>", "delivery": { "state", "ack_code", "response", "latency_ms", "error", "control_id_matches", … } }` once the exchange ended — a refused connection or a NACK is a `200` too: the request worked, the send did not. Refusals: `400` malformed request, host or target (unknown fields such as `set` are refused, TLS is not available yet) · `403` sending off, destination outside `send.allowed_destinations` · `404` unknown message · `413` message too large · `422` a cut-off entry, or a message that did not parse without `allow_invalid` · `429` too many sends at once.
 
 ### WebSocket Events
 
@@ -205,6 +236,8 @@ Built-in defaults → `harux.toml` (next to the binary, then the working directo
 { "type": "new_message",      "data": { /* Hl7MessageSummary */ } }
 { "type": "tags_updated",     "data": { /* Hl7MessageSummary */ } }
 { "type": "bookmark_toggled", "data": { /* Hl7MessageSummary */ } }
+// A sent message's outcome arrived (summary with `delivery`, no response text)
+{ "type": "delivery_updated", "data": { /* Hl7MessageSummary */ } }
 
 // An eviction pass removed these messages / the store was cleared
 { "type": "evicted", "data": ["<id>", "<id>"] }

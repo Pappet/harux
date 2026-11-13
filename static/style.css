@@ -594,6 +594,29 @@ body.resizing * {
     color: var(--text-muted);
 }
 
+/* Sent messages (#272): a dashed accent bar instead of a sender's colour,
+   the destination's answer in the chip, the round-trip time after it. */
+.message-row.outbound .msg-source-bar {
+    background: repeating-linear-gradient(to bottom, var(--accent) 0 4px, transparent 4px 7px);
+}
+
+.msg-ack.pending {
+    background: var(--bg-tertiary);
+    color: var(--text-secondary);
+}
+
+.msg-ack.failed {
+    background: rgba(234, 99, 99, 0.12);
+    color: var(--error);
+}
+
+.msg-latency {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    color: var(--text-muted);
+    flex-shrink: 0;
+}
+
 .msg-actions {
     display: flex;
     align-items: center;
@@ -877,6 +900,11 @@ body.resizing * {
     font-variant-numeric: tabular-nums;
 }
 
+/* A target in the source rail (#272): dashed, like a sent row's bar. */
+.source-chip.target {
+    border-style: dashed;
+}
+
 .source-chip.active .num {
     color: var(--accent);
     background: rgba(122, 162, 255, 0.12);
@@ -1110,6 +1138,27 @@ body.resizing * {
     border: 1px solid rgba(122, 162, 255, 0.25);
     padding: 3px 8px;
     border-radius: 4px;
+}
+
+.detail-direction {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    color: var(--bg-primary);
+    background: var(--accent);
+    padding: 3px 7px;
+    border-radius: 4px;
+}
+
+/* Response tab of a sent message (#272): chip + facts above the raw lines. */
+.response-result {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 12px;
+    font-size: 12px;
+    color: var(--text-secondary);
 }
 
 .detail-title {

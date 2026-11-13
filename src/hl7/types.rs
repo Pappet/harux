@@ -75,6 +75,145 @@ pub struct Hl7Message {
     /// traffic (#186). Kept because removing it would change the API.
     /// `None` when MSH-9 has fewer than three components (common in HL7 v2.3 senders).
     pub message_structure: Option<String>,
+    /// Set for a message Harux sent (#272): the facts of the send that never
+    /// change. `None` for a received message. For a sent message
+    /// `source_addr` is the destination (`host:port`) and `received_at` the
+    /// moment the send began — "the peer" and "when it entered the list".
+    pub outbound: Option<Box<Outbound>>,
+    /// Set for an over-limit frame (#223), which holds only the beginning of
+    /// what was received. Such an entry cannot be resent (#272).
+    pub truncated: bool,
+}
+
+/// Whether a stored message was received or sent (#272).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Direction {
+    In,
+    Out,
+}
+
+/// What a sent message records about its send, fixed at insert time (#272).
+/// What comes back later (the response) is [`Delivery`], in the metadata.
+#[derive(Debug, Clone, Serialize)]
+pub struct Outbound {
+    /// The name the user gave the target — a label, shown in the list.
+    pub target: String,
+    /// Whether the connection was encrypted (TLS arrives with M4-2).
+    pub tls: bool,
+    /// Where the message came from.
+    pub origin: Origin,
+    /// The address of the client that asked for the send.
+    pub requested_by: String,
+    /// The run the send belongs to.
+    pub run: String,
+}
+
+/// Where a sent message came from (#272).
+#[derive(Debug, Clone, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum Origin {
+    /// A stored message, sent again unchanged.
+    Resend { message_id: String },
+}
+
+impl Origin {
+    /// The stored message this one was made from, if any.
+    pub fn message_id(&self) -> Option<&str> {
+        match self {
+            Origin::Resend { message_id } => Some(message_id),
+        }
+    }
+}
+
+/// What became of a sent message (#272).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum DeliveryState {
+    /// Stored, the exchange is under way.
+    Pending,
+    /// The destination answered with an MSA segment; `ack_code` says how.
+    Acked,
+    /// No usable answer: a transport failure, or a response without MSA.
+    Failed,
+    /// Written, and no response was awaited (an ACK-type message).
+    Sent,
+}
+
+/// The outcome of a send, kept in the entry's mutable metadata next to tags
+/// and bookmark (#272) — the payload stays immutable (#192).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Delivery {
+    pub state: DeliveryState,
+    /// MSA-1 of the response (`AA`, `AE`, `AR`, `CA`, …).
+    pub ack_code: Option<String>,
+    /// The response as text, cut at [`MAX_STORED_RESPONSE_BYTES`]. Never
+    /// part of a summary: the destination chooses its size.
+    pub response: Option<String>,
+    /// Size of the response payload as received, in bytes.
+    pub response_size: Option<usize>,
+    /// `response` holds only the beginning of a larger response.
+    pub response_truncated: bool,
+    /// Why the response could not be read as an HL7 acknowledgement.
+    pub response_error: Option<String>,
+    /// Short reason of a failure: `refused`, `timeout`, `closed`, …
+    pub error: Option<String>,
+    /// The failure in a sentence.
+    pub error_detail: Option<String>,
+    /// From the start of the connect to the end of the response.
+    pub latency_ms: Option<u64>,
+    /// Whether MSA-2 repeats the control ID that was sent.
+    pub control_id_matches: Option<bool>,
+}
+
+/// Most of a response that is stored (#272). A destination writes it, so its
+/// size is not Harux's to choose.
+pub const MAX_STORED_RESPONSE_BYTES: usize = 64 * 1024;
+
+impl Delivery {
+    /// The state a sent message is inserted with.
+    pub fn pending() -> Self {
+        Self {
+            state: DeliveryState::Pending,
+            ack_code: None,
+            response: None,
+            response_size: None,
+            response_truncated: false,
+            response_error: None,
+            error: None,
+            error_detail: None,
+            latency_ms: None,
+            control_id_matches: None,
+        }
+    }
+
+    /// A failure with its short reason and its sentence.
+    pub fn failed(error: &str, detail: impl Into<String>, latency_ms: Option<u64>) -> Self {
+        Self {
+            state: DeliveryState::Failed,
+            error: Some(error.to_string()),
+            error_detail: Some(detail.into()),
+            latency_ms,
+            ..Self::pending()
+        }
+    }
+
+    fn estimated_bytes(&self) -> usize {
+        opt_string(&self.ack_code)
+            + opt_string(&self.response)
+            + opt_string(&self.response_error)
+            + opt_string(&self.error)
+            + opt_string(&self.error_detail)
+    }
+}
+
+/// The part of a [`Delivery`] a list row needs: no response text (#272).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DeliverySummary {
+    pub state: DeliveryState,
+    pub ack_code: Option<String>,
+    pub latency_ms: Option<u64>,
+    pub error: Option<String>,
 }
 
 /// How the bytes a message arrived as relate to its `raw` text (#230).
@@ -348,7 +487,16 @@ impl Hl7Message {
                 _ => 0,
             }
             + vec_heap(&self.validation_warnings)
-            + vec_heap(&self.segments);
+            + vec_heap(&self.segments)
+            + self.outbound.as_ref().map_or(0, |o| {
+                heap_bytes(std::mem::size_of::<Outbound>())
+                    + owned_string(&o.target)
+                    + owned_string(&o.requested_by)
+                    + owned_string(&o.run)
+                    + match &o.origin {
+                        Origin::Resend { message_id } => owned_string(message_id),
+                    }
+            });
 
         for w in &self.validation_warnings {
             total += owned_string(&w.code) + owned_string(&w.message) + owned_string(&w.segment);
@@ -390,6 +538,17 @@ impl Hl7Message {
             charset: None,
             wire: WireForm::Utf8,
             message_structure: None,
+            outbound: None,
+            truncated: false,
+        }
+    }
+
+    /// `Out` for a message Harux sent, `In` for one it received.
+    pub fn direction(&self) -> Direction {
+        if self.outbound.is_some() {
+            Direction::Out
+        } else {
+            Direction::In
         }
     }
 
@@ -460,6 +619,17 @@ pub struct Hl7MessageSummary {
     pub message_type_description: Option<String>,
     /// Character set from MSH-18, e.g. `"UTF-8"`.
     pub charset: Option<String>,
+    /// `in` (received) or `out` (sent by Harux, #272).
+    pub direction: Direction,
+    /// For a sent message: the name of its target. The UI groups and
+    /// colours a sent message by this, never by `source_addr`.
+    pub target: Option<String>,
+    /// For a sent message: the stored message it was made from.
+    pub origin_id: Option<String>,
+    /// For a sent message: what became of it, without the response text.
+    pub delivery: Option<DeliverySummary>,
+    /// Only the beginning of an over-limit frame is stored (#223).
+    pub truncated: bool,
 }
 
 /// User-mutable state of a stored message (tags, bookmark).
@@ -476,13 +646,21 @@ pub struct MessageMeta {
     /// Whether the message is pinned; bookmarked messages are protected from
     /// eviction within the store's bookmark budget.
     pub bookmarked: bool,
+    /// What became of a sent message (#272); `None` for a received one.
+    /// Boxed, so a received message's entry does not grow by its size.
+    pub delivery: Option<Box<Delivery>>,
 }
 
 impl MessageMeta {
-    /// Heap bytes held by the metadata (tag list and strings), for store
-    /// accounting — same model as [`Hl7Message::estimated_bytes`].
+    /// Heap bytes held by the metadata (tag list and strings, the delivery
+    /// and its response), for store accounting — same model as
+    /// [`Hl7Message::estimated_bytes`].
     pub fn estimated_bytes(&self) -> usize {
-        vec_heap(&self.tags) + self.tags.iter().map(owned_string).sum::<usize>()
+        vec_heap(&self.tags)
+            + self.tags.iter().map(owned_string).sum::<usize>()
+            + self.delivery.as_ref().map_or(0, |d| {
+                heap_bytes(std::mem::size_of::<Delivery>()) + d.estimated_bytes()
+            })
     }
 }
 
@@ -501,6 +679,8 @@ pub struct MessageSnapshot {
     pub message: std::sync::Arc<Hl7Message>,
     #[serde(flatten)]
     pub meta: MessageMeta,
+    /// `in` or `out` (#272), like the summary.
+    pub direction: Direction,
 }
 
 impl Hl7MessageSummary {
@@ -529,6 +709,19 @@ impl Hl7MessageSummary {
                 .any(|w| w.code == "MISSING_SEGMENT"),
             message_type_description: msg.message_type_description.clone(),
             charset: msg.charset.clone(),
+            direction: msg.direction(),
+            target: msg.outbound.as_ref().map(|o| o.target.clone()),
+            origin_id: msg
+                .outbound
+                .as_ref()
+                .and_then(|o| o.origin.message_id().map(str::to_owned)),
+            delivery: meta.delivery.as_ref().map(|d| DeliverySummary {
+                state: d.state,
+                ack_code: d.ack_code.clone(),
+                latency_ms: d.latency_ms,
+                error: d.error.clone(),
+            }),
+            truncated: msg.truncated,
         }
     }
 }

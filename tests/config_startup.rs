@@ -64,6 +64,24 @@ fn bad_value_type_stops_the_start() {
     );
 }
 
+/// #272: `[send]` fails closed like the rest — a destination entry without
+/// a port would allow every port on that host.
+#[test]
+fn bad_send_destination_stops_the_start() {
+    let (code, stderr) = run_with(
+        Some("[send]\nenabled = true\nallowed_destinations = [\"orchestra.local\"]\n"),
+        &[],
+    );
+    assert!(
+        matches!(code, Some(c) if c != 0),
+        "exit {code:?}, stderr: {stderr}"
+    );
+    assert!(
+        stderr.contains("send.allowed_destinations") && stderr.contains("names no port"),
+        "{stderr}"
+    );
+}
+
 #[test]
 fn typo_in_key_stops_the_start() {
     let (code, stderr) = run_with(Some("[store]\nmax_mesages = 500\n"), &[]);
