@@ -243,16 +243,22 @@ function isTargetKey(key) {
     return typeof key === 'string' && key.startsWith(TARGET_PREFIX);
 }
 
+// An imported file's messages (#281): `import:<file name>` is a name, not
+// `host:port` — never cut at the colon.
+function isImportKey(key) {
+    return typeof key === 'string' && key.startsWith('import:');
+}
+
 function getSourceColor(key) {
     if (!key) return 'var(--text-muted)';
     if (isTargetKey(key)) return 'var(--accent)';
-    const colorKey = state.colorByPort ? key : key.split(':')[0];
+    const colorKey = state.colorByPort || isImportKey(key) ? key : key.split(':')[0];
     return SOURCE_PALETTE[hashString(colorKey) % SOURCE_PALETTE.length];
 }
 
 function srcLabelFor(key) {
     if (!key) return '';
-    if (isTargetKey(key)) return key;
+    if (isTargetKey(key) || isImportKey(key)) return key;
     return state.colorByPort ? key : key.split(':')[0];
 }
 

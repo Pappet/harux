@@ -8,7 +8,7 @@ Harux is a high-performance MLLP server with a real-time web UI for inspecting H
 
 - **Language:** Rust
 - **Latest Release:** v0.9.0 — Reliability & Security Hardening (audit Phases 0–3, v0.8.0 review) — see the [changelog](../CHANGELOG.md)
-- **Scope today:** receive and inspect (Milestones 0–3), and — once `send.enabled` switches it on — resend stored messages (unchanged or with fields changed) to an MLLP destination, plain or over TLS, write or edit a message as a draft (also field by field or from a template), and send several messages in one run: the filtered list, or a draft repeated (Milestone 4, M4-1 … M4-9). Import, watch (the rest of Milestone 4) and persistence (Milestone 5) are planned — see the [roadmap](ROADMAP.md)
+- **Scope today:** receive and inspect (Milestones 0–3), and — once `send.enabled` switches it on — resend stored messages (unchanged or with fields changed) to an MLLP destination, plain or over TLS, write or edit a message as a draft (also field by field or from a template), send several messages in one run: the filtered list, or a draft repeated, and load an exported `.hl7` file back into the list (Milestone 4, M4-1 … M4-10). Watch (the rest of Milestone 4) and persistence (Milestone 5) are planned — see the [roadmap](ROADMAP.md)
 
 ---
 
@@ -225,6 +225,7 @@ Built-in defaults → `harux.toml` (next to the binary, then the working directo
 | `GET` | `/api/templates/{id}` | One template as draft text: `{…, raw, charset, encoding, warning}`; the ID is a key of the listing, never a path (`404` otherwise) |
 | `GET` | `/api/dictionary/{segment}` | A segment's fields from the embedded v2.5.1 dictionary: `{name, description, fields: [{seq, name, datatype}]}` (`404` unknown, `400` not three letters or digits) |
 | `POST` | `/api/build` | `{raw, charset, based_on, set}`: the bytes a send would write, MLLP-framed, as `harux-draft.hl7` |
+| `POST` | `/api/import?name=<file>` | An MLLP-framed file (what Export writes) as the body, streamed: every frame stored as received from `import:<file>`, oldest first, byte for byte (an export of it is the same file); answers `{source, imported, parse_errors, truncated, bytes, skipped_bytes}`. At most `store.max_memory_mb` (`413`); a file without a frame `422` (one message opens as a draft instead); `403` while sending is off |
 | `POST` | `/api/clear` | Delete all messages from store |
 | `POST` | `/api/messages/{id}/bookmark` | Toggle bookmark on a message |
 | `POST` | `/api/messages/{id}/tags` | Add a tag to a message |

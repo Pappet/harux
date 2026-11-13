@@ -737,3 +737,49 @@ test('Repeat: a target that asks before sending takes no runs', async () => {
     assert.equal(requests.length, 0);
     assert.match(toasts.at(-1)[0], /takes no runs/);
 });
+
+test('From a file (#281): an export is loaded into the list, one message opens as a draft', async () => {
+    const summary = { source: 'import:x.hl7', imported: 3, parse_errors: 1, truncated: 0, bytes: 99, skipped_bytes: 0 };
+    const { ctx, state, requests, confirms, toasts } = setup({
+        responses: {
+            '/api/import': async () => ({ ok: true, status: 200, json: async () => summary, text: async () => '' }),
+            '/api/parse': okJson({ raw: 'MSH|^~\\&|A', encoding: 'UTF-8', warning: null, framed: true }),
+        },
+    });
+    ctx.openDraft = () => {};
+    state.sendConfig.max_message_bytes = 1024;
+    const enc = (s) => new TextEncoder().encode(s);
+    const file = (name, bytes) => ({
+        name,
+        size: bytes.length,
+        slice: (a, b) => ({ arrayBuffer: async () => bytes.slice(a, b).buffer }),
+        arrayBuffer: async () => bytes.slice().buffer,
+    });
+    const frame = (t) => `\x0bMSH|^~\\&|A|B|||1||ADT^A01|${t}|P|2.5\r\x1c\r`;
+
+    assert.equal(ctx.isFramedHead(enc('\r\n\x0bMSH')), true);
+    assert.equal(ctx.isFramedHead(enc('MSH|')), false);
+    assert.equal(ctx.countFrames(enc(frame('A') + frame('B'))), 2);
+
+    // Three frames: asked, then streamed to /api/import with the file's name.
+    const three = file('x y.hl7', enc(frame('A') + frame('B') + frame('C')));
+    assert.deepEqual(plain(await ctx.openFile(three)), summary);
+    assert.match(confirms[0], /Load the 3 messages in x y\.hl7 into the list, as received from import:x y\.hl7/);
+    const imp = requests.find((r) => r.url.startsWith('/api/import'));
+    assert.equal(imp.url, '/api/import?name=x%20y.hl7');
+    assert.equal(imp.opts.body, three, 'the file itself: the browser streams it');
+    assert.match(toasts.at(-1)[0], /^Loaded 3 messages from x y\.hl7 · 1 did not parse$/);
+    assert.equal(state.drafts.length, 0);
+
+    // One frame, or none: a draft, as before.
+    await ctx.openFile(file('one.hl7', enc(frame('A'))));
+    await ctx.openFile(file('plain.hl7', enc('MSH|^~\\&|A')));
+    assert.equal(requests.filter((r) => r.url.startsWith('/api/import')).length, 1);
+    assert.equal(state.drafts.length, 2);
+
+    // Larger than one message can be: an import without counting.
+    const big = file('big.hl7', enc(frame('A') + 'x'.repeat(2000)));
+    await ctx.openFile(big);
+    assert.match(confirms.at(-1), /Load the messages in big\.hl7/);
+    assert.equal(ctx.importSummaryText('f', { imported: 1, truncated: 1, skipped_bytes: 7 }), 'Loaded 1 message from f · 1 above the size limit, kept cut off · 7 bytes outside frames not loaded');
+});
