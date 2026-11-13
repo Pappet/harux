@@ -1,0 +1,4 @@
+MSH|^~\&|LAB|TEST|HARUX|TEST|{{now}}||ORU^R01^ORU_R01|{{id}}|T|2.5
+PID|1||4711^^^TEST^MR||Muster^Max||19800515|M
+OBR|1||RES{{rand:6}}|WBC^White Blood Count|||{{now}}
+OBX|1|NM|WBC^White Blood Count||7.5|10*3/uL|4.0-10.0|N|||F

@@ -23,9 +23,9 @@ MDM messages with Base64-encoded attachments are common daily traffic.
 
 **Scope today:** receive and inspect, plus — off by default — resending a
 stored message (unchanged or with fields changed), over plain MLLP or TLS,
-and writing or editing a message as a draft, also field by field, and
-sending it (Milestone 4, M4-1 … M4-7). The rest of Milestone 4 (templates,
-runs, watch) and persistence (Milestone 5) are planned —
+and writing or editing a message as a draft, also field by field or from a
+template, and sending it (Milestone 4, M4-1 … M4-8). The rest of Milestone 4
+(runs, import, watch) and persistence (Milestone 5) are planned —
 see the roadmap and `docs/MILESTONE_4_PLAN.md`. Do not implement roadmap
 features unless explicitly asked.
 
@@ -177,6 +177,7 @@ Off unless `send.enabled = true` (#272): every send route answers `403` and the 
 - `POST /api/messages/{id}/bookmark` — Toggle bookmark
 - `POST /api/clear` — Clear all messages
 - `GET /api/send/config`, `POST /api/send` — Sending (#272), see *Sending* above; `403` while `send.enabled` is off. An item is a stored message (`message_id`) or a draft (`raw`, `charset`, `based_on`, #276)
+- `GET /api/templates`, `GET /api/templates/{id}` — Templates (#279, `src/templates.rs`): the built-in set (`src/assets/templates/`, each must validate cleanly once filled in — `built_in_templates_validate_once_filled_in`) and the site's `send.templates_dir`, read on every request, limited (`MAX_SITE_TEMPLATES`, `MAX_TEMPLATE_BYTES`), never written. **An ID is a key of the listing, looked up in it and never joined into a path**; only regular files (no links) directly in the directory named `[A-Za-z0-9._-]+.hl7` are listed. `403` while sending is off. A draft item's `template` becomes `Origin::Template { name }`
 - `GET /api/dictionary/{segment}` — A segment's fields from the embedded dictionary (number, name, datatype) for the draft editor's *show empty fields* (#278); reference data, not tied to `send.enabled`
 - `GET /api/messages/{id}/draft`, `POST /api/parse`, `POST /api/build` — Drafts (#276): a stored message as draft text with references, the preview (JSON body) or a file's bytes decoded (any other body), the bytes a send would write as a framed download; `403` while sending is off
 - `GET /api/export?direction=in|out|all` — Default `in` (received messages, as before #272). Download every stored message as one MLLP-framed `.hl7` file (the bytes **as received**, oldest first, directly replayable — via `Hl7Message::wire_bytes()`, #230). Exception: an over-limit frame (#223) is stored with only its first 4 KB, so the export contains that truncated frame (it carries a parse error in the UI). **Streamed** (`MllpExportStream` in `src/web.rs`): the store lock is held only to snapshot payload `Arc`s (`payload_snapshot`), large payloads go out zero-copy, small ones are coalesced into ~64 KiB chunks — never build the whole export in memory
@@ -277,6 +278,7 @@ src/
 ├── send.rs          # Sending engine: checks, store-before-connect, outcome, /api/send request types (#272)
 ├── tls.rs           # Outgoing TLS: TlsContext from [send.tls], verifiers, client certificate, issuer names (#273)
 ├── store.rs         # In-memory store with broadcast channel, dual eviction
+├── templates.rs     # Templates: built-in set + read-only send.templates_dir, lookup by key only (#279)
 ├── web.rs           # Axum router, REST handlers, WebSocket handler
 ├── dictionary.rs    # Embedded HL7 field/segment dictionary (v2.5.1.json)
 ├── validation.rs    # Required segment/field + primitive datatype validation
@@ -288,7 +290,8 @@ src/
 │   ├── parser.rs        # Raw HL7 → Hl7Message, delimiter extraction, ACK builder
 │   ├── types.rs         # Hl7Message, Hl7MessageSummary, Hl7Segment, Hl7Field, Delimiters
 │   └── message_types.rs # Message-type registry (message_types.json)
-└── assets/hl7/      # Embedded JSON: v2.5.1.json (dictionary), message_types.json
+├── assets/hl7/      # Embedded JSON: v2.5.1.json (dictionary), message_types.json
+└── assets/templates/ # Built-in .hl7 templates (#279), embedded with include_str!
 static/
 ├── index.html       # HTML skeleton
 ├── style.css        # Dark theme, CSS variables

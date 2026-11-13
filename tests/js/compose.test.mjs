@@ -640,3 +640,46 @@ test('a missing segment\'s pill keeps its mark when it becomes addable (#291 rev
     const content = segmentsTab(ctx, state, byId, d, msg);
     assert.equal(content.querySelector('.seg-pill[data-seg="NK1"]').textContent, '+ NK1 \u2715');
 });
+
+// --- Templates (#279) ---
+
+test('the New message menu lists the templates by group', async () => {
+    const { ctx, state, byId } = setup({
+        responses: {
+            '/api/templates': okJson([
+                { id: 'builtin:adt_a01', name: 'ADT^A01 Admit', group: 'Built in', message_type: 'ADT^A01' },
+                { id: 'site:lab.hl7', name: 'lab <b>', group: 'Site', message_type: 'ORU^R01' },
+            ]),
+        },
+    });
+    ctx.renderNewMessageButton = () => {};
+    ctx.toggleNewMenu(true);
+    await new Promise((r) => setImmediate(r));
+    const html = byId('new-menu-templates').innerHTML;
+    assert.match(html, /Templates<\/div><button role="menuitem" data-action="new-template" data-template-id="builtin:adt_a01">ADT\^A01 Admit<\/button>/);
+    assert.match(html, /Site templates<\/div>.*data-template-id="site:lab.hl7">lab &lt;b&gt; <span class="hint">ORU\^R01<\/span>/);
+    assert.equal(state.templates.length, 2);
+});
+
+test('a template becomes a draft on its Segments tab; the send names the template', async () => {
+    const { ctx, state, requests } = setup({
+        responses: {
+            '/api/templates/': okJson({ id: 'site:a b.hl7', name: 'Site ADT', group: 'Site', message_type: 'ADT^A08', raw: 'MSH|^~\\&|S|X|||{{now}}||ADT^A08|{{id}}|T|2.5', encoding: 'windows-1252', charset: '8859/1', warning: null }),
+            '/api/send': okJson({ id: 's', delivery: { state: 'acked', ack_code: 'AA' } }),
+        },
+    });
+    let opened = null;
+    ctx.openDraft = (id, tab) => { opened = [id, tab]; state.selection = { kind: 'draft', id }; };
+    ctx.renderDraftHeader = () => {};
+    const d = await ctx.newDraftFromTemplate('site:a b.hl7');
+    assert.equal(requests[0].url, '/api/templates/site%3Aa%20b.hl7', 'the ID is encoded, never a path');
+    assert.deepEqual(opened, [d.id, 'parsed'], 'fill it out field by field');
+    assert.equal(d.charset, 'windows-1252');
+    assert.equal(d.type, 'ADT^A08');
+    assert.match(ctx.draftOriginHtml(d), /^From the template Site ADT$/);
+    await ctx.sendDraft(d, ctx.loopbackTarget());
+    const item = JSON.parse(requests.find((r) => r.url === '/api/send').opts.body).items[0];
+    assert.deepEqual(item, { raw: d.raw, charset: 'windows-1252', template: 'Site ADT' });
+    const html = ctx.sentDescriptionHtml({ outbound: { target: 't', origin: { kind: 'template', name: 'Site <ADT>' } } });
+    assert.equal(html, 'Sent to t · from the template Site &lt;ADT&gt;');
+});

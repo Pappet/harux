@@ -471,6 +471,8 @@ async function sendDraft(d, target) {
     try {
         const item = { raw, charset: d.charset };
         if (d.basedOn) item.based_on = d.basedOn;
+        // The sent message names the template it came from (#279).
+        else if (d.origin && d.origin.kind === 'template' && d.origin.name) item.template = d.origin.name;
         const resp = await fetch('/api/send', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -599,6 +601,7 @@ function draftOriginHtml(d) {
         return `Edit of <button class="origin-link" data-action="select-message" data-id="${escAttr(o.id)}" title="Open the message this draft was made from">${esc(o.control || 'the original')}</button>`;
     }
     if (o.kind === 'file') return `From the file ${esc(o.name || '')}`;
+    if (o.kind === 'template') return `From the template ${esc(o.name || '')}`;
     if (o.kind === 'clipboard') return 'From the clipboard';
     return 'New message';
 }
@@ -1261,6 +1264,68 @@ function renderNewMessageButton() {
 function toggleNewMenu(open = !state.newMenuOpen) {
     state.newMenuOpen = !!open;
     renderNewMessageButton();
+    if (state.newMenuOpen) loadTemplateMenu();
+}
+
+// --- Templates (#279) ---
+//
+// The built-in set and the site's directory (`send.templates_dir`), listed
+// by the server each time the menu opens — the directory is read then, so a
+// template the team adds shows up without a restart. Choosing one makes a
+// draft and opens its Segments tab: "fill out a template" is changing its
+// fields and sending it.
+
+async function loadTemplateMenu() {
+    let list = null;
+    try {
+        const resp = await fetch('/api/templates');
+        if (resp.ok) list = await resp.json();
+    } catch (e) {
+        console.debug('Could not list the templates:', e);
+    }
+    state.templates = Array.isArray(list) ? list : [];
+    renderTemplateMenu();
+}
+
+function renderTemplateMenu() {
+    const box = document.getElementById('new-menu-templates');
+    if (!box) return;
+    const groups = new Map();
+    for (const t of state.templates) {
+        if (!groups.has(t.group)) groups.set(t.group, []);
+        groups.get(t.group).push(t);
+    }
+    let html = '';
+    for (const [group, items] of groups) {
+        html += `<div class="new-menu-group">${esc(group === 'Site' ? 'Site templates' : 'Templates')}</div>`;
+        html += items.map((t) => `<button role="menuitem" data-action="new-template" data-template-id="${escAttr(t.id)}">`
+            + `${esc(t.name)}${t.message_type && !t.name.startsWith(t.message_type) ? ` <span class="hint">${esc(t.message_type)}</span>` : ''}</button>`).join('');
+    }
+    box.innerHTML = html;
+}
+
+async function newDraftFromTemplate(id) {
+    let t;
+    try {
+        const resp = await fetch(`/api/templates/${encodeURIComponent(id)}`);
+        if (!resp.ok) {
+            showToast(`Cannot open the template: ${(await resp.text()) || `HTTP ${resp.status}`}`);
+            return null;
+        }
+        t = await resp.json();
+    } catch (e) {
+        showToast('Cannot open the template: ' + (e.message || e));
+        return null;
+    }
+    if (t.warning) showToast(`${t.name}: ${t.warning}`, 'info');
+    const draft = addDraft({
+        raw: t.raw,
+        charset: t.encoding || 'auto',
+        origin: { kind: 'template', id: t.id, name: t.name },
+        type: t.message_type || '',
+    });
+    if (draft) openDraft(draft.id, 'parsed');
+    return draft;
 }
 
 // Sending switched on or off (send.js): the drafts UI follows it.
@@ -1310,6 +1375,7 @@ function handleComposeAction(action, el) {
         case 'new-blank': toggleNewMenu(false); newBlankDraft(); return true;
         case 'new-clipboard': toggleNewMenu(false); newDraftFromClipboard(); return true;
         case 'new-file': toggleNewMenu(false); newDraftFromFile(); return true;
+        case 'new-template': toggleNewMenu(false); newDraftFromTemplate(el.dataset.templateId); return true;
         default: return false;
     }
 }

@@ -111,6 +111,10 @@ pub struct SendConfig {
     pub allowed_destinations: Vec<String>,
     /// `[send.tls]`: TLS for outgoing connections (#273).
     pub tls: SendTlsConfig,
+    /// Directory with `.hl7` templates for everyone (#279), read only and
+    /// on every list request. Relative to the working directory. Checked at
+    /// start when sending is on: it must be a directory.
+    pub templates_dir: Option<String>,
 }
 
 /// `[send.tls]` (#273). Read at start when sending is on; a file that can't
@@ -299,6 +303,7 @@ impl Default for SendConfig {
             max_concurrent_runs: 4,
             allowed_destinations: Vec::new(),
             tls: SendTlsConfig::default(),
+            templates_dir: None,
         }
     }
 }
@@ -692,6 +697,14 @@ impl std::fmt::Display for Config {
             Some(addr) => writeln!(f, "  Loopback target:    {addr}")?,
             None => writeln!(f, "  Loopback target:    off")?,
         }
+        writeln!(
+            f,
+            "  Templates:          built-in set{}",
+            self.send
+                .templates_dir
+                .as_deref()
+                .map_or(String::new(), |d| format!(" and {d} (read only)"))
+        )?;
         write!(
             f,
             "  Send limits:        connect {}s, response {}s, {} runs at a time, \

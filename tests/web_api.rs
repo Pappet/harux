@@ -1558,7 +1558,7 @@ async fn draft_refusals_have_their_status_codes() {
         ),
         // An unknown item field.
         (
-            send(serde_json::json!({"raw": simple_raw(), "template": "x"})),
+            send(serde_json::json!({"raw": simple_raw(), "repeat": 2})),
             StatusCode::BAD_REQUEST,
         ),
     ];
@@ -1780,4 +1780,156 @@ async fn the_dictionary_lists_a_segments_fields() {
             .unwrap();
         assert_eq!(res.status(), status, "{uri}");
     }
+}
+
+// ── Templates (#279) ──────────────────────────────────────────────────────────
+
+async fn get_status(state: &AppState, uri: &str) -> StatusCode {
+    create_router(state.clone())
+        .oneshot(Request::builder().uri(uri).body(Body::empty()).unwrap())
+        .await
+        .unwrap()
+        .status()
+}
+
+#[tokio::test]
+async fn templates_are_listed_and_fetched_by_key_only() {
+    assert_eq!(
+        get_status(&make_state(), "/api/templates").await,
+        StatusCode::FORBIDDEN,
+        "part of sending"
+    );
+
+    let dir = std::env::temp_dir().join(format!("harux-web-templates-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("Site-ADT.hl7"), "MSH|^~\\&|SITE|X|||{{now}}||ADT^A08|{{id}}|T|2.5\rEVN|A08\rPID|||1||Site^Patient\rPV1||I\r").unwrap();
+    std::fs::write(dir.with_extension("secret.hl7"), "MSH|^~\\&|SECRET").unwrap();
+    let state = sending_state(|c| c.send.templates_dir = Some(dir.to_string_lossy().into_owned()));
+
+    let list = get_json(&state, "/api/templates").await;
+    let list = list.as_array().unwrap();
+    assert_eq!(list.len(), 9);
+    assert_eq!(
+        list[0],
+        serde_json::json!({"id": "builtin:adt_a01", "name": "ADT^A01 Admit", "group": "Built in", "message_type": "ADT^A01"})
+    );
+    assert_eq!(
+        list[8],
+        serde_json::json!({"id": "site:Site-ADT.hl7", "name": "Site-ADT", "group": "Site", "message_type": "ADT^A08"})
+    );
+
+    let t = get_json(&state, "/api/templates/builtin:mdm_t02").await;
+    assert_eq!(t["message_type"], "MDM^T02");
+    assert!(t["raw"]
+        .as_str()
+        .unwrap()
+        .starts_with("MSH|^~\\&|HARUX|TEST|RECEIVER|TEST|{{now}}||MDM^T02"));
+    assert!(
+        !t["raw"].as_str().unwrap().contains('\r'),
+        "one segment per line (LF)"
+    );
+    let site = get_json(&state, "/api/templates/site:Site-ADT.hl7").await;
+    assert_eq!(
+        site["raw"],
+        "MSH|^~\\&|SITE|X|||{{now}}||ADT^A08|{{id}}|T|2.5\nEVN|A08\nPID|||1||Site^Patient\nPV1||I"
+    );
+
+    // An ID is looked up, never joined into a path: nothing outside the
+    // directory is ever returned. A one-segment ID that is not a key is a
+    // 404; `site:../x` has two segments and reaches the SPA fallback.
+    let secret = dir.with_extension("secret.hl7");
+    let name = secret.file_name().unwrap().to_string_lossy();
+    for (uri, status) in [
+        (
+            format!("/api/templates/site:..%2F{name}"),
+            Some(StatusCode::NOT_FOUND),
+        ),
+        (
+            format!("/api/templates/site:%2E%2E%2F{name}"),
+            Some(StatusCode::NOT_FOUND),
+        ),
+        (
+            "/api/templates/Site-ADT.hl7".to_string(),
+            Some(StatusCode::NOT_FOUND),
+        ),
+        (
+            "/api/templates/builtin:nope".to_string(),
+            Some(StatusCode::NOT_FOUND),
+        ),
+        (format!("/api/templates/site:../{name}"), None),
+    ] {
+        let res = create_router(state.clone())
+            .oneshot(Request::builder().uri(&uri).body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        if let Some(expected) = status {
+            assert_eq!(res.status(), expected, "{uri}");
+        }
+        let body = collect_body(res.into_body()).await;
+        assert!(!String::from_utf8_lossy(&body).contains("SECRET"), "{uri}");
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+    let _ = std::fs::remove_file(secret);
+}
+
+/// The roadmap's second criterion with the API: a template, filled out, is
+/// sent, and the sent message names the template it came from.
+#[tokio::test]
+async fn a_template_is_filled_out_and_sent() {
+    let state = sending_state(|_| {});
+    let t = get_json(&state, "/api/templates/builtin:adt_a01").await;
+    let (status, body) = post_json(
+        &state,
+        "/api/parse",
+        serde_json::json!({"raw": t["raw"], "set": {"PID-5": "Doe^Jane", "PID-3": "999^^^TEST^MR"}}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let filled = json_of(&body);
+    assert!(filled["message"]["validation_warnings"]
+        .as_array()
+        .unwrap()
+        .is_empty());
+    let addr = ack_receiver().await;
+    let (status, body) = post_send(
+        &state,
+        &serde_json::json!({
+            "target": {"host": "127.0.0.1", "port": addr.port()},
+            "items": [{"raw": filled["raw"], "template": " ADT^A01 Admit\u{7}"}],
+        })
+        .to_string(),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let result = json_of(body.as_bytes());
+    assert_eq!(
+        result["delivery"]["ack_code"], "AA",
+        "the response is there"
+    );
+    let sent = get_json(
+        &state,
+        &format!("/api/messages/{}", result["id"].as_str().unwrap()),
+    )
+    .await;
+    assert_eq!(
+        sent["outbound"]["origin"],
+        serde_json::json!({"kind": "template", "name": "ADT^A01 Admit"})
+    );
+    assert_eq!(sent["patient_name"], "Doe, Jane");
+    assert!(
+        !sent["raw"].as_str().unwrap().contains("{{"),
+        "placeholders filled in"
+    );
+
+    // `template` belongs to a draft.
+    stored_received(&state, "m1").await;
+    let (status, _) = post_send(
+        &state,
+        r#"{"target":"loopback","items":[{"message_id":"m1","template":"x"}]}"#,
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
 }

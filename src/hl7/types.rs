@@ -135,6 +135,8 @@ pub enum Origin {
     /// the stored message it was made from, if any — where its references
     /// (`{{from:OBX[1]-5}}`) were filled in from.
     Draft { based_on: Option<String> },
+    /// A draft made from a template (#279), by its name.
+    Template { name: String },
 }
 
 impl Origin {
@@ -143,6 +145,7 @@ impl Origin {
         match self {
             Origin::Resend { message_id, .. } => Some(message_id),
             Origin::Draft { based_on } => based_on.as_deref(),
+            Origin::Template { .. } => None,
         }
     }
 }
@@ -532,6 +535,7 @@ impl Hl7Message {
                                 + changes.iter().map(owned_string).sum::<usize>()
                         }
                         Origin::Draft { based_on } => opt_string(based_on),
+                        Origin::Template { name } => owned_string(name),
                     }
             });
 

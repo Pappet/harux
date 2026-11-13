@@ -41,6 +41,7 @@
 # max_run_store_percent = 25      # share of store.max_memory_mb a run may take
 # max_concurrent_runs = 4
 # allowed_destinations = ["orchestra-test.klinik.local:6000-6999"]  # empty = anywhere
+# templates_dir = "templates"     # .hl7 templates for everyone (read only), next to the built-in set
 
 # [send.tls]
 # ca_file = "certs/klinik-ca.pem"   # CAs trusted besides the OS certificate store (PEM)

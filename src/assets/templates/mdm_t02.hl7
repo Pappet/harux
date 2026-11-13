@@ -1,0 +1,6 @@
+MSH|^~\&|HARUX|TEST|RECEIVER|TEST|{{now}}||MDM^T02^MDM_T02|{{id}}|T|2.5
+EVN|T02|{{now}}
+PID|1||4711^^^TEST^MR||Muster^Max||19800515|M
+PV1|1|O|AMBULANZ
+TXA|1|DS^Discharge Summary|TX|||{{now}}||1234^Doctor^Anna||||DOC{{rand:6}}|||||AU
+OBX|1|TX|18842-5^Discharge summary^LN||Test document text.||||||F
