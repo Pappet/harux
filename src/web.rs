@@ -796,9 +796,12 @@ struct ImportQuery {
 /// file — what `/api/export` writes — into the store, every frame as
 /// received from `import:<name>`. The body is the file's bytes, read as a
 /// stream and split frame by frame by the listener's own splitter; nothing of
-/// it is held beyond the frame in work. At most `store.max_memory_mb` (`413`;
-/// frames before the limit stay stored). A file without a single frame is
-/// refused (`422`): one unframed message is opened as a draft instead.
+/// it is held beyond the frame in work. At most `store.max_memory_mb` bytes
+/// *read* (`413`; frames before the limit stay stored) — whitespace and
+/// noise count too, it is the file's size that is limited. A file without a
+/// single frame, an empty one included, is refused (`422`): one unframed
+/// message is opened as a draft instead. An import into a full store evicts
+/// its oldest messages like any arrival; the UI says so before it asks.
 /// Part of sending: `403` while it is off.
 async fn import_file(
     State(state): State<AppState>,
@@ -861,7 +864,8 @@ async fn import_file(
         importer.push(&chunk, &state.store).await;
     }
     let summary = importer.finish();
-    if summary.imported == 0 && summary.bytes > 0 {
+    // Nothing in it, or no frame in it (#294 review: an empty file too).
+    if summary.imported == 0 {
         return (
             StatusCode::UNPROCESSABLE_ENTITY,
             "The file holds no MLLP frame (what Export writes). A single message is opened as a \

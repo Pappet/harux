@@ -783,3 +783,12 @@ test('From a file (#281): an export is loaded into the list, one message opens a
     assert.match(confirms.at(-1), /Load the messages in big\.hl7/);
     assert.equal(ctx.importSummaryText('f', { imported: 1, truncated: 1, skipped_bytes: 7 }), 'Loaded 1 message from f · 1 above the size limit, kept cut off · 7 bytes outside frames not loaded');
 });
+
+test('an import that will not fit says it pushes out older messages (#294 review)', () => {
+    const { ctx } = setup();
+    const MB = 1024 * 1024;
+    assert.equal(ctx.importRoomNote(1 * MB, 2 * MB, 10 * MB), '');
+    assert.match(ctx.importRoomNote(3 * MB, 8 * MB, 10 * MB), /holds 8 MB of 10 MB \(store\.max_memory_mb\): loading 3 MB pushes out the oldest messages — received ones too/);
+    assert.equal(ctx.importRoomNote(3 * MB, undefined, 10 * MB), '', 'no stats, no note');
+});
+

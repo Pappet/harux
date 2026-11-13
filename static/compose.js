@@ -310,7 +310,8 @@ function countFrames(bytes) {
 // `import:<name>`, after a confirmation. The rows come over the WebSocket.
 async function importFile(file, frames) {
     const what = frames ? `the ${frames} messages` : 'the messages';
-    if (!confirm(`Load ${what} in ${file.name} into the list, as received from import:${file.name}? They can then be resent like any other.`)) return null;
+    const room = await storeRoomNote(file.size);
+    if (!confirm(`Load ${what} in ${file.name} into the list, as received from import:${file.name}? They can then be resent like any other.${room}`)) return null;
     try {
         const resp = await fetch(`/api/import?name=${encodeURIComponent(file.name)}`, {
             method: 'POST',
@@ -328,6 +329,28 @@ async function importFile(file, frames) {
         showToast(`Cannot load ${file.name}: ` + (e.message || e));
         return null;
     }
+}
+
+// An import is stored like any arrival: into a full store it pushes out the
+// oldest messages (#294 review). Say so before asking, from /api/stats.
+async function storeRoomNote(size) {
+    try {
+        const resp = await fetch('/api/stats');
+        if (!resp.ok) return '';
+        const s = await resp.json();
+        return importRoomNote(size, s.store_bytes, s.store_max_bytes);
+    } catch (e) {
+        console.debug('Could not read the store size:', e);
+        return '';
+    }
+}
+
+// The confirmation's warning when `size` bytes will not fit next to what
+// the store holds: eviction starts at the limit and goes down to 90 %.
+function importRoomNote(size, used, max) {
+    if (typeof used !== 'number' || typeof max !== 'number' || !max || used + size <= max) return '';
+    const mb = (b) => `${Math.max(1, Math.round(b / (1024 * 1024)))} MB`;
+    return `\n\nThe store holds ${mb(used)} of ${mb(max)} (store.max_memory_mb): loading ${mb(size)} pushes out the oldest messages — received ones too — except bookmarks within their budget.`;
 }
 
 function importSummaryText(name, s) {

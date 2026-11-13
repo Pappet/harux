@@ -653,7 +653,10 @@ pub enum Frame<'a> {
 /// and `POST /api/import` share it.
 ///
 /// Feed bytes with [`push`](Self::push), then take frames with
-/// [`next_frame`](Self::next_frame) until it returns `None`. A frame above
+/// [`next_frame`](Self::next_frame) until it returns `None` — always, before
+/// the next `push`: a frame handed out is dropped from the buffer by the next
+/// call on the splitter (any of them, the queries [`is_empty`](Self::is_empty)
+/// and [`held_bytes`](Self::held_bytes) included). A frame above
 /// `max_size` comes out as [`Frame::Oversize`] — complete, or as soon as the
 /// buffer holds more than `max_size` bytes of it — and the rest of it is
 /// skipped, never buffered (#223). Bytes before a start byte are ignored.

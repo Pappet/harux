@@ -2253,6 +2253,13 @@ async fn import_refusals_and_edges() {
     );
     assert_eq!(off.store.count().await, 0);
 
+    // An empty file is refused like an unframed one (#294 review).
+    let empty_state = sending_state(|_| {});
+    assert_eq!(
+        post_import(&empty_state, "empty.hl7", vec![]).await.0,
+        StatusCode::UNPROCESSABLE_ENTITY
+    );
+
     let state = sending_state(|c| c.mllp.max_message_size_mb = 1);
     let (status, text) = post_import(
         &state,
