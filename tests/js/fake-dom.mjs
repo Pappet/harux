@@ -58,9 +58,42 @@ export class El {
         this.children.splice(i, 0, c);
         return c;
     }
+    // All descendants matching one compound selector: a tag, classes and
+    // attributes — `.row`, `tr[data-label]`, `.field-input[data-field-path="PID-5"]`.
+    // `data-*` attributes are read from `dataset`. Enough for the code under
+    // test; no combinators.
     querySelectorAll(sel) {
-        const cls = sel.replace(/^\./, '');
-        return this.children.filter((c) => c.classList.contains(cls));
+        const match = matcher(sel);
+        const out = [];
+        const walk = (el) => {
+            for (const c of el.children) {
+                if (match(c)) out.push(c);
+                walk(c);
+            }
+        };
+        walk(this);
+        return out;
     }
     querySelector(sel) { return this.querySelectorAll(sel)[0] || null; }
+    contains(el) {
+        for (let e = el; e; e = e.parent) if (e === this) return true;
+        return false;
+    }
+}
+
+function matcher(sel) {
+    const m = /^([a-zA-Z]*)((?:\.[\w-]+)*)((?:\[[^\]]+\])*)$/.exec(sel.trim());
+    if (!m) throw new Error(`fake-dom: unsupported selector ${sel}`);
+    const tag = m[1].toUpperCase();
+    const classes = m[2] ? m[2].split('.').filter(Boolean) : [];
+    const attrs = [...m[3].matchAll(/\[([\w-]+)(?:="([^"]*)")?\]/g)].map((a) => [a[1], a[2]]);
+    const camel = (name) => name.slice(5).replace(/-([a-z])/g, (_, c) => c.toUpperCase());
+    return (el) => {
+        if (tag && String(el.tagName || '').toUpperCase() !== tag) return false;
+        if (!classes.every((c) => el.classList.contains(c))) return false;
+        return attrs.every(([name, value]) => {
+            const v = name.startsWith('data-') ? el.dataset[camel(name)] : el.getAttribute(name);
+            return value === undefined ? v != null : v === value;
+        });
+    };
 }

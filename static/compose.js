@@ -794,7 +794,10 @@ function draftFieldPath(name, occurrence, index) {
     return occurrence === 1 ? `${name}-${index}` : `${name}[${occurrence}]-${index}`;
 }
 
-// Warnings by field path and by segment name, for the warning marks.
+// Warnings by field (`PID-5`), for the warning marks. A validation warning
+// names the segment, not which occurrence of it (#291 review), so a missing
+// required field in one OBX marks that field in every OBX — the banner lists
+// the warnings themselves.
 function draftWarningIndex(message) {
     const fields = new Set();
     for (const w of message.validation_warnings || []) {
@@ -852,7 +855,7 @@ function fillDraftValidation(container, msg) {
             pill.setAttribute('role', 'button');
             pill.tabIndex = 0;
             pill.title = `Add a ${name} segment` + (pill.title ? ` — ${pill.title}` : '');
-            pill.textContent = `+ ${name}`;
+            pill.textContent = pill.classList.contains('missing') ? `+ ${name} \u2715` : `+ ${name}`;
         }
         nodes.push(list);
     }
@@ -1006,12 +1009,15 @@ function writeDraftField(path, value) {
 async function writeDraftFieldNow(path, value) {
     const d = openDraftObject();
     if (!d) return false;
+    // The text the field is written into: if the draft changed meanwhile
+    // (the Raw tab), the answer would overwrite that change (#291 review).
+    const base = d.raw;
     let resp;
     try {
         resp = await fetch('/api/parse', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ raw: d.raw, set: { [path]: value }, based_on: d.basedOn }),
+            body: JSON.stringify({ raw: base, set: { [path]: value }, based_on: d.basedOn }),
         });
     } catch (e) {
         showToast(`${path} not written: ` + (e.message || e));
@@ -1025,6 +1031,11 @@ async function writeDraftFieldNow(path, value) {
     }
     const data = await resp.json();
     if (state.selectedDraftId !== d.id) return false;
+    if (d.raw !== base) {
+        showToast(`${path} not written: the draft changed meanwhile — write it again`, 'info');
+        revertDraftInput(path);
+        return false;
+    }
     d.raw = data.raw;
     if (state.draftSendAnyway === d.id) state.draftSendAnyway = null;
     saveDrafts();

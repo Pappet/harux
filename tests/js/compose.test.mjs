@@ -51,7 +51,14 @@ function setup({ local = memoryStorage(), session = memoryStorage(), confirmAnsw
     const ctx = {
         window: {},
         console: { ...console, debug: noop, info: noop },
-        document: { getElementById: byId, createElement: make, querySelectorAll: () => [], activeElement: null },
+        document: {
+            getElementById: byId,
+            createElement: make,
+            createTextNode: (text) => { const el = new El(); el.textContent = String(text); return el; },
+            querySelectorAll: () => [],
+            activeElement: null,
+        },
+        CSS: { escape: (v) => String(v) },
         navigator: {},
         sessionStorage: session,
         localStorage: local,
@@ -545,4 +552,91 @@ test('segments are added, duplicated and removed at the server\'s offsets', () =
     d.raw = raw + 'X';
     ctx.removeDraftSegment(1);
     assert.equal(d.raw, raw + 'X');
+});
+
+// The Segments tab of a draft, rendered into a fake detail panel.
+function segmentsTab(ctx, state, byId, d, message) {
+    state.activeTab = 'parsed';
+    const content = byId('detail-content');
+    ctx.renderDraftSegmentsTab(content, d, { raw: d.raw, positions: [], message });
+    return content;
+}
+
+const adtMessage = (pid5, warnings = []) => ({
+    message_type: 'ADT^A01',
+    delimiters: '|^~\\&',
+    typical_segments: ['MSH', 'PID', 'NK1'],
+    typical_segment_descriptions: {},
+    validation_warnings: warnings,
+    segments: [
+        { name: 'MSH', fields: [{ index: 1, value: '|' }, { index: 2, value: '^~\\&' }, { index: 3, value: 'A' }, { index: 10, value: 'C1' }] },
+        { name: 'PID', fields: [{ index: 1, value: '' }, { index: 5, value: pid5 }, { index: 7, value: '19800515' }] },
+    ],
+});
+
+test('after a write the tab is updated in place: the focused input keeps what was typed (#291 review)', () => {
+    const { ctx, state, byId } = setup();
+    const d = ctx.addDraft({ raw: 'MSH|^~\\&|A\nPID|||1||' });
+    state.selection = { kind: 'draft', id: d.id };
+    const missing = [{ code: 'MISSING_FIELD', segment: 'PID', field: 5, message: 'PID-5 is required' }];
+    const content = segmentsTab(ctx, state, byId, d, adtMessage('', missing));
+    const input = (path) => content.querySelector(`.field-input[data-field-path="${path}"]`);
+    assert.ok(input('PID-5'), 'a required empty field is listed');
+    assert.ok(content.querySelector('tr[data-label="PID-5"]').classList.contains('warn'));
+    assert.equal(content.querySelectorAll('.field-fixed').length, 2, 'MSH-1/MSH-2 read-only');
+    assert.ok(content.querySelector('.seg-pill[data-seg="NK1"]').classList.contains('addable'));
+
+    // PID-5 was written; meanwhile the user moved to PID-7 and typed.
+    const pid7 = input('PID-7');
+    pid7.value = '1980051X';
+    ctx.document.activeElement = pid7;
+    const pid5 = input('PID-5');
+    ctx.refreshDraftSegmentsInPlace('PID-5', 'Doe^Jane', { raw: d.raw, positions: [], message: adtMessage('Doe^Jane') });
+    assert.equal(input('PID-7'), pid7, 'the same element: not re-rendered');
+    assert.equal(pid7.value, '1980051X', 'what was typed survives');
+    assert.equal(input('PID-5'), pid5);
+    assert.equal(pid5.value, 'Doe^Jane');
+    assert.equal(pid5.dataset.written, 'Doe^Jane');
+    assert.ok(!content.querySelector('tr[data-label="PID-5"]').classList.contains('warn'), 'the mark is gone');
+
+    // The focused input itself is not overwritten while the user types on.
+    pid7.value = '19800516';
+    ctx.refreshDraftSegmentsInPlace('PID-7', '1980051X', { raw: d.raw, positions: [], message: adtMessage('Doe^Jane') });
+    assert.equal(pid7.value, '19800516');
+    assert.equal(pid7.dataset.written, '1980051X');
+
+    // Another list of segments re-renders.
+    const more = adtMessage('Doe^Jane');
+    more.segments.push({ name: 'NK1', fields: [{ index: 1, value: '1' }] });
+    ctx.refreshDraftSegmentsInPlace('PID-5', 'Doe^Jane', { raw: d.raw, positions: [], message: more });
+    assert.equal(content.querySelectorAll('.segment-block').length, 3);
+    assert.notEqual(input('PID-7'), pid7);
+});
+
+test('a field write never overwrites a change made meanwhile (#291 review)', async () => {
+    let answer;
+    const { ctx, state, toasts } = setup({
+        responses: { '/api/parse': () => new Promise((resolve) => { answer = resolve; }) },
+    });
+    for (const f of ['renderDraftRail', 'renderDraftHeader', 'refreshDraftSegmentsInPlace']) ctx[f] = () => {};
+    let reverted = null;
+    ctx.revertDraftInput = (path) => { reverted = path; };
+    const d = ctx.addDraft({ raw: 'MSH|^~\\&|A\nPID|||1||Old' });
+    state.selection = { kind: 'draft', id: d.id };
+    const writing = ctx.writeDraftFieldNow('PID-5', 'New');
+    d.raw = 'MSH|^~\\&|A\nPID|||1||Old\nPV1||I'; // typed in the Raw tab meanwhile
+    answer({ ok: true, json: async () => previewOf('MSH|^~\\&|A\nPID|||1||New', {}), text: async () => '' });
+    assert.equal(await writing, false);
+    assert.equal(d.raw, 'MSH|^~\\&|A\nPID|||1||Old\nPV1||I', 'the change made meanwhile stays');
+    assert.equal(reverted, 'PID-5');
+    assert.match(toasts.at(-1)[0], /changed meanwhile/);
+});
+
+test('a missing segment\'s pill keeps its mark when it becomes addable (#291 review)', () => {
+    const { ctx, state, byId } = setup();
+    const d = ctx.addDraft({ raw: 'MSH|1' });
+    state.selection = { kind: 'draft', id: d.id };
+    const msg = adtMessage('x', [{ code: 'MISSING_SEGMENT', segment: 'NK1', message: 'NK1 is expected' }]);
+    const content = segmentsTab(ctx, state, byId, d, msg);
+    assert.equal(content.querySelector('.seg-pill[data-seg="NK1"]').textContent, '+ NK1 \u2715');
 });
