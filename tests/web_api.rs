@@ -1748,3 +1748,36 @@ async fn message_routes_have_a_body_limit_and_permits() {
         "the permit was given back"
     );
 }
+
+// ── Dictionary (#278) ─────────────────────────────────────────────────────────
+
+#[tokio::test]
+async fn the_dictionary_lists_a_segments_fields() {
+    let state = make_state(); // reference data: not tied to send.enabled
+    let pid = get_json(&state, "/api/dictionary/pid").await;
+    assert_eq!(pid["name"], "PID");
+    assert_eq!(pid["description"], "Patient Identification");
+    let fields = pid["fields"].as_array().unwrap();
+    assert!(fields.len() >= 30, "{}", fields.len());
+    assert_eq!(fields[0]["seq"], 1);
+    assert_eq!(
+        fields[4],
+        serde_json::json!({"seq": 5, "name": "Patient Name", "datatype": "XPN"})
+    );
+    let seqs: Vec<u64> = fields.iter().map(|f| f["seq"].as_u64().unwrap()).collect();
+    assert!(seqs.windows(2).all(|w| w[0] < w[1]), "in order");
+    let msh = get_json(&state, "/api/dictionary/MSH").await;
+    assert_eq!(msh["fields"][6]["name"], "Date/Time Of Message");
+
+    for (uri, status) in [
+        ("/api/dictionary/ZZZ", StatusCode::NOT_FOUND),
+        ("/api/dictionary/PIDX", StatusCode::BAD_REQUEST),
+        ("/api/dictionary/P-D", StatusCode::BAD_REQUEST),
+    ] {
+        let res = create_router(state.clone())
+            .oneshot(Request::builder().uri(uri).body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(res.status(), status, "{uri}");
+    }
+}

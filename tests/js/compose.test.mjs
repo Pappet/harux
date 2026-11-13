@@ -416,3 +416,133 @@ test('a draft whose original is evicted or cleared says so at once', () => {
     assert.equal(other.originGone, true);
     assert.match(ctx.draftOriginHtml(other), /^Edit of a message <span class="origin-gone">\(no longer stored\)<\/span>$/);
 });
+
+// --- Editing field by field (#278) ---
+
+test('field paths: the occurrence only when it is not the first; odd names none', () => {
+    const { ctx } = setup();
+    assert.equal(ctx.draftFieldPath('PID', 1, 5), 'PID-5');
+    assert.equal(ctx.draftFieldPath('OBX', 3, 5), 'OBX[3]-5');
+    assert.equal(ctx.draftFieldPath('obx', 1, 5), null);
+    assert.equal(ctx.draftFieldPath('~OB', 1, 5), null);
+    assert.equal(ctx.placeholderBadge('MSH-10', '{{id}}'), 'new for every send');
+    assert.equal(ctx.placeholderBadge('MSH-7', '{{now}}'), 'set when sent');
+    assert.equal(ctx.placeholderBadge('PID-3', 'X{{rand:6}}'), 'filled in when sent');
+    assert.equal(ctx.placeholderBadge('PID-3', '{{open}}x'), '', 'an escaped brace is no placeholder');
+    assert.equal(ctx.placeholderBadge('PID-3', 'plain'), '');
+});
+
+function previewOf(raw, message, positions = []) {
+    return { raw, changes: [], message: { segments: [], validation_warnings: [], ...message }, positions };
+}
+
+test('a field is written back by the server; the answer is the new text and its preview', async () => {
+    const replies = [];
+    const { ctx, state, requests } = setup({
+        responses: { '/api/parse': (url, opts) => replies.shift()(JSON.parse(opts.body)) },
+    });
+    for (const f of ['renderDraftRail', 'renderDraftHeader', 'refreshDraftSegmentsInPlace']) ctx[f] = () => {};
+    const d = ctx.addDraft({ raw: 'MSH|^~\\&|A\nPID|||1||Muster', basedOn: 'm1' });
+    state.selection = { kind: 'draft', id: d.id };
+    replies.push((body) => ({ ok: true, json: async () => previewOf('MSH|^~\\&|A\nPID|||1||Doe^Jane', { message_type: 'ADT^A01', patient_name: 'Doe, Jane' }), text: async () => '' }));
+    assert.equal(await ctx.writeDraftFieldNow('PID-5', 'Doe^Jane'), true);
+    assert.deepEqual(JSON.parse(requests[0].opts.body), { raw: 'MSH|^~\\&|A\nPID|||1||Muster', set: { 'PID-5': 'Doe^Jane' }, based_on: 'm1' });
+    assert.equal(d.raw, 'MSH|^~\\&|A\nPID|||1||Doe^Jane', 'both tabs show the server\'s text');
+    assert.equal(ctx.currentPreview(d).data.message.patient_name, 'Doe, Jane');
+    assert.equal(d.title, 'Doe, Jane');
+
+    // A refused value changes nothing and says why.
+    let reverted = null;
+    ctx.revertDraftInput = (path) => { reverted = path; };
+    replies.push(() => ({ ok: false, status: 422, text: async () => 'PID-5: the value contains the field separator' }));
+    assert.equal(await ctx.writeDraftFieldNow('PID-5', 'a|b'), false);
+    assert.equal(d.raw, 'MSH|^~\\&|A\nPID|||1||Doe^Jane');
+    assert.equal(reverted, 'PID-5');
+});
+
+test('writes apply in order, and a send waits for them', async () => {
+    const pending = [];
+    const { ctx, state, requests } = setup({
+        responses: {
+            '/api/parse': (url, opts) => new Promise((resolve) => pending.push({ body: JSON.parse(opts.body), resolve })),
+            '/api/send': okJson({ id: 's', delivery: { state: 'acked', ack_code: 'AA' } }),
+        },
+    });
+    for (const f of ['renderDraftRail', 'renderDraftHeader', 'refreshDraftSegmentsInPlace']) ctx[f] = () => {};
+    const d = ctx.addDraft({ raw: 'MSH|0' });
+    state.selection = { kind: 'draft', id: d.id };
+    const answer = (raw) => ({ ok: true, json: async () => previewOf(raw, {}), text: async () => '' });
+    ctx.writeDraftField('PID-5', 'one');
+    ctx.writeDraftField('PID-7', 'two');
+    const sending = ctx.sendDraft(d, ctx.loopbackTarget());
+    await new Promise((r) => setImmediate(r));
+    assert.equal(pending.length, 1, 'the second write waits for the first');
+    pending[0].resolve(answer('MSH|1'));
+    await new Promise((r) => setImmediate(r));
+    await new Promise((r) => setImmediate(r));
+    assert.equal(pending.length, 2);
+    assert.equal(pending[1].body.raw, 'MSH|1', 'written into the text the first write gave');
+    assert.ok(!requests.some((r) => r.url === '/api/send'), 'no send before the writes');
+    pending[1].resolve(answer('MSH|2'));
+    await sending;
+    const send = requests.find((r) => r.url === '/api/send');
+    assert.equal(JSON.parse(send.opts.body).items[0].raw, 'MSH|2');
+});
+
+test('Ctrl+Enter in an input writes its value before the send', async () => {
+    const { ctx, state, requests } = setup({
+        responses: {
+            '/api/parse': okJson(previewOf('MSH|^~\\&|A\nPID|||1||Written', {})),
+            '/api/send': okJson({ id: 's', delivery: { state: 'acked', ack_code: 'AA' } }),
+        },
+    });
+    for (const f of ['renderDraftRail', 'renderDraftHeader', 'refreshDraftSegmentsInPlace']) ctx[f] = () => {};
+    const d = ctx.addDraft({ raw: 'MSH|^~\\&|A\nPID|||1||Old' });
+    state.selection = { kind: 'draft', id: d.id };
+    state.lastTargetId = 'loopback';
+    const input = { value: 'Written', dataset: { fieldPath: 'PID-5', written: 'Old' }, classList: { contains: (c) => c === 'field-input' } };
+    ctx.document.activeElement = input;
+    await ctx.sendOpenDraft();
+    assert.deepEqual(requests.map((r) => r.url), ['/api/parse', '/api/send']);
+    assert.equal(JSON.parse(requests[1].opts.body).items[0].raw, 'MSH|^~\\&|A\nPID|||1||Written');
+});
+
+test('segments are added, duplicated and removed at the server\'s offsets', () => {
+    const { ctx, state } = setup();
+    ctx.requestDraftPreview = () => {};
+    const raw = 'MSH|^~\\&|A\nEVN|A01\nPID|||1\nPV1||I';
+    const d = ctx.addDraft({ raw });
+    state.selection = { kind: 'draft', id: d.id };
+    const lines = raw.split('\n');
+    let at = 0;
+    const positions = lines.map((l) => {
+        const p = { name: l.slice(0, 3), start: at, end: at + l.length, fields: [] };
+        at += l.length + 1;
+        return p;
+    });
+    const setPreview = () => {
+        state.draftPreview = { draftId: d.id, raw: d.raw, filled: false, error: null, data: previewOf(d.raw, { delimiters: '|^~\\&', typical_segments: ['MSH', 'EVN', 'PID', 'PD1', 'NK1', 'PV1', 'PV2'] }, positions) };
+    };
+    setPreview();
+    ctx.addDraftSegment('NK1');
+    assert.equal(d.raw, 'MSH|^~\\&|A\nEVN|A01\nPID|||1\nNK1|\nPV1||I', 'after PID, before PV1');
+    d.raw = raw; setPreview();
+    ctx.addDraftSegment('PV2');
+    assert.equal(d.raw, raw + '\nPV2|', 'at the end');
+    d.raw = raw; setPreview();
+    ctx.duplicateDraftSegment(2);
+    assert.equal(d.raw, 'MSH|^~\\&|A\nEVN|A01\nPID|||1\nPID|||1\nPV1||I');
+    d.raw = raw; setPreview();
+    ctx.removeDraftSegment(1);
+    assert.equal(d.raw, 'MSH|^~\\&|A\nPID|||1\nPV1||I');
+    d.raw = raw; setPreview();
+    ctx.removeDraftSegment(3);
+    assert.equal(d.raw, 'MSH|^~\\&|A\nEVN|A01\nPID|||1', 'the last line takes the line end before it');
+    d.raw = raw; setPreview();
+    ctx.removeDraftSegment(0);
+    assert.equal(d.raw, raw, 'MSH stays');
+    // Without a preview of the current text nothing is cut.
+    d.raw = raw + 'X';
+    ctx.removeDraftSegment(1);
+    assert.equal(d.raw, raw + 'X');
+});

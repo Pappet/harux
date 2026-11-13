@@ -993,6 +993,7 @@ function buildTypicalChecklist(msg, missingSegWarnings, fieldWarningSegs) {
         }
         const pill = document.createElement('span');
         pill.className = 'seg-pill ' + cls;
+        pill.dataset.seg = s; // the draft editor adds missing ones (#278)
         if (titleText) pill.title = titleText;
         pill.textContent = symbol ? s + ' ' + symbol : s;
         div.appendChild(pill);
