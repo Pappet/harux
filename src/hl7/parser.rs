@@ -393,6 +393,11 @@ pub fn new_control_id() -> String {
 /// one, and what Orchestra and the other systems on the network write
 /// (#288). The one format of every time Harux writes into a message: MSH-7
 /// of its ACKs and the `{{now}}` placeholder.
+///
+/// A trade-off, not an oversight: without an offset, the hour the clocks go
+/// back in autumn happens twice and two values an hour apart read the same.
+/// `+ZZZZ` (allowed by `DTM`) would remove that, but some receivers refuse
+/// it, so it is left out (#288).
 pub fn hl7_timestamp(t: &chrono::DateTime<chrono::Local>) -> String {
     t.format("%Y%m%d%H%M%S").to_string()
 }

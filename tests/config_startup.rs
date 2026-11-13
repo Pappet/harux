@@ -311,8 +311,16 @@ fn ack_time_is_local_time() {
                 assert!(n > 0, "connection closed before the ACK");
                 ack.extend_from_slice(&buf[..n]);
             }
-            let text = String::from_utf8_lossy(&ack).into_owned();
-            let msh7 = text.split('|').nth(6).unwrap().to_string();
+            // Read with the parser: MSH-7 whatever the separator (#296 review).
+            let text = String::from_utf8_lossy(&ack[1..ack.len() - 2]).into_owned();
+            let parsed = harux::hl7::parser::parse_message(&text, "test").unwrap();
+            let msh = parsed.segments.iter().find(|s| s.name == "MSH").unwrap();
+            let msh7 = msh
+                .fields
+                .iter()
+                .find(|f| f.index == 7)
+                .map(|f| f.value.clone())
+                .unwrap_or_default();
             let sent = chrono::NaiveDateTime::parse_from_str(&msh7, "%Y%m%d%H%M%S")
                 .unwrap_or_else(|e| panic!("MSH-7 {msh7:?}: {e}"));
             let local = chrono::Utc::now().naive_utc() + chrono::Duration::minutes(330);
