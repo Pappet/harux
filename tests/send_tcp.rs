@@ -25,7 +25,10 @@ const CLIENT: IpAddr = IpAddr::V4(Ipv4Addr::new(10, 0, 0, 7));
 
 fn timeouts() -> Timeouts {
     Timeouts {
-        connect: Duration::from_secs(2),
+        // The default of send.connect_timeout_secs: Windows reports a refused
+        // connection only after about 2 s (it retries the SYN), so a shorter
+        // limit turns "refused" into "timeout" there.
+        connect: Duration::from_secs(5),
         write: Duration::from_secs(2),
         response: Duration::from_millis(500),
     }
@@ -708,8 +711,27 @@ mod tls {
         let acceptor = TlsAcceptor::from(Arc::new(builder.with_single_cert(chain, key).unwrap()));
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
+        // `localhost` resolves to ::1 first on Windows, and a refused ::1
+        // costs about 2 s there: listen on the same port of ::1 too, where
+        // IPv6 is available.
+        let mut listeners = vec![listener];
+        if let Ok(v6) = TcpListener::bind(("::1", addr.port())).await {
+            listeners.push(v6);
+        }
         let (tx, rx) = mpsc::unbounded_channel();
-        tokio::spawn(async move {
+        for listener in listeners {
+            let (acceptor, tx) = (acceptor.clone(), tx.clone());
+            tokio::spawn(async move { serve_tls(listener, acceptor, tx).await });
+        }
+        (addr, rx)
+    }
+
+    async fn serve_tls(
+        listener: TcpListener,
+        acceptor: TlsAcceptor,
+        tx: mpsc::UnboundedSender<Vec<u8>>,
+    ) {
+        {
             while let Ok((s, _)) = listener.accept().await {
                 let (acceptor, tx) = (acceptor.clone(), tx.clone());
                 tokio::spawn(async move {
@@ -730,8 +752,7 @@ mod tls {
                     let _ = s.shutdown().await;
                 });
             }
-        });
-        (addr, rx)
+        }
     }
 
     fn context(ca: bool, client: bool, allow_unverified: bool) -> TlsContext {

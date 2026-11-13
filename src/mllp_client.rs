@@ -165,6 +165,11 @@ impl ExchangeError {
 /// (resolved here). The socket gets `TCP_NODELAY`: a frame written in parts
 /// would otherwise wait for the peer's delayed ACK, adding tens of
 /// milliseconds to every send and to the round-trip time Harux shows.
+///
+/// On Windows a refused connection is reported only after about 2 s (the
+/// OS retries the SYN), and a name with several addresses is tried address
+/// by address — `localhost` on `::1` first. `send.connect_timeout_secs`
+/// (default 5) leaves room for that.
 pub async fn connect(host: &str, port: u16, limit: Duration) -> Result<TcpStream, ExchangeError> {
     let stream = match timeout(limit, TcpStream::connect((host, port))).await {
         Err(_) => return Err(ExchangeError::ConnectTimeout),

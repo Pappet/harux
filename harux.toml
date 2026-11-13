@@ -45,7 +45,7 @@ max_connections = 100
 enabled = false
 # Offer Harux's own MLLP listener as the target "This Harux".
 loopback_target = true
-connect_timeout_secs = 5
+connect_timeout_secs = 5        # Windows reports a refused connection after ~2 s
 response_timeout_secs = 30
 # Limits of one run (several messages in one request).
 max_run_messages = 1000
