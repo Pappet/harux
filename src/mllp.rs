@@ -450,23 +450,38 @@ fn ingest_with(
         warn!("Charset fallback for message from {}: {}", peer, w.message);
     }
 
-    let parsed = catch_panic(|| parse(&decoded.text, peer)).unwrap_or_else(|p| {
-        error!("Internal error while parsing a frame from {peer}: {p}");
-        Err(format!("{PARSER_PANIC_PREFIX}: {p}"))
-    });
-    let mut msg = match parsed {
-        Ok(msg) => msg,
-        Err(e) => {
-            let mut failed = Hl7Message::new_empty(decoded.text, peer.to_string());
-            failed.message_type = "UNKNOWN".to_string();
-            failed.parse_error = Some(e);
-            failed
-        }
-    };
+    let mut msg = parse_or_failed(decoded.text, peer, parse);
     msg.wire = wire_form(payload, &msg.raw, decoded.encoding);
     msg.charset = decoded.declared;
     msg.validation_warnings.extend(decoded.warning);
     msg
+}
+
+/// Parse text that is already text — a draft (#276) — like a received
+/// frame: never panics, a message that does not parse is a failed message
+/// carrying `parse_error`. No charset step: the text has no bytes yet.
+pub fn parse_text(text: &str, peer: &str) -> Hl7Message {
+    parse_or_failed(text.to_owned(), peer, parse_message)
+}
+
+fn parse_or_failed(
+    text: String,
+    peer: &str,
+    parse: impl FnOnce(&str, &str) -> Result<Hl7Message, String>,
+) -> Hl7Message {
+    let parsed = catch_panic(|| parse(&text, peer)).unwrap_or_else(|p| {
+        error!("Internal error while parsing a frame from {peer}: {p}");
+        Err(format!("{PARSER_PANIC_PREFIX}: {p}"))
+    });
+    match parsed {
+        Ok(msg) => msg,
+        Err(e) => {
+            let mut failed = Hl7Message::new_empty(text, peer.to_string());
+            failed.message_type = "UNKNOWN".to_string();
+            failed.parse_error = Some(e);
+            failed
+        }
+    }
 }
 
 /// How to give back the received `payload` from the stored `raw` text

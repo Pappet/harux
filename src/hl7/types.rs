@@ -131,6 +131,10 @@ pub enum Origin {
         message_id: String,
         changes: Vec<String>,
     },
+    /// A draft (#276): text written or changed in the editor. `based_on` is
+    /// the stored message it was made from, if any — where its references
+    /// (`{{from:OBX[1]-5}}`) were filled in from.
+    Draft { based_on: Option<String> },
 }
 
 impl Origin {
@@ -138,6 +142,7 @@ impl Origin {
     pub fn message_id(&self) -> Option<&str> {
         match self {
             Origin::Resend { message_id, .. } => Some(message_id),
+            Origin::Draft { based_on } => based_on.as_deref(),
         }
     }
 }
@@ -331,12 +336,14 @@ pub struct Hl7Segment {
 }
 
 /// Detail-JSON shape of a segment: `{name, fields, description}`, where each
-/// field is `{index, value, description}` plus `repetitions`
+/// field is `{index, value, description, datatype}` plus `repetitions`
 /// (a [`FieldStructure`]) when [`Hl7Field::is_structured`]. Computed here,
 /// at serialization time, instead of being stored (#185).
 impl Serialize for Hl7Segment {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         use serde::ser::SerializeStruct;
+        // Datatypes from the dictionary (#276): the draft editor shows them.
+        let def = crate::dictionary::get_v251().segments.get(&self.name);
         let fields: Vec<FieldJson<'_>> = self
             .fields
             .iter()
@@ -349,6 +356,9 @@ impl Serialize for Hl7Segment {
                     repetitions: (!is_msh_header && f.is_structured(self.delimiters))
                         .then(|| f.structure(self.delimiters)),
                     description: f.description.as_deref(),
+                    datatype: def
+                        .and_then(|d| d.field_by_seq(f.index))
+                        .map(|d| d.datatype.as_str()),
                 }
             })
             .collect();
@@ -367,6 +377,9 @@ struct FieldJson<'a> {
     #[serde(skip_serializing_if = "Option::is_none")]
     repetitions: Option<FieldStructure<'a>>,
     description: Option<&'a str>,
+    /// HL7 datatype from the dictionary (`XPN`, `TS`, …), `null` for a
+    /// field the dictionary does not know.
+    datatype: Option<&'a str>,
 }
 
 /// Approximate heap footprint of one allocation of `size` bytes, including
@@ -518,6 +531,7 @@ impl Hl7Message {
                                 + vec_heap(changes)
                                 + changes.iter().map(owned_string).sum::<usize>()
                         }
+                        Origin::Draft { based_on } => opt_string(based_on),
                     }
             });
 

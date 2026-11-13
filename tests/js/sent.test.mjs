@@ -209,3 +209,13 @@ test('a resend with changes says which fields were set (#275)', () => {
     const plain = ctx.sentDescriptionHtml(sent('s', { outbound: { target: 't', origin: { kind: 'resend', message_id: 'm1', changes: [] } } }));
     assert.match(plain, /resent unchanged from/);
 });
+
+test('a message sent from a draft says so, with a link to its source (#276)', () => {
+    const { ctx } = setup();
+    const based = ctx.sentDescriptionHtml(sent('s', {
+        outbound: { target: 't', origin: { kind: 'draft', based_on: 'm1' } },
+    }));
+    assert.match(based, /^Sent to t · from a draft based on <button class="origin-link" data-action="select-message" data-id="m1"/);
+    const blank = ctx.sentDescriptionHtml(sent('s', { outbound: { target: 't', origin: { kind: 'draft', based_on: null } } }));
+    assert.equal(blank, 'Sent to t · from a draft');
+});

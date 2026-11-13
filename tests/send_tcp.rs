@@ -267,9 +267,7 @@ fn to(addr: SocketAddr, name: &str) -> TargetRequest {
 fn request(target: TargetRequest, id: &str) -> SendRequest {
     SendRequest {
         target,
-        items: vec![ItemRequest {
-            message_id: id.into(),
-        }],
+        items: vec![ItemRequest::stored(id)],
         await_response: true,
         allow_invalid: false,
         set: Default::default(),
