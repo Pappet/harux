@@ -203,7 +203,19 @@ impl Destination {
 #[derive(Debug, Default)]
 struct SendStats {
     sent: AtomicU64,
+    rejected: AtomicU64,
     failed: AtomicU64,
+}
+
+/// What became of the sends since start or the last *Clear* (#272).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct SendCounters {
+    /// Accepted (`AA`/`CA`), or written without awaiting a response.
+    pub sent: u64,
+    /// Answered with any other code (`AE`, `AR`, `CE`, `CR`, …).
+    pub rejected: u64,
+    /// No usable answer: a transport failure or a response without MSA.
+    pub failed: u64,
 }
 
 /// Runs sends. Cheap to clone; shared by the web handlers.
@@ -239,18 +251,21 @@ impl Sender {
         self.inner.settings.enabled
     }
 
-    /// `(sent, failed)` since start or the last *Clear*.
-    pub fn counters(&self) -> (u64, u64) {
+    /// The counters since start or the last *Clear*.
+    pub fn counters(&self) -> SendCounters {
         let s = &self.inner.stats;
-        (
-            s.sent.load(Ordering::Relaxed),
-            s.failed.load(Ordering::Relaxed),
-        )
+        SendCounters {
+            sent: s.sent.load(Ordering::Relaxed),
+            rejected: s.rejected.load(Ordering::Relaxed),
+            failed: s.failed.load(Ordering::Relaxed),
+        }
     }
 
     pub fn reset_counters(&self) {
-        self.inner.stats.sent.store(0, Ordering::Relaxed);
-        self.inner.stats.failed.store(0, Ordering::Relaxed);
+        let s = &self.inner.stats;
+        for c in [&s.sent, &s.rejected, &s.failed] {
+            c.store(0, Ordering::Relaxed);
+        }
     }
 
     /// Runs under way.
@@ -489,10 +504,15 @@ impl Sender {
         };
 
         let failed = delivery.state == DeliveryState::Failed;
+        // A NACK is an answer, not a delivery: counted on its own (#284 review).
+        let accepted = delivery.state == DeliveryState::Sent
+            || matches!(delivery.ack_code.as_deref(), Some("AA" | "CA"));
         let counter = if failed {
             &inner.stats.failed
-        } else {
+        } else if accepted {
             &inner.stats.sent
+        } else {
+            &inner.stats.rejected
         };
         counter.fetch_add(1, Ordering::Relaxed);
         // Metadata only — never content.

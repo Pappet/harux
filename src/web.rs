@@ -36,7 +36,11 @@ struct StatsResponse {
     /// Sending (#272): whether it is switched on, messages sent and failed
     /// since start or *Clear*, runs under way.
     sending_enabled: bool,
+    /// Accepted (`AA`/`CA`) or written without awaiting a response.
     sent: u64,
+    /// Answered with another code (`AE`, `AR`, …).
+    send_rejected: u64,
+    /// No usable answer (refused, timeout, no MSA, …).
     send_failed: u64,
     active_runs: usize,
 }
@@ -397,6 +401,7 @@ async fn search_messages(
 
 async fn get_stats(State(state): State<AppState>) -> impl IntoResponse {
     let (store_bytes, store_max_bytes) = state.store.memory_usage().await;
+    let send = state.sender.counters();
     Json(StatsResponse {
         total_messages: state.store.count().await,
         store_bytes,
@@ -409,8 +414,9 @@ async fn get_stats(State(state): State<AppState>) -> impl IntoResponse {
         max_connections: state.max_connections,
         mllp_port: state.mllp_port,
         sending_enabled: state.sender.enabled(),
-        sent: state.sender.counters().0,
-        send_failed: state.sender.counters().1,
+        sent: send.sent,
+        send_rejected: send.rejected,
+        send_failed: send.failed,
         active_runs: state.sender.active_runs(),
     })
 }

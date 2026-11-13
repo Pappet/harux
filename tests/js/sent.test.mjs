@@ -9,6 +9,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
+import { El } from './fake-dom.mjs';
 
 const read = (f) => readFileSync(new URL(`../../static/${f}`, import.meta.url), 'utf8');
 
@@ -16,10 +17,15 @@ function setup() {
     const noop = () => {};
     const requests = [];
     const patched = [];
+    const elements = new Map();
+    const byId = (id) => {
+        if (!elements.has(id)) elements.set(id, new El('', id));
+        return elements.get(id);
+    };
     const ctx = {
         window: {},
         console: { ...console, info: noop, warn: noop, debug: noop },
-        document: { getElementById: () => null, createElement: () => ({}) },
+        document: { getElementById: byId, createElement: (tag) => { const el = new El(); el.tagName = tag; return el; } },
         sessionStorage: { getItem: () => null, setItem: noop },
         crypto: { randomUUID: () => 'session' },
         setTimeout: noop, // no render flush: inspect state.pendingMessages
@@ -28,16 +34,20 @@ function setup() {
     };
     vm.createContext(ctx);
     for (const f of ['state.js', 'util.js', 'ws.js', 'render.js']) vm.runInContext(read(f), ctx);
-    // Rendering is not under test here.
+    // Rendering is not under test here (the detail view's is, through
+    // `renderDetailReal`).
+    ctx.renderDetailReal = ctx.renderDetail;
     Object.assign(ctx, {
         renderMessageList: noop, renderSourceLegend: noop, updateHeaderCounters: noop,
         prependMessagesToList: noop, removeRowsFromList: noop, renderDetail: noop,
         patchRow: (id, m) => patched.push([id, m]),
         selectMessage: (id) => patched.push(['selected', id]),
+        // The raw-line view is not under test; record what it was given.
+        renderRawLinesView: (container, raw) => { container.dataset.raw = raw; },
     });
     const state = ctx.window.state;
     const respond = (i, list) => requests[i].resolve({ ok: true, json: async () => list });
-    return { ctx, state, patched, respond };
+    return { ctx, state, patched, respond, byId };
 }
 
 const received = (id) => ({ id, direction: 'in', source_addr: '10.4.1.22:5000', tags: [], message_type: 'ADT^A01' });
@@ -126,4 +136,58 @@ test('delivery_updated during a list load is applied after the snapshot', async 
     respond(0, [sent('s1')]); // snapshot taken while the send was pending
     await load;
     assert.deepEqual(state.messages[0].delivery, outcome);
+});
+
+const texts = (el) => el.children.map((c) => c.textContent);
+
+test('the Response tab: result chip, facts, the response lines (#284 review)', () => {
+    const { ctx } = setup();
+    const content = new El();
+    ctx.renderResponseTab(content, sent('s', {
+        delivery: {
+            state: 'acked', ack_code: 'AA', latency_ms: 7, control_id_matches: true,
+            response: 'MSH|^~\\&|R\rMSA|AA|C1', response_size: 90_000, response_truncated: true,
+        },
+    }));
+    const [result, view] = content.children;
+    assert.deepEqual(texts(result), [
+        'AA',
+        '7 ms · MSA-2 repeats the control ID that was sent · the response was 87.9 KB; only its beginning is kept',
+    ]);
+    assert.equal(view.dataset.raw, 'MSH|^~\\&|R\rMSA|AA|C1');
+
+    ctx.renderResponseTab(content, sent('s', { delivery: { state: 'acked', ack_code: 'AE', control_id_matches: false, response: 'x' } }));
+    assert.equal(texts(content.children[0])[1], 'MSA-2 does not repeat the control ID that was sent');
+
+    ctx.renderResponseTab(content, sent('s'));
+    assert.deepEqual(texts(content.children[0]), ['…', 'Waiting for the response']);
+    assert.equal(content.children.length, 1, 'no response yet: no lines');
+
+    ctx.renderResponseTab(content, sent('s', {
+        delivery: { state: 'failed', error: 'refused', error_detail: 'The destination refused the connection', latency_ms: 3 },
+    }));
+    assert.deepEqual(texts(content.children[0]), ['✕ refused', '3 ms · The destination refused the connection']);
+});
+
+test('the detail of a sent message: SENT badge, description, ACK tab relabelled', () => {
+    const { ctx, state, byId } = setup();
+    state.activeTab = 'ack';
+    state.selectedMessage = sent('s', {
+        outbound: { target: 'orchestra-test', origin: { kind: 'resend', message_id: 'm1' }, requested_by: '10.0.0.7' },
+        message_type_description: 'Admit / Visit Notification',
+        segments: [],
+    });
+    ctx.renderDetailReal();
+    assert.ok(!byId('detail-direction').classList.contains('hidden'));
+    assert.equal(byId('tab-btn-ack').textContent, 'Response');
+    assert.equal(byId('detail-desc').textContent,
+        'Sent to orchestra-test · resent unchanged from a stored message · requested by 10.0.0.7 · Admit / Visit Notification');
+    assert.equal(texts(byId('detail-content').children[0])[0], '…', 'the Response tab is shown');
+
+    // A received message turns both back.
+    state.selectedMessage = { ...received('r'), segments: [], message_type_description: 'Admit' };
+    ctx.renderDetailReal();
+    assert.ok(byId('detail-direction').classList.contains('hidden'));
+    assert.equal(byId('tab-btn-ack').textContent, 'ACK');
+    assert.equal(byId('detail-desc').textContent, 'Admit');
 });

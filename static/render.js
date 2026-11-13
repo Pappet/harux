@@ -1272,7 +1272,9 @@ function renderResponseTab(content, msg) {
     if (d.control_id_matches === true) facts.push('MSA-2 repeats the control ID that was sent');
     if (d.control_id_matches === false) facts.push('MSA-2 does not repeat the control ID that was sent');
     if (d.response_truncated) {
-        facts.push(`only the first ${formatSize(d.response ? d.response.length : 0)} of ${formatSize(d.response_size || 0)} are kept`);
+        // response_size counts bytes on the wire; the kept text's length is
+        // characters, so the two are not compared (#284 review).
+        facts.push(`the response was ${formatSize(d.response_size || 0)}; only its beginning is kept`);
     }
     result.appendChild(textSpan('response-facts', facts.join(' \u00b7 ')));
     const children = [result];

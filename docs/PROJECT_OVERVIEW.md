@@ -203,7 +203,7 @@ Built-in defaults → `harux.toml` (next to the binary, then the working directo
 | `GET` | `/api/messages?offset=0&limit=100&include_bookmarks=true` | Paginated message list, newest first (`limit` capped at 1000); `include_bookmarks` adds every older bookmarked message; `before=<id>` instead of `offset` pages through older history (the UI's "Load older") |
 | `GET` | `/api/messages/{id}` | Full message with all segments and fields |
 | `GET` | `/api/search?q=ADT&limit=100&before=<id>` | Search like the UI filter (`has:warnings`/`has:errors`, type, patient, facility, control ID, source, tags), newest first; `before` searches only older messages. The UI uses it for "Search older on the server" |
-| `GET` | `/api/stats` | Live server stats: message counts, store bytes and limit, parse errors, connections, `sending_enabled`, `sent`, `send_failed`, `active_runs` |
+| `GET` | `/api/stats` | Live server stats: message counts, store bytes and limit, parse errors, connections, `sending_enabled`, `sent` (accepted, `AA`/`CA`), `send_rejected` (any other MSA code), `send_failed` (no usable answer), `active_runs` |
 | `GET` | `/api/export?direction=in` | Every stored received message as one MLLP-framed `harux-export.hl7`, byte for byte as received, oldest first (streamed); `direction=out` the sent ones, `all` both |
 | `GET` | `/api/send/config` | Whether sending is on, the loopback target, the destination and run limits (`403` while sending is off) |
 | `POST` | `/api/send` | Resend one stored message unchanged (below); `403` while sending is off |

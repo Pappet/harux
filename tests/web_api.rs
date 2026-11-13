@@ -1039,6 +1039,7 @@ async fn send_a_stored_message_to_a_target() {
     let stats = get_json(&state, "/api/stats").await;
     assert_eq!(stats["sending_enabled"], true);
     assert_eq!(stats["sent"], 1);
+    assert_eq!(stats["send_rejected"], 0);
     assert_eq!(stats["send_failed"], 0);
     assert_eq!(stats["active_runs"], 0);
 }

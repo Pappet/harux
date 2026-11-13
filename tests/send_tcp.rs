@@ -7,7 +7,8 @@ use harux::hl7::types::{DeliveryState, Direction, Hl7MessageSummary, WireForm};
 use harux::mllp::{self, MllpStats};
 use harux::mllp_client::{self, ExchangeError, Timeouts, MAX_RESPONSE_BYTES};
 use harux::send::{
-    ExplicitTarget, ItemRequest, SendError, SendRequest, SendSettings, Sender, TargetRequest,
+    ExplicitTarget, ItemRequest, SendCounters, SendError, SendRequest, SendSettings, Sender,
+    TargetRequest,
 };
 use harux::store::MessageStore;
 use std::future::Future;
@@ -375,7 +376,13 @@ async fn round_trip_to_harux_itself() {
     let out = detail.message.outbound.as_ref().unwrap();
     assert_eq!(out.requested_by, "10.0.0.7");
     assert_eq!(detail.message.source_addr, addr.to_string());
-    assert_eq!(sender.counters(), (1, 0));
+    assert_eq!(
+        sender.counters(),
+        SendCounters {
+            sent: 1,
+            ..SendCounters::default()
+        }
+    );
 }
 
 /// A send that fails is a row too, stored before the connect (rule 1).
@@ -399,7 +406,13 @@ async fn a_refused_send_is_stored_with_its_reason() {
         stored[1].delivery.as_ref().unwrap().error.as_deref(),
         Some("refused")
     );
-    assert_eq!(sender.counters(), (0, 1));
+    assert_eq!(
+        sender.counters(),
+        SendCounters {
+            failed: 1,
+            ..SendCounters::default()
+        }
+    );
 }
 
 #[tokio::test]
@@ -601,4 +614,38 @@ async fn too_many_runs_at_once() {
     );
     sender.shutdown();
     first.await.unwrap().unwrap();
+}
+
+/// A NACK is an answer, not a delivery: `AE` / `AR` are counted as rejected,
+/// not as sent (#284 review).
+#[tokio::test]
+async fn a_nack_is_counted_as_rejected() {
+    let (addr, _) = fake(|mut s, _| async move {
+        while read_frame(&mut s).await.is_some() {
+            let _ = s
+                .write_all(&frame(
+                    b"MSH|^~\\&|R|RF|||20260101||ACK|A|P|2.5\rMSA|AR|N1\r",
+                ))
+                .await;
+        }
+    })
+    .await;
+    let store = store();
+    let sender = Sender::new(settings(|_| {}), store.clone());
+    let id = received(&store, b"MSH|^~\\&|A|B|||20260101||ADT^A01|N1|P|2.5\r").await;
+    let result = sender
+        .send(request(to(addr, "t"), &id), CLIENT)
+        .await
+        .unwrap();
+    assert_eq!(result.delivery.state, DeliveryState::Acked);
+    assert_eq!(result.delivery.ack_code.as_deref(), Some("AR"));
+    assert_eq!(
+        sender.counters(),
+        SendCounters {
+            rejected: 1,
+            ..SendCounters::default()
+        }
+    );
+    sender.reset_counters();
+    assert_eq!(sender.counters(), SendCounters::default());
 }
