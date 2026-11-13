@@ -16,6 +16,8 @@ const ICONS = {
     copy: '<svg class="i-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>',
     chevronRight: '<svg class="i-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>',
     chevronDown: '<svg class="i-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>',
+    resend: '<svg class="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="17 1 21 5 17 9"/><path d="M3 11V9a4 4 0 0 1 4-4h14"/><polyline points="7 23 3 19 7 15"/><path d="M21 13v2a4 4 0 0 1-4 4H3"/></svg>',
+    updown: '<svg class="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="7 7 12 2 17 7"/><line x1="12" y1="2" x2="12" y2="22"/><polyline points="17 17 12 22 7 17"/></svg>',
     xMark: '<svg class="i-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>',
 };
 
@@ -102,6 +104,7 @@ function saveSession() {
             highlightedSource: state.highlightedSource,
             showBookmarkedOnly: state.showBookmarkedOnly,
             validationFilter: state.validationFilter,
+            directionFilter: state.directionFilter,
             diffIgnoreDynamic: state.diffIgnoreDynamic,
             diffPinnedId: state.diffPinnedMessage ? state.diffPinnedMessage.id : null
         }));
@@ -126,6 +129,7 @@ function loadSession() {
         if (saved.highlightedSource !== undefined) state.highlightedSource = saved.highlightedSource;
         if (typeof saved.showBookmarkedOnly === 'boolean') state.showBookmarkedOnly = saved.showBookmarkedOnly;
         if (typeof saved.validationFilter === 'number') state.validationFilter = saved.validationFilter;
+        if ([0, 1, 2].includes(saved.directionFilter)) state.directionFilter = saved.directionFilter;
         if (typeof saved.diffIgnoreDynamic === 'boolean') state.diffIgnoreDynamic = saved.diffIgnoreDynamic;
         // The full pinned message can be multi-MB (raw + segments), so we
         // persist just the ID and re-fetch from /api/messages/:id during

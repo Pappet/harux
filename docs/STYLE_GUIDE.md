@@ -142,6 +142,7 @@ hsl(260, 65%, 60%)  — Indigo      hsl(15,  90%, 58%)  — Coral
 - **No native browser checkboxes or radios** — use custom CSS toggle switches
 - Toggle switches use `var(--bg-tertiary)` background and `var(--border)` for resting state
 - Active toggles use `var(--accent)` colour with `rgba(212, 148, 76, 0.15)` background glow
+- The toggle is a `<button class="switch" role="switch" aria-checked>` with a `data-action`, so it works with Tab, Enter and Space like every other control (#274)
 - Search inputs are debounced at `300ms`
 
 ---
@@ -149,7 +150,7 @@ hsl(260, 65%, 60%)  — Indigo      hsl(15,  90%, 58%)  — Coral
 ## 6. Frontend Architecture Rules
 
 - **No frameworks:** Vanilla JavaScript only. No React, Vue, Svelte.
-- **No build toolchain:** No npm, webpack, vite. Plain files only: `index.html`, `style.css` and the `<script>` files `state.js` → `util.js` → `ws.js` → `render.js` → `diff.js` → `app.js` (no module system, one global `state`).
+- **No build toolchain:** No npm, webpack, vite. Plain files only: `index.html`, `style.css` and the `<script>` files `state.js` → `util.js` → `ws.js` → `render.js` → `diff.js` → `send.js` → `app.js` (no module system, one global `state`).
 - **No inline code:** The Content-Security-Policy forbids inline scripts, inline styles and `on…=` attributes. Interactive elements get a `data-action` and are handled by the delegation in `app.js`; values in attributes are escaped with `escAttr`, text with `esc`.
 - **Embedded distribution:** Static files are baked into the binary via `rust-embed`. Changes require recompilation.
 - **DOM batching:** Buffer incoming messages and flush to the DOM every `250ms` to prevent freeze at high throughput.
@@ -173,7 +174,9 @@ The `.detail-header` uses a layered structure:
 - **Row 1:** Type chip + Human-readable title
 - **Row 2 (Optional):** Segment description or validation summary
 - **Row 3:** Monospace metadata string (`patient · MRN · control · version · received`)
-- **Tags Row:** Bookmark button, tag chips, Add tag input in a flex container
+- **Title row, right (`#detail-actions`):** the **Resend → target** split button (#274) while sending is on — the left part sends to the target used last, the caret opens the target menu (`.send-menu`: the user's targets as radio rows with their last result, an add/edit form with toggle switches, Save to file / Load, Send). Empty while sending is off.
+- **Tools row (`#detail-tools`):** tag chips, Add tag input, Bookmark and Pin diff, below the meta row
+- In the meta row the control ID is a link (`.meta-link`) that filters the list by it (trace); a sent message's description links its original (`.origin-link`)
 
 ### Validation Badge Colour Semantics
 
