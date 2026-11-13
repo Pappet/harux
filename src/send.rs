@@ -1,8 +1,12 @@
 //! Sending stored messages to other MLLP receivers (#272, Milestone 4).
 //!
-//! A **run** is one request to send. This package sends one stored message,
-//! unchanged — the bytes it arrived as (`Hl7Message::wire_bytes`, #230) —
-//! to the destination the request names. The rules (`AGENTS.md`, *Sending*):
+//! A **run** is one request to send: stored messages (as received, or with
+//! fields set, #275) and drafts (#276), each item `repeat` times, in order,
+//! over one connection, to the destination the request names (#280). A run
+//! of one message answers with its outcome; a longer one goes on in a task
+//! of its own, with its status in a small registry (`GET
+//! /api/send/runs/{id}`) and a switch to cancel it. The rules (`AGENTS.md`,
+//! *Sending*):
 //!
 //! 1. Everything Harux sends, or tries to send, is stored, **before** it
 //!    connects: a refused or timed-out send is a row too, and whatever the
@@ -43,6 +47,15 @@ pub const LARGE_BODY_PERMITS: usize = 4;
 /// From this size on a request body counts as large (or when its size is
 /// not announced).
 pub const LARGE_BODY_BYTES: u64 = 256 * 1024;
+
+/// Longest pause between the messages of a run (`interval_ms`, #280).
+pub const MAX_INTERVAL_MS: u64 = 60_000;
+
+/// Transport failures in a row after which a run gives up (#280).
+const MAX_FAILURES_IN_ROW: u32 = 3;
+
+/// Finished runs kept for `GET /api/send/runs/{id}` (#280).
+const KEPT_RUNS: usize = 50;
 
 /// What the sender needs from the configuration (`[send]`, `[mllp]`,
 /// `[store]`). Built once at start; tests build it by hand.
@@ -116,8 +129,8 @@ impl SendSettings {
 // --- Request ---
 
 /// `POST /api/send` (#272). Unknown fields are refused, so a request that
-/// asks for something this version does not do (`set`, `repeat`, …) fails
-/// instead of sending the message unchanged.
+/// asks for something this version does not do fails instead of sending the
+/// message unchanged.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SendRequest {
@@ -135,10 +148,26 @@ pub struct SendRequest {
     /// message goes out byte for byte as received.
     #[serde(default)]
     pub set: std::collections::BTreeMap<String, String>,
+    /// Send the list of items this many times (#280): `A B C A B C`. The
+    /// placeholders are filled in anew for every copy; `{{n}}` is the
+    /// position in the run.
+    #[serde(default = "one")]
+    pub repeat: usize,
+    /// Pause between two messages of a run, at most [`MAX_INTERVAL_MS`].
+    #[serde(default)]
+    pub interval_ms: u64,
+    /// Stop the run at the first answer that is not an accept (`AE`, `AR`,
+    /// `CE`, `CR`, or a response that is no acknowledgement).
+    #[serde(default)]
+    pub stop_on_nack: bool,
 }
 
 fn yes() -> bool {
     true
+}
+
+fn one() -> usize {
+    1
 }
 
 /// `"loopback"` or a target of the user's own list.
@@ -265,6 +294,20 @@ impl SendError {
         }
     }
 
+    /// The refusal of item `n` of several: its reason names the item.
+    fn for_item(self, n: Option<usize>) -> Self {
+        let Some(n) = n else { return self };
+        let named = |m: String| format!("Item {n}: {m}");
+        match self {
+            SendError::BadRequest(m) => SendError::BadRequest(named(m)),
+            SendError::Forbidden(m) => SendError::Forbidden(named(m)),
+            SendError::NotFound(m) => SendError::NotFound(named(m)),
+            SendError::TooLarge(m) => SendError::TooLarge(named(m)),
+            SendError::Unprocessable(m) => SendError::Unprocessable(named(m)),
+            e @ (SendError::Disabled | SendError::Busy) => e,
+        }
+    }
+
     pub fn message(&self) -> String {
         match self {
             SendError::Disabled => {
@@ -343,6 +386,8 @@ struct Inner {
     large_bodies: Arc<Semaphore>,
     stats: SendStats,
     shutdown: watch::Sender<bool>,
+    /// Runs under way and the newest finished ones (#280).
+    registry: std::sync::Mutex<Registry>,
 }
 
 impl Sender {
@@ -357,6 +402,7 @@ impl Sender {
                 large_bodies: Arc::new(Semaphore::new(LARGE_BODY_PERMITS)),
                 stats: SendStats::default(),
                 shutdown,
+                registry: Default::default(),
             }),
         }
     }
@@ -430,32 +476,166 @@ impl Sender {
         true
     }
 
-    /// Run `request` for the client at `requested_by` and wait for its
-    /// outcome. A failed delivery (refused, timeout, NACK) is `Ok`: the
-    /// request worked, the send did not.
+    /// Run `request` for the client at `requested_by` (#272, runs #280).
+    ///
+    /// Everything that can be refused is refused here, before anything is
+    /// sent: the target, every item (an unknown message refuses the whole
+    /// request), the run limits. One message: the request waits for its
+    /// outcome ([`SendOutcome::One`]); a failed delivery (refused, timeout,
+    /// NACK) is `Ok` — the request worked, the send did not. Several: the run
+    /// goes on in a task of its own and the answer is its status
+    /// ([`SendOutcome::Run`]).
+    pub async fn start(
+        &self,
+        request: SendRequest,
+        requested_by: IpAddr,
+    ) -> Result<SendOutcome, SendError> {
+        let settings = &self.inner.settings;
+        if !settings.enabled {
+            return Err(SendError::Disabled);
+        }
+        if request.items.is_empty() {
+            return Err(SendError::BadRequest("`items` is empty".into()));
+        }
+        if request.repeat == 0 {
+            return Err(SendError::BadRequest("`repeat` is at least 1".into()));
+        }
+        if request.interval_ms > MAX_INTERVAL_MS {
+            return Err(SendError::BadRequest(format!(
+                "`interval_ms` is at most {MAX_INTERVAL_MS} (one minute)"
+            )));
+        }
+        let total = request.items.len().saturating_mul(request.repeat);
+        if total > settings.max_run_messages {
+            return Err(SendError::TooLarge(format!(
+                "A run of {total} messages is more than send.max_run_messages ({})",
+                settings.max_run_messages
+            )));
+        }
+        let destination = self.check_target(&request.target)?;
+        let peer = destination.display();
+
+        // Look every item up (async), then build the first copy of each off
+        // the async workers: a run may hold many large messages.
+        let several = request.items.len() > 1;
+        let mut resolved = Vec::with_capacity(request.items.len());
+        for (i, item) in request.items.iter().enumerate() {
+            let r = self
+                .resolve(item, &request)
+                .await
+                .map_err(|e| e.for_item(several.then_some(i + 1)))?;
+            resolved.push(r);
+        }
+        let set = Arc::new(request.set);
+        let max_bytes = settings.max_message_bytes;
+        let allow_invalid = request.allow_invalid;
+        let (items, firsts) = tokio::task::spawn_blocking({
+            let set = Arc::clone(&set);
+            let peer = peer.clone();
+            move || prepare(resolved, &set, &peer, max_bytes, allow_invalid, several)
+        })
+        .await
+        .map_err(|e| SendError::Unprocessable(format!("Internal error while building: {e}")))??;
+
+        // Every sent message is stored again (rule 1): a run may not take
+        // more than its share of the store.
+        let run_bytes = items
+            .iter()
+            .map(|i| i.estimated)
+            .fold(0usize, usize::saturating_add)
+            .saturating_mul(request.repeat);
+        if run_bytes > settings.max_run_bytes {
+            return Err(SendError::TooLarge(format!(
+                "Storing {} again would take {} MB, more than send.max_run_store_percent \
+                 ({} %) of the store",
+                if total == 1 {
+                    "this message".to_string()
+                } else {
+                    format!("these {total} messages")
+                },
+                run_bytes.div_ceil(1024 * 1024),
+                settings.max_run_store_percent
+            )));
+        }
+
+        let permit = Arc::clone(&self.inner.runs)
+            .try_acquire_owned()
+            .map_err(|_| SendError::Busy)?;
+        let handle = self.register(RunStatus::new(
+            &destination.label,
+            total,
+            requested_by.to_canonical().to_string(),
+        ));
+        let plan = RunPlan {
+            items: Arc::new(items),
+            repeat: request.repeat,
+            set,
+            destination,
+            peer,
+            requested_by: requested_by.to_canonical().to_string(),
+            allow_invalid,
+            await_response: request.await_response,
+            interval: Duration::from_millis(request.interval_ms),
+            stop_on_nack: request.stop_on_nack,
+        };
+        let sender = self.clone();
+        let run = tokio::spawn({
+            let handle = Arc::clone(&handle);
+            async move {
+                let result = sender.run(&handle, plan, firsts).await;
+                drop(permit);
+                result
+            }
+        });
+        if total > 1 {
+            return Ok(SendOutcome::Run(handle.status()));
+        }
+        match run.await {
+            Ok(Some(result)) => Ok(SendOutcome::One(result)),
+            Ok(None) => Err(SendError::Unprocessable(
+                handle
+                    .status()
+                    .reason
+                    .unwrap_or_else(|| "The message was not sent".into()),
+            )),
+            // `run` catches the exchange's panics itself; this is the store
+            // calls around it.
+            Err(e) => Err(SendError::Unprocessable(format!(
+                "Internal error while sending: {e}"
+            ))),
+        }
+    }
+
+    /// Send one message and wait for its outcome: [`Sender::start`] for a
+    /// request of exactly one message. For callers of the library (the
+    /// integration tests); the web handler calls `start`.
+    #[allow(dead_code)]
     pub async fn send(
         &self,
         request: SendRequest,
         requested_by: IpAddr,
     ) -> Result<SendResult, SendError> {
-        let settings = &self.inner.settings;
-        if !settings.enabled {
-            return Err(SendError::Disabled);
+        if request.items.len().saturating_mul(request.repeat) > 1 {
+            return Err(SendError::BadRequest(
+                "Several messages are a run: Sender::start".into(),
+            ));
         }
-        let item = match request.items.as_slice() {
-            [item] => item,
-            [] => return Err(SendError::BadRequest("`items` is empty".into())),
-            _ => {
-                return Err(SendError::BadRequest(
-                    "One message per request: sending several in one run is not \
-                     available yet"
-                        .into(),
-                ))
-            }
-        };
-        let destination = self.check_target(&request.target)?;
-        let peer = destination.display();
-        let (mut msg, origin) = match (&item.message_id, &item.raw) {
+        match self.start(request, requested_by).await? {
+            SendOutcome::One(result) => Ok(result),
+            SendOutcome::Run(_) => unreachable!("a request of one message is no run"),
+        }
+    }
+
+    /// The checks of one item that need the store: the stored message it
+    /// names (kept as an `Arc`, so eviction cannot take it away before the
+    /// run sends it), or the message a draft refers to.
+    async fn resolve(
+        &self,
+        item: &ItemRequest,
+        request: &SendRequest,
+    ) -> Result<Resolved, SendError> {
+        let settings = &self.inner.settings;
+        match (&item.message_id, &item.raw) {
             (Some(id), None) => {
                 if item.charset.is_some() || item.based_on.is_some() || item.template.is_some() {
                     return Err(SendError::BadRequest(
@@ -464,147 +644,65 @@ impl Sender {
                             .into(),
                     ));
                 }
-                self.stored_message(id, &request, &peer).await?
+                let original = self
+                    .stored(id)
+                    .await
+                    .ok_or_else(|| SendError::NotFound(format!("No message {id}")))?;
+                if original.truncated {
+                    return Err(SendError::Unprocessable(
+                        "This entry holds only the beginning of a frame above the size limit and \
+                         cannot be resent"
+                            .into(),
+                    ));
+                }
+                if original.parse_error.is_some() && !request.allow_invalid {
+                    return Err(SendError::Unprocessable(
+                        "This message did not parse. Set allow_invalid to send it as it was \
+                         received"
+                            .into(),
+                    ));
+                }
+                let size = original.wire_len();
+                if size > settings.max_message_bytes {
+                    return Err(SendError::TooLarge(format!(
+                        "The message ({} KB) is larger than mllp.max_message_size_mb",
+                        size / 1024
+                    )));
+                }
+                Ok(Resolved::Stored(original))
             }
-            (None, Some(raw)) => self.draft_message(raw, item, &request, &peer).await?,
-            _ => {
-                return Err(SendError::BadRequest(
-                    "An item names a stored message (message_id) or carries a draft (raw), \
-                     one of the two"
-                        .into(),
-                ))
+            (None, Some(raw)) => {
+                // `set` is written into the draft's text once; its
+                // placeholders are filled in for every copy (`{{n}}`).
+                let (text, _) = crate::draft::apply_set(raw, &request.set)?;
+                let based_on = self.based_on(item.based_on.as_deref(), &text).await?;
+                // A label only: no control characters, cut (it reaches the log).
+                let template = item.template.as_deref().map(|t| {
+                    t.trim()
+                        .chars()
+                        .filter(|c| !c.is_control())
+                        .take(MAX_TARGET_NAME_CHARS)
+                        .collect::<String>()
+                });
+                let origin = match (template, &item.based_on) {
+                    (Some(name), None) if !name.is_empty() => Origin::Template { name },
+                    _ => Origin::Draft {
+                        based_on: item.based_on.clone(),
+                    },
+                };
+                Ok(Resolved::Draft {
+                    text,
+                    charset: item.charset.clone(),
+                    based_on,
+                    origin,
+                })
             }
-        };
-
-        let permit = Arc::clone(&self.inner.runs)
-            .try_acquire_owned()
-            .map_err(|_| SendError::Busy)?;
-
-        msg.id = uuid::Uuid::new_v4().to_string();
-        msg.received_at = chrono::Utc::now();
-        msg.source_addr = peer;
-        msg.ack_response = None;
-        msg.ack_code = None;
-        msg.outbound = Some(Box::new(Outbound {
-            target: destination.label.clone(),
-            transport: destination.transport,
-            origin,
-            requested_by: requested_by.to_canonical().to_string(),
-            run: uuid::Uuid::new_v4().to_string(),
-        }));
-        // A receiver does not answer an ACK, just as Harux never does.
-        let await_response = request.await_response && !msg.message_type.starts_with("ACK");
-
-        let sender = self.clone();
-        let run = tokio::spawn(async move {
-            let result = sender.run_one(msg, destination, await_response).await;
-            drop(permit);
-            result
-        });
-        run.await.map_err(|e| {
-            // `run_one` catches the exchange's panics itself; this is the
-            // store calls around it.
-            SendError::Unprocessable(format!("Internal error while sending: {e}"))
-        })
-    }
-
-    /// The stored message `id`, as received or with `request.set` (#275).
-    async fn stored_message(
-        &self,
-        id: &str,
-        request: &SendRequest,
-        peer: &str,
-    ) -> Result<(Hl7Message, Origin), SendError> {
-        let settings = &self.inner.settings;
-        let original = self
-            .stored(id)
-            .await
-            .ok_or_else(|| SendError::NotFound(format!("No message {id}")))?;
-        if original.truncated {
-            return Err(SendError::Unprocessable(
-                "This entry holds only the beginning of a frame above the size limit and \
-                 cannot be resent"
+            _ => Err(SendError::BadRequest(
+                "An item names a stored message (message_id) or carries a draft (raw), \
+                 one of the two"
                     .into(),
-            ));
+            )),
         }
-        if original.parse_error.is_some() && !request.allow_invalid {
-            return Err(SendError::Unprocessable(
-                "This message did not parse. Set allow_invalid to send it as it was received"
-                    .into(),
-            ));
-        }
-        let size = original.wire_len();
-        if size > settings.max_message_bytes {
-            return Err(SendError::TooLarge(format!(
-                "The message ({} KB) is larger than mllp.max_message_size_mb",
-                size / 1024
-            )));
-        }
-        self.check_run_bytes(&original)?;
-
-        // Unchanged: the stored message itself — its bytes are the same
-        // (`wire` is copied), so the parse is too. Changed: the overrides
-        // written into its text, encoded like the original, then decoded
-        // and parsed like a received frame (#275).
-        let (msg, changes) = if request.set.is_empty() {
-            ((*original).clone(), Vec::new())
-        } else {
-            self.changed_message(&original, &request.set, peer, request.allow_invalid)?
-        };
-        Ok((
-            msg,
-            Origin::Resend {
-                message_id: original.id.clone(),
-                changes,
-            },
-        ))
-    }
-
-    /// A draft (#276): `request.set` written into its text, then the bytes
-    /// built (`draft::build_payload`) and decoded and parsed like a received
-    /// frame. References are filled in from `based_on`; if that message is
-    /// gone, a draft that refers to it is refused.
-    async fn draft_message(
-        &self,
-        raw: &str,
-        item: &ItemRequest,
-        request: &SendRequest,
-        peer: &str,
-    ) -> Result<(Hl7Message, Origin), SendError> {
-        let (text, _) = crate::draft::apply_set(raw, &request.set)?;
-        let based_on = self.based_on(item.based_on.as_deref(), &text).await?;
-        let bytes = crate::draft::build_payload(
-            &text,
-            item.charset.as_deref(),
-            based_on.as_deref(),
-            1,
-            self.inner.settings.max_message_bytes,
-        )?;
-        drop(based_on);
-        let msg = crate::mllp::ingest(&bytes, peer);
-        if let Some(e) = &msg.parse_error {
-            if !request.allow_invalid {
-                return Err(SendError::Unprocessable(format!(
-                    "The draft does not parse: {e}. Set allow_invalid to send it anyway"
-                )));
-            }
-        }
-        self.check_run_bytes(&msg)?;
-        // A label only: no control characters, cut (it reaches the log).
-        let template = item.template.as_deref().map(|t| {
-            t.trim()
-                .chars()
-                .filter(|c| !c.is_control())
-                .take(MAX_TARGET_NAME_CHARS)
-                .collect::<String>()
-        });
-        let origin = match (template, &item.based_on) {
-            (Some(name), None) if !name.is_empty() => Origin::Template { name },
-            _ => Origin::Draft {
-                based_on: item.based_on.clone(),
-            },
-        };
-        Ok((msg, origin))
     }
 
     /// The message a draft was made from, when the draft needs it: `None`
@@ -627,42 +725,6 @@ impl Sender {
                 ))
             }),
         }
-    }
-
-    /// Every sent message is stored again (rule 1): one run may not take
-    /// more than its share of the store.
-    fn check_run_bytes(&self, msg: &Hl7Message) -> Result<(), SendError> {
-        let settings = &self.inner.settings;
-        if msg.estimated_bytes() > settings.max_run_bytes {
-            return Err(SendError::TooLarge(format!(
-                "Storing this message again would take more than \
-                 send.max_run_store_percent ({} %) of the store",
-                settings.max_run_store_percent
-            )));
-        }
-        Ok(())
-    }
-
-    /// `original` with the fields of `set` overridden (#275), decoded and
-    /// parsed like a received frame. See [`changed_payload`].
-    fn changed_message(
-        &self,
-        original: &Hl7Message,
-        set: &std::collections::BTreeMap<String, String>,
-        peer: &str,
-        allow_invalid: bool,
-    ) -> Result<(Hl7Message, Vec<String>), SendError> {
-        let (bytes, changes) =
-            changed_payload(original, set, 1, self.inner.settings.max_message_bytes)?;
-        let msg = crate::mllp::ingest(&bytes, peer);
-        if let Some(e) = &msg.parse_error {
-            if !allow_invalid {
-                return Err(SendError::Unprocessable(format!(
-                    "After the changes the message does not parse: {e}"
-                )));
-            }
-        }
-        Ok((msg, changes))
     }
 
     /// Check the request's target against the configuration.
@@ -745,82 +807,265 @@ impl Sender {
         }
     }
 
-    /// Store `msg` as pending, do the exchange, record the outcome. Every
-    /// path ends with `set_delivery` (rule 3).
-    async fn run_one(
-        &self,
-        msg: Hl7Message,
-        destination: Destination,
-        await_response: bool,
-    ) -> SendResult {
-        let inner = &self.inner;
-        let requested_by = msg
-            .outbound
-            .as_ref()
-            .map(|o| o.requested_by.clone())
-            .unwrap_or_default();
-        let sent = inner.store.insert_sent(msg).await;
-        let id = sent.id.clone();
+    // --- Runs (#280) ---
 
-        let mut shutdown = inner.shutdown.subscribe();
-        let timeouts = inner.settings.timeouts;
-        let tls = inner.settings.tls.clone();
-        let started = Instant::now();
-        // The exchange runs in a task of its own: a panic there ends that
-        // task only and is recorded as a failure (as `ingest` does, #235).
-        let mut exchange = tokio::spawn({
-            let sent = Arc::clone(&sent);
-            let destination = destination.clone();
-            async move {
-                exchange_one(
-                    &sent,
-                    &destination,
-                    tls.as_deref(),
-                    await_response,
-                    timeouts,
-                )
-                .await
-            }
+    /// Put a new run into the registry, under way.
+    fn register(&self, status: RunStatus) -> Arc<RunHandle> {
+        let (cancel, _) = watch::channel(false);
+        let handle = Arc::new(RunHandle {
+            id: status.id.clone(),
+            status: std::sync::Mutex::new(status),
+            cancel,
         });
-        let delivery = tokio::select! {
-            joined = &mut exchange => joined.unwrap_or_else(|e| Delivery::failed(
-                "internal error",
-                format!("Internal error while sending: {e}"),
-                Some(elapsed_ms(started)),
-            )),
-            _ = shutdown_signal(&mut shutdown) => {
-                exchange.abort();
-                Delivery::failed(
-                    "shutdown",
-                    "Harux shut down before the exchange ended",
-                    Some(elapsed_ms(started)),
-                )
-            }
-        };
+        lock(&self.inner.registry)
+            .running
+            .insert(handle.id.clone(), Arc::clone(&handle));
+        handle
+    }
 
+    /// Move run `id` to the finished ones, of which the newest
+    /// [`KEPT_RUNS`] are kept (#293 review: O(1), no status taken).
+    fn retire(&self, id: &str) {
+        let mut registry = lock(&self.inner.registry);
+        if let Some(run) = registry.running.remove(id) {
+            registry.finished.push_back(run);
+            if registry.finished.len() > KEPT_RUNS {
+                registry.finished.pop_front();
+            }
+        }
+    }
+
+    fn find_run(&self, id: &str) -> Option<Arc<RunHandle>> {
+        let registry = lock(&self.inner.registry);
+        registry
+            .running
+            .get(id)
+            .or_else(|| registry.finished.iter().find(|r| r.id == id))
+            .cloned()
+    }
+
+    /// The status of run `id`, while it is kept.
+    pub fn run_status(&self, id: &str) -> Option<RunStatus> {
+        self.find_run(id).map(|r| r.status())
+    }
+
+    /// Ask run `id` to stop. The message in flight ends as it would (its
+    /// response is awaited); the run stops before the next one. Messages it
+    /// never tried are not stored. A finished run stays as it was.
+    pub fn cancel_run(&self, id: &str) -> Option<RunStatus> {
+        let run = self.find_run(id)?;
+        let _ = run.cancel.send(true);
+        Some(run.status())
+    }
+
+    /// Send the messages of `plan` in order over one connection. Returns the
+    /// outcome of the last message stored (for a run of one: its outcome).
+    async fn run(
+        &self,
+        handle: &RunHandle,
+        plan: RunPlan,
+        mut firsts: Vec<Option<Hl7Message>>,
+    ) -> Option<SendResult> {
+        let inner = &self.inner;
+        let run_id = handle.status().id;
+        let mut shutdown = inner.shutdown.subscribe();
+        let mut cancel = handle.cancel.subscribe();
+        let len = plan.items.len();
+        let mut connection: Option<mllp_client::Connection> = None;
+        let mut failures_in_row = 0u32;
+        let mut last = None;
+
+        let end = 'run: {
+            for n in 1..=len * plan.repeat {
+                let i = (n - 1) % len;
+                if n > 1 && !plan.interval.is_zero() {
+                    tokio::select! {
+                        () = tokio::time::sleep(plan.interval) => {}
+                        () = shutdown_signal(&mut cancel) => break 'run (RunState::Cancelled, None),
+                        () = shutdown_signal(&mut shutdown) => break 'run (RunState::Shutdown, None),
+                    }
+                }
+                if *cancel.borrow() {
+                    break 'run (RunState::Cancelled, None);
+                }
+                if *shutdown.borrow() {
+                    break 'run (RunState::Shutdown, None);
+                }
+
+                // The first copy of every item was built (and checked) when
+                // the request came in; later copies are built again, with
+                // their placeholders filled in anew.
+                let built = match firsts.get_mut(i).and_then(Option::take) {
+                    Some(msg) => Ok(msg),
+                    None => {
+                        let items = Arc::clone(&plan.items);
+                        let set = Arc::clone(&plan.set);
+                        let peer = plan.peer.clone();
+                        let (max, allow_invalid) =
+                            (inner.settings.max_message_bytes, plan.allow_invalid);
+                        tokio::task::spawn_blocking(move || {
+                            items[i].build(&set, n, &peer, max, allow_invalid)
+                        })
+                        .await
+                        .unwrap_or_else(|e| {
+                            Err(SendError::Unprocessable(format!(
+                                "Internal error while building: {e}"
+                            )))
+                        })
+                    }
+                };
+                let mut msg = match built {
+                    Ok(msg) => msg,
+                    Err(e) => {
+                        // Never tried, so not stored: counted and named.
+                        warn!(
+                            "Run {run_id}: message {n} could not be built: {}",
+                            e.message()
+                        );
+                        handle.update(|s| {
+                            s.done += 1;
+                            s.failed += 1;
+                            s.reason = Some(format!("Message {n}: {}", e.message()));
+                        });
+                        continue;
+                    }
+                };
+                msg.id = uuid::Uuid::new_v4().to_string();
+                msg.received_at = chrono::Utc::now();
+                msg.source_addr = plan.peer.clone();
+                msg.ack_response = None;
+                msg.ack_code = None;
+                msg.outbound = Some(Box::new(Outbound {
+                    target: plan.destination.label.clone(),
+                    transport: plan.destination.transport,
+                    origin: plan.items[i].origin.clone(),
+                    requested_by: plan.requested_by.clone(),
+                    run: run_id.clone(),
+                }));
+                // A receiver does not answer an ACK, just as Harux never does.
+                let await_response = plan.await_response && !msg.message_type.starts_with("ACK");
+                let sent = inner.store.insert_sent(msg).await;
+
+                // A target that closed the connection after its last answer
+                // gets a new one before the message is written.
+                if let Some(c) = &connection {
+                    if !c.is_reusable().await {
+                        connection = None;
+                    }
+                }
+                let started = Instant::now();
+                // The exchange runs in a task of its own: a panic there ends
+                // that task only and is recorded as a failure (as `ingest`
+                // does, #235).
+                let mut exchange = tokio::spawn(exchange_on(
+                    connection.take(),
+                    Arc::clone(&sent),
+                    plan.destination.clone(),
+                    inner.settings.tls.clone(),
+                    await_response,
+                    inner.settings.timeouts,
+                ));
+                let (kept, delivery, transport_failed, stop) = tokio::select! {
+                    joined = &mut exchange => match joined {
+                        Ok((kept, delivery, transport_failed)) => (kept, delivery, transport_failed, None),
+                        Err(e) => (None, Delivery::failed(
+                            "internal error",
+                            format!("Internal error while sending: {e}"),
+                            Some(elapsed_ms(started)),
+                        ), true, None),
+                    },
+                    () = shutdown_signal(&mut shutdown) => {
+                        exchange.abort();
+                        (None, Delivery::failed(
+                            "shutdown",
+                            "Harux shut down before the exchange ended",
+                            Some(elapsed_ms(started)),
+                        ), false, Some(RunState::Shutdown))
+                    }
+                };
+                connection = kept;
+                self.record(&sent, &plan, &delivery).await;
+                handle.update(|s| s.count(&delivery));
+                last = Some(SendResult {
+                    id: sent.id.clone(),
+                    delivery: delivery.clone(),
+                });
+                if let Some(state) = stop {
+                    break 'run (state, None);
+                }
+                if transport_failed {
+                    failures_in_row += 1;
+                    if failures_in_row >= MAX_FAILURES_IN_ROW {
+                        break 'run (
+                            RunState::GaveUp,
+                            Some(format!(
+                                "Gave up after {MAX_FAILURES_IN_ROW} transport failures in a \
+                                 row; the last: {}",
+                                describe(&delivery)
+                            )),
+                        );
+                    }
+                } else {
+                    failures_in_row = 0;
+                }
+                if plan.stop_on_nack && !accepted(&delivery) && !transport_failed {
+                    break 'run (
+                        RunState::StoppedOnNack,
+                        Some(format!(
+                            "Stopped at message {n}: the target answered {}",
+                            describe(&delivery)
+                        )),
+                    );
+                }
+            }
+            (RunState::Done, None)
+        };
+        drop(connection);
+
+        let (state, reason) = end;
+        handle.update(|s| {
+            s.state = state;
+            if reason.is_some() {
+                s.reason = reason;
+            }
+            s.finished_at = Some(chrono::Utc::now());
+        });
+        self.retire(&run_id);
+        let s = handle.status();
+        if s.total > 1 {
+            info!(
+                "Run {} to {} for {} ended ({:?}): {} of {} messages, {} failed",
+                s.id, s.target, s.requested_by, s.state, s.done, s.total, s.failed
+            );
+        }
+        last
+    }
+
+    /// Count, log and store the outcome of one send (rule 3).
+    async fn record(&self, sent: &Hl7Message, plan: &RunPlan, delivery: &Delivery) {
+        let inner = &self.inner;
         let failed = delivery.state == DeliveryState::Failed;
         // A NACK is an answer, not a delivery: counted on its own (#284 review).
-        let accepted = delivery.state == DeliveryState::Sent
-            || matches!(delivery.ack_code.as_deref(), Some("AA" | "CA"));
         let counter = if failed {
             &inner.stats.failed
-        } else if accepted {
+        } else if accepted(delivery) {
             &inner.stats.sent
         } else {
             &inner.stats.rejected
         };
         counter.fetch_add(1, Ordering::Relaxed);
         // Metadata only — never content.
-        let outcome = describe(&delivery);
+        let outcome = describe(delivery);
+        let d = &plan.destination;
         if failed {
             warn!(
                 "Send of {} {} ({} bytes) to {} ({}) for {} failed: {}",
                 sent.message_type,
                 sent.message_control_id,
                 sent.wire_len(),
-                destination.label,
-                destination.display(),
-                requested_by,
+                d.label,
+                d.display(),
+                plan.requested_by,
                 outcome
             );
         } else {
@@ -829,20 +1074,343 @@ impl Sender {
                 sent.message_type,
                 sent.message_control_id,
                 sent.wire_len(),
-                destination.label,
-                destination.display(),
-                requested_by,
+                d.label,
+                d.display(),
+                plan.requested_by,
                 outcome
             );
         }
-        if !inner.store.set_delivery(&id, delivery.clone()).await {
-            info!("Sent message {id} left the store before its outcome arrived ({outcome})");
+        if !inner.store.set_delivery(&sent.id, delivery.clone()).await {
+            info!(
+                "Sent message {} left the store before its outcome arrived ({outcome})",
+                sent.id
+            );
         }
-        SendResult { id, delivery }
     }
 }
 
-/// Resolves when shutdown is signalled (at once if it already was).
+/// What `POST /api/send` started.
+#[derive(Debug)]
+pub enum SendOutcome {
+    /// One message: its stored ID and outcome (`200`).
+    One(SendResult),
+    /// Several: the run's status at the start (`202`); progress from
+    /// `GET /api/send/runs/{id}`, the rows over the WebSocket.
+    Run(RunStatus),
+}
+
+/// An item after the store lookups.
+enum Resolved {
+    Stored(Arc<Hl7Message>),
+    Draft {
+        text: String,
+        charset: Option<String>,
+        based_on: Option<Arc<Hl7Message>>,
+        origin: Origin,
+    },
+}
+
+/// One item of a run, ready to be built for any position.
+struct Item {
+    source: Source,
+    origin: Origin,
+    /// What one copy takes in the store (its first copy, built).
+    estimated: usize,
+}
+
+enum Source {
+    /// Sent byte for byte as received (the stored payload, cloned).
+    Unchanged(Arc<Hl7Message>),
+    /// With the request's `set` (#275).
+    Changed(Arc<Hl7Message>),
+    /// A draft's text, `set` already written in (#276).
+    Draft {
+        text: String,
+        charset: Option<String>,
+        based_on: Option<Arc<Hl7Message>>,
+    },
+}
+
+impl Item {
+    /// The message at position `n` of the run (`{{n}}`), decoded and parsed
+    /// like a received frame.
+    fn build(
+        &self,
+        set: &std::collections::BTreeMap<String, String>,
+        n: usize,
+        peer: &str,
+        max_bytes: usize,
+        allow_invalid: bool,
+    ) -> Result<Hl7Message, SendError> {
+        let (msg, what) = match &self.source {
+            // Unchanged: the stored message itself — its bytes are the same
+            // (`wire` is copied), so the parse is too.
+            Source::Unchanged(original) => return Ok((**original).clone()),
+            Source::Changed(original) => {
+                let (bytes, _) = changed_payload(original, set, n, max_bytes)?;
+                (
+                    crate::mllp::ingest(&bytes, peer),
+                    "After the changes the message",
+                )
+            }
+            Source::Draft {
+                text,
+                charset,
+                based_on,
+            } => {
+                let bytes = crate::draft::build_payload(
+                    text,
+                    charset.as_deref(),
+                    based_on.as_deref(),
+                    n,
+                    max_bytes,
+                )?;
+                (crate::mllp::ingest(&bytes, peer), "The draft")
+            }
+        };
+        if let Some(e) = &msg.parse_error {
+            if !allow_invalid {
+                return Err(SendError::Unprocessable(format!(
+                    "{what} does not parse: {e}. Set allow_invalid to send it anyway"
+                )));
+            }
+        }
+        Ok(msg)
+    }
+}
+
+/// Build the first copy of every item (its position in the first pass) —
+/// it checks what can be checked before anything is sent, and is what the
+/// run sends at that position. Unchanged messages are not built: they are
+/// the stored ones.
+#[allow(clippy::type_complexity)]
+fn prepare(
+    resolved: Vec<Resolved>,
+    set: &std::collections::BTreeMap<String, String>,
+    peer: &str,
+    max_bytes: usize,
+    allow_invalid: bool,
+    several: bool,
+) -> Result<(Vec<Item>, Vec<Option<Hl7Message>>), SendError> {
+    let mut items = Vec::with_capacity(resolved.len());
+    let mut firsts = Vec::with_capacity(resolved.len());
+    for (i, r) in resolved.into_iter().enumerate() {
+        let n = i + 1;
+        let (source, origin) = match r {
+            Resolved::Stored(original) if set.is_empty() => (
+                Source::Unchanged(Arc::clone(&original)),
+                Origin::Resend {
+                    message_id: original.id.clone(),
+                    changes: Vec::new(),
+                },
+            ),
+            Resolved::Stored(original) => {
+                // As `changed_payload` names them (`msh-10` → `MSH-10`).
+                let changes = set
+                    .keys()
+                    .map(|p| {
+                        crate::hl7::compose::FieldPath::parse(p)
+                            .map_or_else(|_| p.clone(), |p| p.to_string())
+                    })
+                    .collect();
+                (
+                    Source::Changed(Arc::clone(&original)),
+                    Origin::Resend {
+                        message_id: original.id.clone(),
+                        changes,
+                    },
+                )
+            }
+            Resolved::Draft {
+                text,
+                charset,
+                based_on,
+                origin,
+            } => (
+                Source::Draft {
+                    text,
+                    charset,
+                    based_on,
+                },
+                origin,
+            ),
+        };
+        let mut item = Item {
+            source,
+            origin,
+            estimated: 0,
+        };
+        let first = match &item.source {
+            Source::Unchanged(original) => {
+                item.estimated = original.estimated_bytes();
+                None
+            }
+            _ => {
+                let msg = item
+                    .build(set, n, peer, max_bytes, allow_invalid)
+                    .map_err(|e| e.for_item(several.then_some(n)))?;
+                item.estimated = msg.estimated_bytes();
+                Some(msg)
+            }
+        };
+        items.push(item);
+        firsts.push(first);
+    }
+    Ok((items, firsts))
+}
+
+/// Everything a run needs once it has started.
+struct RunPlan {
+    items: Arc<Vec<Item>>,
+    repeat: usize,
+    set: Arc<std::collections::BTreeMap<String, String>>,
+    destination: Destination,
+    /// `destination.display()`: the sent messages' `source_addr`.
+    peer: String,
+    requested_by: String,
+    allow_invalid: bool,
+    await_response: bool,
+    interval: Duration,
+    stop_on_nack: bool,
+}
+
+/// How a run stands or how it ended.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RunState {
+    Running,
+    /// Every message was tried.
+    Done,
+    /// Stopped by `POST /api/send/runs/{id}/cancel`.
+    Cancelled,
+    /// Three transport failures in a row.
+    GaveUp,
+    /// `stop_on_nack` and an answer that was not an accept.
+    StoppedOnNack,
+    /// Harux shut down.
+    Shutdown,
+}
+
+/// Progress and result of a run (`GET /api/send/runs/{id}`).
+#[derive(Debug, Clone, Serialize)]
+pub struct RunStatus {
+    pub id: String,
+    /// The target's label.
+    pub target: String,
+    pub requested_by: String,
+    pub total: usize,
+    /// Messages tried so far (stored, or counted as failed when one could
+    /// not be built).
+    pub done: usize,
+    pub state: RunState,
+    /// Responses by acknowledgement code (`AA`, `AE`, …).
+    pub codes: std::collections::BTreeMap<String, usize>,
+    /// Written without awaiting a response.
+    pub written: usize,
+    /// No usable answer: transport failures, unreadable responses, messages
+    /// that could not be built.
+    pub failed: usize,
+    /// Average time of the exchanges that ended with an answer.
+    pub avg_latency_ms: Option<u64>,
+    /// Why the run stopped early, or the last problem.
+    pub reason: Option<String>,
+    pub started_at: chrono::DateTime<chrono::Utc>,
+    pub finished_at: Option<chrono::DateTime<chrono::Utc>>,
+    #[serde(skip)]
+    latency_sum: u64,
+    #[serde(skip)]
+    latency_count: u64,
+}
+
+impl RunStatus {
+    fn new(target: &str, total: usize, requested_by: String) -> Self {
+        Self {
+            id: uuid::Uuid::new_v4().to_string(),
+            target: target.to_string(),
+            requested_by,
+            total,
+            done: 0,
+            state: RunState::Running,
+            codes: Default::default(),
+            written: 0,
+            failed: 0,
+            avg_latency_ms: None,
+            reason: None,
+            started_at: chrono::Utc::now(),
+            finished_at: None,
+            latency_sum: 0,
+            latency_count: 0,
+        }
+    }
+
+    /// For callers of the library (the integration tests).
+    #[allow(dead_code)]
+    pub fn running(&self) -> bool {
+        self.state == RunState::Running
+    }
+
+    fn count(&mut self, d: &Delivery) {
+        self.done += 1;
+        match d.state {
+            DeliveryState::Acked => {
+                let code = d.ack_code.clone().unwrap_or_else(|| "?".into());
+                *self.codes.entry(code).or_default() += 1;
+            }
+            DeliveryState::Sent => self.written += 1,
+            DeliveryState::Failed | DeliveryState::Pending => {
+                self.failed += 1;
+                self.reason = Some(describe(d));
+            }
+        }
+        if d.state == DeliveryState::Acked {
+            if let Some(ms) = d.latency_ms {
+                self.latency_sum = self.latency_sum.saturating_add(ms);
+                self.latency_count += 1;
+                self.avg_latency_ms = Some(self.latency_sum / self.latency_count);
+            }
+        }
+    }
+}
+
+/// A run in the registry: its status, and the switch that cancels it.
+/// The runs the server keeps: every run under way, by ID, and the newest
+/// [`KEPT_RUNS`] finished ones, oldest first.
+#[derive(Default)]
+struct Registry {
+    running: std::collections::HashMap<String, Arc<RunHandle>>,
+    finished: std::collections::VecDeque<Arc<RunHandle>>,
+}
+
+struct RunHandle {
+    /// `status.id`, readable without the lock.
+    id: String,
+    status: std::sync::Mutex<RunStatus>,
+    cancel: watch::Sender<bool>,
+}
+
+impl RunHandle {
+    fn status(&self) -> RunStatus {
+        lock(&self.status).clone()
+    }
+
+    fn update(&self, f: impl FnOnce(&mut RunStatus)) {
+        f(&mut lock(&self.status));
+    }
+}
+
+/// A std mutex that a panic elsewhere did not leave unusable: the data are
+/// counters, valid after any partial update.
+fn lock<T>(m: &std::sync::Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    m.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+/// Whether the target took the message: `AA`/`CA`, or written without
+/// awaiting a response.
+fn accepted(d: &Delivery) -> bool {
+    d.state == DeliveryState::Sent || matches!(d.ack_code.as_deref(), Some("AA" | "CA"))
+}
+
+/// Resolves when the switch is on (at once if it already is).
 async fn shutdown_signal(rx: &mut watch::Receiver<bool>) {
     loop {
         if *rx.borrow_and_update() {
@@ -877,59 +1445,113 @@ fn describe(d: &Delivery) -> String {
     }
 }
 
-/// Connect (with TLS if the target uses it), write the stored bytes, read
-/// the response.
-async fn exchange_one(
-    sent: &Hl7Message,
-    destination: &Destination,
-    tls: Option<&TlsContext>,
+/// One exchange of a run: on `connection` if it is open, else on a new one
+/// (with TLS if the target uses it); write the stored bytes, read the
+/// response. If the kept connection turns out to be closed by the target
+/// before it read the message ([`mllp_client::ExchangeError::peer_hung_up`]),
+/// the message is written once more on a new connection. Returns the connection if it can be used again, the outcome,
+/// and whether it was a transport failure (connect, write, read, timeout —
+/// the connection is then dropped).
+async fn exchange_on(
+    connection: Option<mllp_client::Connection>,
+    sent: Arc<Hl7Message>,
+    destination: Destination,
+    tls: Option<Arc<TlsContext>>,
     await_response: bool,
     timeouts: Timeouts,
-) -> Delivery {
+) -> (Option<mllp_client::Connection>, Delivery, bool) {
     let started = Instant::now();
     let failed = |e: mllp_client::ExchangeError| {
         Delivery::failed(e.reason(), e.detail(), Some(elapsed_ms(started)))
     };
     // Unchanged means byte for byte (#230): what was received.
     let payload = sent.wire_bytes();
-    let (host, port) = (destination.host.as_str(), destination.port);
-    let result = match destination.transport {
-        Transport::Plain => match mllp_client::connect(host, port, timeouts.connect).await {
-            Ok(mut stream) => {
-                mllp_client::exchange(&mut stream, &payload, await_response, timeouts).await
+    // A connection kept from the last message that the target has closed
+    // since (it found no byte of an answer, or the write found it closed):
+    // the target never read the message, so it is written once more on a
+    // new connection.
+    let mut connection = match connection {
+        Some(mut c) => match c.exchange(&payload, await_response, timeouts).await {
+            Ok(response) => return answered(c, response, &sent, started),
+            Err(e) if e.peer_hung_up() => {
+                drop(c);
+                match open(&destination, tls.as_deref(), timeouts).await {
+                    Ok(c) => c,
+                    Err(d) => return (None, *d, true),
+                }
             }
-            Err(e) => return failed(e),
+            Err(e) => return (None, failed(e), true),
         },
+        None => match open(&destination, tls.as_deref(), timeouts).await {
+            Ok(c) => c,
+            Err(d) => return (None, *d, true),
+        },
+    };
+    match connection
+        .exchange(&payload, await_response, timeouts)
+        .await
+    {
+        Ok(response) => answered(connection, response, &sent, started),
+        Err(e) => (None, failed(e), true),
+    }
+}
+
+/// The outcome of an exchange that ended with an answer, or without one
+/// awaited. Only after an answer can the connection take the next message:
+/// after a message written without awaiting one (`await_response: false`, an
+/// ACK) the target may still answer it, and that late answer would be read
+/// as the next message's (#293 review) — so that connection is closed.
+fn answered(
+    connection: mllp_client::Connection,
+    response: Option<Vec<u8>>,
+    sent: &Hl7Message,
+    started: Instant,
+) -> (Option<mllp_client::Connection>, Delivery, bool) {
+    match response {
+        None => {
+            let d = Delivery {
+                state: DeliveryState::Sent,
+                latency_ms: Some(elapsed_ms(started)),
+                ..Delivery::pending()
+            };
+            (None, d, false)
+        }
+        Some(response) => {
+            let d = read_response(&response, &sent.message_control_id, elapsed_ms(started));
+            (Some(connection), d, false)
+        }
+    }
+}
+
+/// Open a connection to `destination`, with TLS if it uses it.
+async fn open(
+    destination: &Destination,
+    tls: Option<&TlsContext>,
+    timeouts: Timeouts,
+) -> Result<mllp_client::Connection, Box<Delivery>> {
+    let started = Instant::now();
+    let tls = match destination.transport {
+        Transport::Plain => None,
         Transport::Tls | Transport::TlsUnverified => {
-            let Some(tls) = tls else {
-                return Delivery::failed(
+            let Some(ctx) = tls else {
+                return Err(Box::new(Delivery::failed(
                     "TLS failed",
                     "TLS is not set up on this server (send.enabled)",
                     None,
-                );
+                )));
             };
-            let verify = destination.transport == Transport::Tls;
-            match mllp_client::connect_tls(host, port, timeouts.connect, tls, verify).await {
-                Ok((mut stream, auth)) => {
-                    mllp_client::exchange(&mut stream, &payload, await_response, timeouts)
-                        .await
-                        .map_err(|e| mllp_client::after_handshake(e, &auth))
-                }
-                Err(e) => return failed(e),
-            }
+            Some((ctx, destination.transport == Transport::Tls))
         }
     };
-    match result {
-        Ok(None) => Delivery {
-            state: DeliveryState::Sent,
-            latency_ms: Some(elapsed_ms(started)),
-            ..Delivery::pending()
-        },
-        Ok(Some(response)) => {
-            read_response(&response, &sent.message_control_id, elapsed_ms(started))
-        }
-        Err(e) => failed(e),
-    }
+    mllp_client::Connection::open(&destination.host, destination.port, timeouts.connect, tls)
+        .await
+        .map_err(|e| {
+            Box::new(Delivery::failed(
+                e.reason(),
+                e.detail(),
+                Some(elapsed_ms(started)),
+            ))
+        })
 }
 
 /// The bytes of `original` with the fields of `set` overridden (#275):

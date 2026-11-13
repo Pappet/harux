@@ -93,6 +93,7 @@ const state = {
     sending: false,
     targetStorageWarned: false,
     directionFilter: 0,   // 0: In + Out, 1: Received, 2: Sent
+    run: null,            // the run this browser follows (#280): { id, what, status, … }
 
     // Drafts (#277, compose.js): text kept in this browser tab
     // (sessionStorage; "Keep on this computer" moves one to localStorage).

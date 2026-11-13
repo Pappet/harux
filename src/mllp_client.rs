@@ -46,8 +46,12 @@ pub enum ExchangeError {
     Write(std::io::Error),
     /// No (complete) response within the response timeout.
     ResponseTimeout,
-    /// The destination closed the connection before a complete response.
+    /// The destination closed the connection in the middle of a response.
     Closed,
+    /// The destination closed (or reset) the connection before a single
+    /// byte of a response — on a connection a run kept open, the sign of a
+    /// target that closes after each acknowledgement (#280).
+    Hangup,
     /// The destination answered with something that is not an MLLP frame.
     NotFramed,
     /// The response is larger than [`MAX_RESPONSE_BYTES`].
@@ -87,6 +91,23 @@ pub enum TlsFailure {
 }
 
 impl ExchangeError {
+    /// The target had closed the connection before it read the message: it
+    /// ended (or reset) the connection without a byte of an answer, or the
+    /// write found it closed. On a connection kept open from an earlier
+    /// message the run tries once more on a new one (#280).
+    pub fn peer_hung_up(&self) -> bool {
+        match self {
+            ExchangeError::Hangup => true,
+            ExchangeError::Write(e) => matches!(
+                e.kind(),
+                std::io::ErrorKind::BrokenPipe
+                    | std::io::ErrorKind::ConnectionReset
+                    | std::io::ErrorKind::ConnectionAborted
+            ),
+            _ => false,
+        }
+    }
+
     /// Short reason, shown in the list row (`✕ refused`).
     pub fn reason(&self) -> &'static str {
         match self {
@@ -95,7 +116,7 @@ impl ExchangeError {
             ExchangeError::WriteTimeout => "write timeout",
             ExchangeError::Unreachable(_) => "unreachable",
             ExchangeError::Write(_) => "write failed",
-            ExchangeError::Closed => "closed",
+            ExchangeError::Closed | ExchangeError::Hangup => "closed",
             ExchangeError::NotFramed => "not MLLP",
             ExchangeError::TooLarge => "too large",
             ExchangeError::Read(_) => "read failed",
@@ -131,6 +152,9 @@ impl ExchangeError {
                 "No response within send.response_timeout_secs".into()
             }
             ExchangeError::Closed => {
+                "The destination closed the connection in the middle of its answer".into()
+            }
+            ExchangeError::Hangup => {
                 "The destination closed the connection before it answered".into()
             }
             ExchangeError::NotFramed => {
@@ -248,7 +272,9 @@ pub fn after_handshake(e: ExchangeError, auth: &ClientAuth) -> ExchangeError {
             None if auth.asked() => ExchangeError::Tls(closed_after_request(auth)),
             None => ExchangeError::Read(io),
         },
-        ExchangeError::Closed if auth.asked() => ExchangeError::Tls(closed_after_request(auth)),
+        ExchangeError::Closed | ExchangeError::Hangup if auth.asked() => {
+            ExchangeError::Tls(closed_after_request(auth))
+        }
         e => e,
     }
 }
@@ -317,6 +343,69 @@ fn tls_failure(e: &std::io::Error, auth: &ClientAuth) -> TlsFailure {
     }
 }
 
+/// An open connection to a target, plain or TLS, kept across the messages
+/// of a run (#280): a run sends over one connection and opens a new one only
+/// after a transport failure or when the target closed it.
+pub enum Connection {
+    Plain(TcpStream),
+    Tls(Box<TlsStream<TcpStream>>, Arc<ClientAuth>),
+}
+
+impl Connection {
+    /// Connect to `host:port`: plain when `tls` is `None`, else with TLS,
+    /// the certificate checked when `verify`. See [`connect`],
+    /// [`connect_tls`].
+    pub async fn open(
+        host: &str,
+        port: u16,
+        limit: Duration,
+        tls: Option<(&TlsContext, bool)>,
+    ) -> Result<Self, ExchangeError> {
+        match tls {
+            None => connect(host, port, limit).await.map(Connection::Plain),
+            Some((ctx, verify)) => {
+                let (stream, auth) = connect_tls(host, port, limit, ctx, verify).await?;
+                Ok(Connection::Tls(Box::new(stream), auth))
+            }
+        }
+    }
+
+    /// One exchange (see [`exchange`]); a failure on a TLS connection is
+    /// re-read with [`after_handshake`].
+    pub async fn exchange(
+        &mut self,
+        payload: &[u8],
+        await_response: bool,
+        timeouts: Timeouts,
+    ) -> Result<Option<Vec<u8>>, ExchangeError> {
+        match self {
+            Connection::Plain(s) => exchange(s, payload, await_response, timeouts).await,
+            Connection::Tls(s, auth) => exchange(s.as_mut(), payload, await_response, timeouts)
+                .await
+                .map_err(|e| after_handshake(e, auth)),
+        }
+    }
+
+    /// Whether the connection can take the next message: the target has
+    /// neither closed it nor written anything unasked since the last
+    /// response. Many receivers close after each acknowledgement; writing
+    /// into such a connection fails only after the write, as a lost
+    /// message. Looks without waiting and without consuming.
+    pub async fn is_reusable(&self) -> bool {
+        let tcp = match self {
+            Connection::Plain(s) => s,
+            Connection::Tls(s, _) => s.get_ref().0,
+        };
+        let mut probe = [0u8; 1];
+        // `timeout` polls the peek once before it looks at the deadline:
+        // with nothing to read, the zero timeout ends it at once.
+        matches!(
+            timeout(Duration::ZERO, tcp.peek(&mut probe)).await,
+            Err(_elapsed)
+        )
+    }
+}
+
 /// One exchange on an open connection: write `payload` as one MLLP frame,
 /// then — if `await_response` — read one frame back and return its payload.
 /// Bytes after that frame are not read.
@@ -365,9 +454,24 @@ async fn read_frame<S: AsyncRead + Unpin>(stream: &mut S) -> Result<Vec<u8>, Exc
     let mut acc: Vec<u8> = Vec::new();
     let mut scan_from = 0;
     loop {
-        let n = stream.read(&mut buf).await.map_err(ExchangeError::Read)?;
+        let nothing_yet = acc.iter().all(u8::is_ascii_whitespace);
+        let n = match stream.read(&mut buf).await {
+            Ok(n) => n,
+            Err(e)
+                if nothing_yet
+                    && matches!(
+                        e.kind(),
+                        std::io::ErrorKind::ConnectionReset | std::io::ErrorKind::ConnectionAborted
+                    ) =>
+            {
+                return Err(ExchangeError::Hangup)
+            }
+            Err(e) => return Err(ExchangeError::Read(e)),
+        };
         if n == 0 {
-            return Err(if framed_so_far(&acc) {
+            return Err(if nothing_yet {
+                ExchangeError::Hangup
+            } else if framed_so_far(&acc) {
                 ExchangeError::Closed
             } else {
                 ExchangeError::NotFramed

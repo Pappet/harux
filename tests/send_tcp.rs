@@ -7,12 +7,14 @@ use harux::hl7::types::{DeliveryState, Direction, Hl7MessageSummary, WireForm};
 use harux::mllp::{self, MllpStats};
 use harux::mllp_client::{self, ExchangeError, Timeouts, MAX_RESPONSE_BYTES};
 use harux::send::{
-    ExplicitTarget, ItemRequest, SendCounters, SendError, SendRequest, SendSettings, Sender,
-    TargetRequest,
+    ExplicitTarget, ItemRequest, RunState, RunStatus, SendCounters, SendError, SendOutcome,
+    SendRequest, SendSettings, Sender, TargetRequest,
 };
 use harux::store::MessageStore;
 use std::future::Future;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
 use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
@@ -271,6 +273,9 @@ fn request(target: TargetRequest, id: &str) -> SendRequest {
         await_response: true,
         allow_invalid: false,
         set: Default::default(),
+        repeat: 1,
+        interval_ms: 0,
+        stop_on_nack: false,
     }
 }
 
@@ -1222,4 +1227,507 @@ async fn changed_round_trip_to_harux_itself() {
         [Direction::Out, Direction::In],
         "the send and what the target stored"
     );
+}
+
+// ── Runs (#280) ───────────────────────────────────────────────────────────
+
+/// A run of the stored messages `ids`, in this order.
+fn run_of(target: TargetRequest, ids: &[String]) -> SendRequest {
+    let mut r = request(target, &ids[0]);
+    r.items = ids.iter().map(ItemRequest::stored).collect();
+    r
+}
+
+/// `count` received messages with the control IDs `C0`, `C1`, …, oldest
+/// first.
+async fn received_many(store: &MessageStore, count: usize) -> Vec<String> {
+    let mut ids = Vec::new();
+    for i in 0..count {
+        let msg = format!("MSH|^~\\&|A|B|||20260101||ADT^A01|C{i}|P|2.5\rPID|||{i}\r");
+        ids.push(received(store, msg.as_bytes()).await);
+    }
+    ids
+}
+
+fn started(outcome: SendOutcome) -> RunStatus {
+    match outcome {
+        SendOutcome::Run(status) => {
+            assert_eq!(status.state, RunState::Running);
+            status
+        }
+        SendOutcome::One(_) => panic!("a run expected"),
+    }
+}
+
+/// Wait until run `id` has ended.
+async fn finished(sender: &Sender, id: &str) -> RunStatus {
+    for _ in 0..1000 {
+        let status = sender.run_status(id).expect("the run is kept");
+        if !status.running() {
+            return status;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    panic!("run {id} did not end");
+}
+
+/// The control ID (MSH-10) of a frame.
+fn control_id(frame: &[u8]) -> String {
+    String::from_utf8_lossy(frame)
+        .split('|')
+        .nth(9)
+        .unwrap_or_default()
+        .to_string()
+}
+
+/// A receiver that acks every frame and counts its connections; `close`:
+/// it closes the connection after each acknowledgement.
+async fn counting(
+    close: bool,
+) -> (
+    SocketAddr,
+    mpsc::UnboundedReceiver<Vec<u8>>,
+    Arc<AtomicUsize>,
+) {
+    let connections = Arc::new(AtomicUsize::new(0));
+    let counted = Arc::clone(&connections);
+    let (addr, frames) = fake(move |mut s, tx| {
+        counted.fetch_add(1, Ordering::SeqCst);
+        async move {
+            while let Some(payload) = read_frame(&mut s).await {
+                let control = control_id(&payload);
+                let _ = tx.send(payload);
+                let _ = s.write_all(&ack(&control)).await;
+                if close {
+                    break;
+                }
+            }
+        }
+    })
+    .await;
+    (addr, frames, connections)
+}
+
+async fn sent_rows(store: &MessageStore) -> Vec<Hl7MessageSummary> {
+    let mut v = store.list_summaries(0, 1000).await;
+    v.reverse();
+    v.retain(|s| s.direction == Direction::Out);
+    v
+}
+
+/// The milestone's criterion: fifty messages, in their original order, over
+/// one connection, every one a row of the run.
+#[tokio::test]
+async fn fifty_messages_in_order_over_one_connection() {
+    let (addr, mut frames, connections) = counting(false).await;
+    let store = store();
+    let ids = received_many(&store, 50).await;
+    let sender = Sender::new(settings(|_| {}), store.clone());
+    let run = started(
+        sender
+            .start(run_of(to(addr, "orchestra"), &ids), CLIENT)
+            .await
+            .unwrap(),
+    );
+    assert_eq!(run.total, 50);
+    assert_eq!(run.target, "orchestra");
+
+    let status = finished(&sender, &run.id).await;
+    assert_eq!(status.state, RunState::Done, "{status:?}");
+    assert_eq!((status.done, status.failed), (50, 0));
+    assert_eq!(status.codes.get("AA"), Some(&50));
+    assert!(status.avg_latency_ms.is_some() && status.finished_at.is_some());
+
+    let mut order = Vec::new();
+    for _ in 0..50 {
+        order.push(control_id(&frames.recv().await.unwrap()));
+    }
+    let expected: Vec<String> = (0..50).map(|i| format!("C{i}")).collect();
+    assert_eq!(order, expected, "the original order");
+    assert_eq!(connections.load(Ordering::SeqCst), 1, "one connection");
+
+    let rows = sent_rows(&store).await;
+    assert_eq!(rows.len(), 50);
+    for (row, want) in rows.iter().zip(&expected) {
+        assert_eq!(&row.message_control_id, want);
+        let msg = store.get_by_id(&row.id).await.unwrap().message;
+        assert_eq!(msg.outbound.as_ref().unwrap().run, run.id, "one run");
+    }
+    assert_eq!(sender.counters().sent, 50);
+    assert_eq!(sender.active_runs(), 0);
+}
+
+/// A run holds its messages: cleared (or evicted) from the store while the
+/// run is under way, every one is still sent.
+#[tokio::test]
+async fn a_run_keeps_its_messages_when_the_store_lets_them_go() {
+    let (addr, mut frames, _) = counting(false).await;
+    let store = store();
+    let ids = received_many(&store, 10).await;
+    let sender = Sender::new(settings(|_| {}), store.clone());
+    let mut req = run_of(to(addr, "t"), &ids);
+    req.interval_ms = 20;
+    let run = started(sender.start(req, CLIENT).await.unwrap());
+    frames.recv().await.unwrap();
+    store.clear().await;
+    let status = finished(&sender, &run.id).await;
+    assert_eq!(status.state, RunState::Done);
+    assert_eq!(status.codes.get("AA"), Some(&10));
+    let mut order = vec!["C0".to_string()];
+    for _ in 1..10 {
+        order.push(control_id(&frames.recv().await.unwrap()));
+    }
+    assert_eq!(order, (0..10).map(|i| format!("C{i}")).collect::<Vec<_>>());
+}
+
+/// Cancel stops the run before its next message; what it never tried is
+/// not stored.
+#[tokio::test]
+async fn a_cancelled_run_stops_and_stores_only_what_it_tried() {
+    let (addr, mut frames, _) = counting(false).await;
+    let store = store();
+    let ids = received_many(&store, 20).await;
+    let sender = Sender::new(settings(|_| {}), store.clone());
+    let mut req = run_of(to(addr, "t"), &ids);
+    req.interval_ms = 100;
+    let run = started(sender.start(req, CLIENT).await.unwrap());
+    frames.recv().await.unwrap();
+    frames.recv().await.unwrap();
+    assert_eq!(sender.cancel_run(&run.id).unwrap().id, run.id);
+    let status = finished(&sender, &run.id).await;
+    assert_eq!(status.state, RunState::Cancelled);
+    assert!(status.done >= 2 && status.done < 20, "{status:?}");
+    assert_eq!(sent_rows(&store).await.len(), status.done);
+    assert!(sender.cancel_run("no-such-run").is_none());
+    // A finished run stays as it was.
+    assert_eq!(
+        sender.cancel_run(&run.id).unwrap().state,
+        RunState::Cancelled
+    );
+}
+
+/// A target that closes the connection after each acknowledgement gets a
+/// new connection for every message, and no message is lost to that.
+#[tokio::test]
+async fn a_target_that_closes_after_each_ack() {
+    let (addr, mut frames, connections) = counting(true).await;
+    let store = store();
+    let ids = received_many(&store, 8).await;
+    let sender = Sender::new(settings(|_| {}), store.clone());
+    let run = started(
+        sender
+            .start(run_of(to(addr, "t"), &ids), CLIENT)
+            .await
+            .unwrap(),
+    );
+    let status = finished(&sender, &run.id).await;
+    assert_eq!(status.codes.get("AA"), Some(&8), "{status:?}");
+    let mut order = Vec::new();
+    for _ in 0..8 {
+        order.push(control_id(&frames.recv().await.unwrap()));
+    }
+    assert_eq!(order, (0..8).map(|i| format!("C{i}")).collect::<Vec<_>>());
+    assert_eq!(connections.load(Ordering::SeqCst), 8);
+}
+
+/// A target that closes only after the next message was written (it looked
+/// open): that message, never read, goes out again on a new connection —
+/// once, not lost and not twice.
+#[tokio::test]
+async fn a_message_written_into_a_closing_connection_is_written_again() {
+    let connections = Arc::new(AtomicUsize::new(0));
+    let counted = Arc::clone(&connections);
+    let (addr, mut frames) = fake(move |mut s, tx| {
+        counted.fetch_add(1, Ordering::SeqCst);
+        async move {
+            if let Some(payload) = read_frame(&mut s).await {
+                let control = control_id(&payload);
+                let _ = tx.send(payload);
+                let _ = s.write_all(&ack(&control)).await;
+                // The next message arrives meanwhile and is never read: the
+                // close resets the connection.
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            }
+        }
+    })
+    .await;
+    let store = store();
+    let ids = received_many(&store, 4).await;
+    let sender = Sender::new(settings(|_| {}), store.clone());
+    let run = started(
+        sender
+            .start(run_of(to(addr, "t"), &ids), CLIENT)
+            .await
+            .unwrap(),
+    );
+    let status = finished(&sender, &run.id).await;
+    assert_eq!(status.codes.get("AA"), Some(&4), "{status:?}");
+    let mut order = Vec::new();
+    for _ in 0..4 {
+        order.push(control_id(&frames.recv().await.unwrap()));
+    }
+    assert_eq!(order, ["C0", "C1", "C2", "C3"]);
+    assert!(frames.try_recv().is_err(), "no message twice");
+    assert_eq!(connections.load(Ordering::SeqCst), 4);
+}
+
+/// Three transport failures in a row end the run; the messages it never
+/// tried are not stored.
+#[tokio::test]
+async fn a_run_gives_up_after_three_failures_in_a_row() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    drop(listener);
+    let store = store();
+    let ids = received_many(&store, 6).await;
+    let sender = Sender::new(settings(|_| {}), store.clone());
+    let run = started(
+        sender
+            .start(run_of(to(addr, "t"), &ids), CLIENT)
+            .await
+            .unwrap(),
+    );
+    let status = finished(&sender, &run.id).await;
+    assert_eq!(status.state, RunState::GaveUp);
+    assert_eq!((status.done, status.failed), (3, 3));
+    assert!(status.reason.unwrap().contains("Gave up"));
+    let rows = sent_rows(&store).await;
+    assert_eq!(rows.len(), 3);
+    assert!(rows
+        .iter()
+        .all(|r| r.delivery.as_ref().unwrap().state == DeliveryState::Failed));
+}
+
+/// `stop_on_nack` ends the run at the first answer that is not an accept.
+#[tokio::test]
+async fn stop_on_nack_ends_the_run_at_the_first_error() {
+    let (addr, _) = fake(|mut s, _| async move {
+        while let Some(payload) = read_frame(&mut s).await {
+            let control = control_id(&payload);
+            let code = if control == "C2" { "AE" } else { "AA" };
+            let ack = format!("MSH|^~\\&|R|RF|H|HF|20260101||ACK|A1|P|2.5\rMSA|{code}|{control}\r");
+            let _ = s.write_all(&frame(ack.as_bytes())).await;
+        }
+    })
+    .await;
+    let store = store();
+    let ids = received_many(&store, 5).await;
+    let sender = Sender::new(settings(|_| {}), store.clone());
+
+    let mut req = run_of(to(addr, "t"), &ids);
+    req.stop_on_nack = true;
+    let run = started(sender.start(req, CLIENT).await.unwrap());
+    let status = finished(&sender, &run.id).await;
+    assert_eq!(status.state, RunState::StoppedOnNack);
+    assert_eq!(status.done, 3);
+    assert_eq!(status.codes.get("AA"), Some(&2));
+    assert_eq!(status.codes.get("AE"), Some(&1));
+
+    // Without it a NACK is one answer among others.
+    let run = started(
+        sender
+            .start(run_of(to(addr, "t"), &ids), CLIENT)
+            .await
+            .unwrap(),
+    );
+    let status = finished(&sender, &run.id).await;
+    assert_eq!((status.state, status.done), (RunState::Done, 5));
+}
+
+/// *Repeat* (#280): the list goes out `repeat` times in its order, the
+/// placeholders filled in anew for every copy; `{{n}}` is the position.
+#[tokio::test]
+async fn repeated_drafts_count_with_n() {
+    let (addr, mut frames, _) = counting(false).await;
+    let store = store();
+    let sender = Sender::new(settings(|_| {}), store.clone());
+    let mut req = request(to(addr, "t"), "unused");
+    req.items = vec![
+        ItemRequest::draft("MSH|^~\\&|A|B|||{{now}}||ADT^A01|X{{n}}|P|2.5\nPID|||{{n}}"),
+        ItemRequest::draft("MSH|^~\\&|A|B|||{{now}}||ADT^A08|Y{{n}}|P|2.5\nPID|||{{n}}"),
+    ];
+    req.repeat = 2;
+    let run = started(sender.start(req, CLIENT).await.unwrap());
+    assert_eq!(run.total, 4);
+    let status = finished(&sender, &run.id).await;
+    assert_eq!(status.codes.get("AA"), Some(&4), "{status:?}");
+    let mut order = Vec::new();
+    for _ in 0..4 {
+        order.push(control_id(&frames.recv().await.unwrap()));
+    }
+    assert_eq!(order, ["X1", "Y2", "X3", "Y4"]);
+}
+
+/// The run limits are checked before anything is stored or sent.
+#[tokio::test]
+async fn run_limits_are_checked_first() {
+    let (addr, _, connections) = counting(false).await;
+    let store = store();
+    let ids = received_many(&store, 20).await;
+    let before = store.count().await;
+
+    let few = Sender::new(settings(|c| c.send.max_run_messages = 10), store.clone());
+    let e = few
+        .start(run_of(to(addr, "t"), &ids), CLIENT)
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(e, SendError::TooLarge(ref m) if m.contains("max_run_messages")),
+        "{e:?}"
+    );
+    let mut repeated = request(to(addr, "t"), &ids[0]);
+    repeated.repeat = 11;
+    assert!(matches!(
+        few.start(repeated, CLIENT).await,
+        Err(SendError::TooLarge(_))
+    ));
+
+    // 1 % of a 1 MB store: some 10 KB for the run.
+    let small = Sender::new(
+        settings(|c| {
+            c.store.max_memory_mb = 1;
+            c.send.max_run_store_percent = 1;
+        }),
+        store.clone(),
+    );
+    let e = small
+        .start(run_of(to(addr, "t"), &ids), CLIENT)
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(e, SendError::TooLarge(ref m) if m.contains("max_run_store_percent")),
+        "{e:?}"
+    );
+
+    // An unknown message refuses the whole run, and names the item.
+    let sender = Sender::new(settings(|_| {}), store.clone());
+    let mut with_gone = ids.clone();
+    with_gone.insert(3, "gone".into());
+    let e = sender
+        .start(run_of(to(addr, "t"), &with_gone), CLIENT)
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(e, SendError::NotFound(ref m) if m.starts_with("Item 4:")),
+        "{e:?}"
+    );
+
+    assert_eq!(store.count().await, before, "nothing stored");
+    assert_eq!(connections.load(Ordering::SeqCst), 0, "nothing sent");
+
+    // `send` is for one message only.
+    assert!(matches!(
+        sender.send(run_of(to(addr, "t"), &ids), CLIENT).await,
+        Err(SendError::BadRequest(_))
+    ));
+}
+
+/// More runs than `send.max_concurrent_runs` at once: `Busy` (429).
+#[tokio::test]
+async fn one_run_too_many_is_busy_and_shutdown_ends_a_run() {
+    let (addr, mut frames, _) = counting(false).await;
+    let store = store();
+    let ids = received_many(&store, 5).await;
+    let sender = Sender::new(settings(|c| c.send.max_concurrent_runs = 1), store.clone());
+    let mut slow = run_of(to(addr, "t"), &ids);
+    slow.interval_ms = 1000;
+    let run = started(sender.start(slow, CLIENT).await.unwrap());
+    frames.recv().await.unwrap();
+    assert_eq!(
+        sender
+            .start(run_of(to(addr, "t"), &ids), CLIENT)
+            .await
+            .unwrap_err(),
+        SendError::Busy
+    );
+    sender.shutdown();
+    let status = finished(&sender, &run.id).await;
+    assert_eq!(status.state, RunState::Shutdown);
+    assert!(sender.wait_for_runs(Duration::from_secs(2)).await);
+}
+
+/// #293 review: after a message written without awaiting an answer (here an
+/// ACK, which is never awaited) the target may still answer it. That late
+/// answer must not become the next message's: such a connection is not
+/// kept.
+#[tokio::test]
+async fn an_answer_nobody_awaited_is_not_read_for_the_next_message() {
+    // A receiver that answers everything — the ACK too, but late: after the
+    // next message was written (the check before the write sees nothing).
+    let connections = Arc::new(AtomicUsize::new(0));
+    let counted = Arc::clone(&connections);
+    let (addr, mut frames) = fake(move |mut s, tx| {
+        counted.fetch_add(1, Ordering::SeqCst);
+        async move {
+            while let Some(payload) = read_frame(&mut s).await {
+                let control = control_id(&payload);
+                let _ = tx.send(payload);
+                if control == "K1" {
+                    tokio::time::sleep(Duration::from_millis(100)).await;
+                }
+                let _ = s.write_all(&ack(&control)).await;
+            }
+        }
+    })
+    .await;
+    let store = store();
+    let ack_id = received(
+        &store,
+        b"MSH|^~\\&|A|B|||20260101||ACK^A01|K1|P|2.5\rMSA|AA|X\r",
+    )
+    .await;
+    let adt_id = received(
+        &store,
+        b"MSH|^~\\&|A|B|||20260101||ADT^A01|D1|P|2.5\rPID|||1\r",
+    )
+    .await;
+    let sender = Sender::new(settings(|_| {}), store.clone());
+    let run = started(
+        sender
+            .start(run_of(to(addr, "t"), &[ack_id, adt_id]), CLIENT)
+            .await
+            .unwrap(),
+    );
+    let status = finished(&sender, &run.id).await;
+    assert_eq!(
+        (status.written, status.codes.get("AA")),
+        (1, Some(&1)),
+        "{status:?}"
+    );
+    for _ in 0..2 {
+        frames.recv().await.unwrap();
+    }
+    let rows = sent_rows(&store).await;
+    let adt = store.get_by_id(&rows[1].id).await.unwrap();
+    let delivery = adt.meta.delivery.as_ref().unwrap();
+    assert_eq!(
+        delivery.control_id_matches,
+        Some(true),
+        "the ADT's own answer, not the late one to the ACK"
+    );
+    assert_eq!(connections.load(Ordering::SeqCst), 2);
+}
+
+/// The registry keeps every run under way and the newest 50 finished ones.
+#[tokio::test]
+async fn finished_runs_are_kept_up_to_a_limit() {
+    let (addr, _frames, _) = counting(false).await;
+    let store = store();
+    let ids = received_many(&store, 2).await;
+    let sender = Sender::new(settings(|_| {}), store.clone());
+    let mut runs = Vec::new();
+    for _ in 0..52 {
+        let run = started(
+            sender
+                .start(run_of(to(addr, "t"), &ids), CLIENT)
+                .await
+                .unwrap(),
+        );
+        finished(&sender, &run.id).await;
+        runs.push(run.id);
+    }
+    assert!(sender.run_status(&runs[0]).is_none(), "the oldest is gone");
+    assert!(sender.run_status(&runs[1]).is_none());
+    assert!(sender.run_status(&runs[2]).is_some());
+    assert_eq!(sender.run_status(&runs[51]).unwrap().state, RunState::Done);
 }
