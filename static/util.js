@@ -73,7 +73,20 @@ const DYNAMIC_DIFF_FIELDS = new Set(['MSH-7', 'MSH-10']);
 // --- Session Persistence ---
 const SESSION_KEY = 'harux_session';
 const SESSION_STATE_KEY = SESSION_KEY + '_state';
-const sessionId = sessionStorage.getItem(SESSION_KEY) || crypto.randomUUID();
+// A random ID. `crypto.randomUUID` exists only in a secure context (HTTPS or
+// localhost); Harux is usually opened as http://<server>:8080, where calling
+// it threw while this file loaded and left every `const` below it
+// uninitialized — the search and the detail view failed (#274).
+function newId() {
+    if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+        return crypto.randomUUID();
+    }
+    const bytes = new Uint8Array(16);
+    crypto.getRandomValues(bytes); // available without a secure context
+    return Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('');
+}
+
+const sessionId = sessionStorage.getItem(SESSION_KEY) || newId();
 sessionStorage.setItem(SESSION_KEY, sessionId);
 
 function saveSession() {
