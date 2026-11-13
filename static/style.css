@@ -2955,3 +2955,22 @@ tr.warn .field-input {
 .field-table.editable .field-quick-cell {
     width: 64px;
 }
+
+/* Templates in the New message menu (#279) */
+.new-menu-templates {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    max-height: 50vh;
+    overflow-y: auto;
+}
+
+.new-menu-group {
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--text-muted);
+    padding: 8px 9px 2px;
+    border-top: 1px solid var(--border);
+    margin-top: 4px;
+}

@@ -309,6 +309,8 @@ pub fn create_router(state: AppState) -> Router {
         .route("/api/send/config", get(send_config))
         .route("/api/messages/{id}/draft", get(message_draft))
         .route("/api/dictionary/{segment}", get(dictionary_segment))
+        .route("/api/templates", get(list_templates))
+        .route("/api/templates/{id}", get(get_template))
         // Routes with a message in the body (#276): a body limit above
         // axum's 2 MB default, and a permit before a large body is read.
         .route(
@@ -323,6 +325,9 @@ pub fn create_router(state: AppState) -> Router {
             "/api/build",
             large_body(&state, axum::routing::post(build_draft)),
         )
+        // An /api path no route takes is a 404, never the SPA (#292
+        // review): a client must not read index.html as an API answer.
+        .route("/api/{*rest}", axum::routing::any(api_not_found))
         // WebSocket
         .route("/ws", get(ws_handler))
         // Static files (SPA)
@@ -613,6 +618,53 @@ async fn dictionary_segment(Path(segment): Path<String>) -> Response {
             .collect::<Vec<_>>(),
     }))
     .into_response()
+}
+
+async fn api_not_found() -> Response {
+    (StatusCode::NOT_FOUND, "No such API route").into_response()
+}
+
+// --- Templates (#279) ---
+
+/// `GET /api/templates`: the built-in set and the site's `.hl7` files
+/// (`send.templates_dir`, read now), with name, group and message type.
+/// Part of sending: `403` while it is off.
+async fn list_templates(State(state): State<AppState>) -> Response {
+    if !state.sender.enabled() {
+        return sending_off();
+    }
+    let dir = state.sender.templates_dir().map(|d| d.to_path_buf());
+    match tokio::task::spawn_blocking(move || crate::templates::list(dir.as_deref())).await {
+        Ok((templates, problems)) => {
+            for p in &problems {
+                tracing::warn!("Templates: {p}");
+            }
+            Json(templates).into_response()
+        }
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Internal error: {e}"),
+        )
+            .into_response(),
+    }
+}
+
+/// `GET /api/templates/{id}`: a template as draft text. The ID is looked up
+/// in the listing, never joined into a path; anything else is `404`.
+async fn get_template(State(state): State<AppState>, Path(id): Path<String>) -> Response {
+    if !state.sender.enabled() {
+        return sending_off();
+    }
+    let dir = state.sender.templates_dir().map(|d| d.to_path_buf());
+    match tokio::task::spawn_blocking(move || crate::templates::get(dir.as_deref(), &id)).await {
+        Ok(Some(t)) => Json(t).into_response(),
+        Ok(None) => (StatusCode::NOT_FOUND, "No such template").into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Internal error: {e}"),
+        )
+            .into_response(),
+    }
 }
 
 fn is_json(headers: &axum::http::HeaderMap) -> bool {

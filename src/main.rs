@@ -7,6 +7,7 @@ mod mllp;
 mod mllp_client;
 mod send;
 mod store;
+mod templates;
 mod tls;
 mod validation;
 mod web;

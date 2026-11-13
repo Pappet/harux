@@ -130,17 +130,17 @@ This document tracks all milestones and planned features. Each milestone lists i
 
 ### Tasks
 
-- [ ] **Message replay** — resend stored messages to a configurable target address/port (MLLP client, over TLS where the target needs it)
+- [x] **Message replay** — resend stored messages to a configurable target address/port (MLLP client, over TLS where the target needs it)
   - [x] M4-1 Send a stored message, unchanged (#272): MLLP client, switch and limits in `harux.toml`, sent messages and their responses in the store and shown as sent
   - [x] M4-2 TLS for outgoing connections (#273)
   - [x] M4-3 Resend in the UI: a target list for every user, one-click resend, direction filter (#274)
   - [x] M4-4 Changes on resend: new control ID, current time, field overrides (#275)
-- [ ] **Message editor** — edit raw HL7 in the UI and send
+- [x] **Message editor** — edit raw HL7 in the UI and send
   - [x] M4-5 Drafts on the server: preview, field write-back, building the bytes (#276)
   - [x] M4-6 Drafts in the UI: write or edit a message in the detail panel and send it, validated live (#277)
   - [x] M4-7 Edit a draft field by field (#278)
-- [ ] **Test message generator** — templates for common types (ADT^A01, ORM^O01, ORU^R01) with editable fields
-  - [ ] M4-8 Built-in templates and a template directory
+- [x] **Test message generator** — templates for common types (ADT^A01, ORM^O01, ORU^R01) with editable fields
+  - [x] M4-8 Built-in templates and a template directory (#279)
 - [ ] **Several messages** — resend the filtered messages in order, repeat a draft
   - [ ] M4-9 Send runs with progress and cancel
   - [ ] M4-10 Import an `.hl7` file into the store
@@ -151,7 +151,7 @@ This document tracks all milestones and planned features. Each milestone lists i
 ### Acceptance Criteria
 
 - [x] A received message can be replayed to a configured target address with a single click
-- [ ] A template can be filled out in the UI, sent, and the response (ACK/NAK) displayed
+- [x] A template can be filled out in the UI, sent, and the response (ACK/NAK) displayed
 - [x] Raw HL7 can be edited and sent directly
 - [x] A message can be sent to a target that requires TLS
 - [x] Sending is off until `harux.toml` switches it on, and can be limited to listed destinations; everything Harux sends is visible in the message list with the address that asked for it

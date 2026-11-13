@@ -108,6 +108,8 @@ const state = {
     // ("PID[1]"), and the dictionary's field lists by segment name.
     draftShowEmpty: new Set(),
     dictionaryCache: new Map(),
+    // Templates (#279): the server's listing, fetched when the menu opens.
+    templates: [],
 };
 
 // The selected stored message's ID, or null — a view of `selection`.

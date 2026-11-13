@@ -65,6 +65,8 @@ pub struct SendSettings {
     pub max_message_bytes: usize,
     /// `[send.tls]`, read at start when sending is on (#273).
     pub tls: Option<Arc<TlsContext>>,
+    /// `send.templates_dir` (#279), a directory (checked at start).
+    pub templates_dir: Option<std::path::PathBuf>,
 }
 
 impl SendSettings {
@@ -94,6 +96,18 @@ impl SendSettings {
                 Some(Arc::new(TlsContext::load(&s.tls, true)?))
             } else {
                 None
+            },
+            templates_dir: match (&s.templates_dir, s.enabled) {
+                (Some(dir), true) => {
+                    let path = std::path::PathBuf::from(dir);
+                    if !path.is_dir() {
+                        return Err(format!(
+                            "send.templates_dir {dir:?} is not a directory (relative paths: the working directory)"
+                        ));
+                    }
+                    Some(path)
+                }
+                _ => None,
             },
         })
     }
@@ -171,6 +185,10 @@ pub struct ItemRequest {
     /// (`{{from:OBX[1]-5}}`) are filled in from it.
     #[serde(default)]
     pub based_on: Option<String>,
+    /// The template the draft was made from (#279): recorded on the sent
+    /// message as its origin. A label only.
+    #[serde(default)]
+    pub template: Option<String>,
 }
 
 // For callers of the library (the integration tests); the binary builds
@@ -363,6 +381,11 @@ impl Sender {
             .ok()
     }
 
+    /// `send.templates_dir`, if set (#279).
+    pub fn templates_dir(&self) -> Option<&std::path::Path> {
+        self.inner.settings.templates_dir.as_deref()
+    }
+
     /// The stored message `id`, if it is still stored.
     pub async fn stored(&self, id: &str) -> Option<Arc<Hl7Message>> {
         self.inner.store.get_by_id(id).await.map(|s| s.message)
@@ -434,9 +457,10 @@ impl Sender {
         let peer = destination.display();
         let (mut msg, origin) = match (&item.message_id, &item.raw) {
             (Some(id), None) => {
-                if item.charset.is_some() || item.based_on.is_some() {
+                if item.charset.is_some() || item.based_on.is_some() || item.template.is_some() {
                     return Err(SendError::BadRequest(
-                        "charset and based_on belong to a draft (raw), not to a stored message"
+                        "charset, based_on and template belong to a draft (raw), not to a stored \
+                         message"
                             .into(),
                     ));
                 }
@@ -566,12 +590,21 @@ impl Sender {
             }
         }
         self.check_run_bytes(&msg)?;
-        Ok((
-            msg,
-            Origin::Draft {
+        // A label only: no control characters, cut (it reaches the log).
+        let template = item.template.as_deref().map(|t| {
+            t.trim()
+                .chars()
+                .filter(|c| !c.is_control())
+                .take(MAX_TARGET_NAME_CHARS)
+                .collect::<String>()
+        });
+        let origin = match (template, &item.based_on) {
+            (Some(name), None) if !name.is_empty() => Origin::Template { name },
+            _ => Origin::Draft {
                 based_on: item.based_on.clone(),
             },
-        ))
+        };
+        Ok((msg, origin))
     }
 
     /// The message a draft was made from, when the draft needs it: `None`

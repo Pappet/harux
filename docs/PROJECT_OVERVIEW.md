@@ -198,6 +198,7 @@ Built-in defaults → `harux.toml` (next to the binary, then the working directo
 | `send.connect_timeout_secs` / `send.response_timeout_secs` | `5` / `30` | Send timeouts |
 | `send.max_concurrent_runs` | `4` | Sends at a time |
 | `send.max_run_messages` / `send.max_run_store_percent` | `1000` / `25` | Limits of one run; a run's messages may take at most this share of `store.max_memory_mb` |
+| `send.templates_dir` | — | Directory of `.hl7` templates for everyone, next to the built-in set; read only, read on every listing |
 | `send.tls.ca_file` | — | PEM file with CA certificates trusted besides the operating system's store |
 | `send.tls.allow_unverified` | `false` | Let users switch the certificate check off for a target of theirs |
 | `send.tls.client_cert_file` / `send.tls.client_key_file` | — | Harux's own certificate and key (PEM), for targets that ask for one |
@@ -217,6 +218,8 @@ Built-in defaults → `harux.toml` (next to the binary, then the working directo
 | `POST` | `/api/send` | Send one stored message (unchanged or with field overrides) or one draft (below); `403` while sending is off |
 | `GET` | `/api/messages/{id}/draft` | A stored message as draft text: one segment per line, values above 2,000 characters as references `{{from:OBX[1]-5}}`, the encoding it arrived in (`403` while sending is off) |
 | `POST` | `/api/parse` | JSON `{raw, set, based_on, fill_references}` (a body starting with `{` counts as JSON): the draft's preview — the detail JSON of its text, field positions in UTF-16 units, `set` written back; validation with sample values for placeholders. Any other body: a file's bytes decoded like a received frame (`raw`, `encoding`, `warning`, `framed`) |
+| `GET` | `/api/templates` | The built-in templates and the site's (`send.templates_dir`): `[{id, name, group, message_type}]` (`403` while sending is off) |
+| `GET` | `/api/templates/{id}` | One template as draft text: `{…, raw, charset, encoding, warning}`; the ID is a key of the listing, never a path (`404` otherwise) |
 | `GET` | `/api/dictionary/{segment}` | A segment's fields from the embedded v2.5.1 dictionary: `{name, description, fields: [{seq, name, datatype}]}` (`404` unknown, `400` not three letters or digits) |
 | `POST` | `/api/build` | `{raw, charset, based_on, set}`: the bytes a send would write, MLLP-framed, as `harux-draft.hl7` |
 | `POST` | `/api/clear` | Delete all messages from store |

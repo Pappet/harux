@@ -54,6 +54,10 @@ max_concurrent_runs = 4
 # Where users may send. Empty = any host and port.
 # Entries are host:port or host:from-to ([v6]:port for IPv6 addresses).
 # allowed_destinations = ["orchestra-test.klinik.local:6000-6999"]
+# Directory with .hl7 templates for everyone, offered under "New message"
+# next to the built-in set. Harux only reads it (keep it in version control).
+# Relative paths: the working directory.
+# templates_dir = "templates"
 
 [send.tls]
 # TLS for outgoing connections. A target's certificate is checked against

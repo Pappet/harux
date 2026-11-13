@@ -1,0 +1,5 @@
+MSH|^~\&|HARUX|TEST|LAB|TEST|{{now}}||ORM^O01^ORM_O01|{{id}}|T|2.5
+PID|1||4711^^^TEST^MR||Muster^Max||19800515|M
+PV1|1|O|AMBULANZ
+ORC|NW|ORD{{rand:6}}|||||^^^{{now}}^^R
+OBR|1|ORD{{rand:6}}||CBC^Complete Blood Count|||{{now}}

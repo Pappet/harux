@@ -252,3 +252,20 @@ fn bind_addresses_restrict_the_listeners() {
         },
     );
 }
+
+/// #279: with sending on, `send.templates_dir` must name a directory.
+#[test]
+fn a_templates_dir_that_is_not_a_directory_stops_the_start() {
+    let (code, stderr) = run_with(
+        Some("[send]\nenabled = true\ntemplates_dir = \"no-such-templates\"\n"),
+        &[],
+    );
+    assert!(
+        matches!(code, Some(c) if c != 0),
+        "exit {code:?}, stderr: {stderr}"
+    );
+    assert!(
+        stderr.contains("send.templates_dir") && stderr.contains("no-such-templates"),
+        "{stderr}"
+    );
+}

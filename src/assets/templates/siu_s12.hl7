@@ -1,0 +1,3 @@
+MSH|^~\&|HARUX|TEST|RECEIVER|TEST|{{now}}||SIU^S12^SIU_S12|{{id}}|T|2.5
+SCH|APT{{rand:6}}|APT{{rand:6}}||||ROUTINE|Checkup|MINS|30|m
+PID|1||4711^^^TEST^MR||Muster^Max||19800515|M
