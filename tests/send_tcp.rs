@@ -96,7 +96,7 @@ async fn acking() -> (SocketAddr, mpsc::UnboundedReceiver<Vec<u8>>) {
 }
 
 async fn connect(addr: SocketAddr) -> TcpStream {
-    mllp_client::connect("127.0.0.1", addr.port(), Duration::from_secs(2))
+    mllp_client::connect("127.0.0.1", addr.port(), timeouts().connect)
         .await
         .unwrap()
 }
@@ -167,7 +167,7 @@ async fn refused_connection() {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let port = listener.local_addr().unwrap().port();
     drop(listener);
-    let e = mllp_client::connect("127.0.0.1", port, Duration::from_secs(2))
+    let e = mllp_client::connect("127.0.0.1", port, timeouts().connect)
         .await
         .unwrap_err();
     assert!(matches!(e, ExchangeError::Refused), "{e:?}");
