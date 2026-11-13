@@ -329,7 +329,10 @@ function handleInteraction(e) {
         closeSendMenu();
     }
 
-    // A click outside the Watch menu closes it (#282).
+    // A click outside the Watch menu closes it (#282). The Watch menu and the
+    // Resend filtered menu share #run-menu-host and would overlap: they are
+    // never open together, because opening one is a click outside the other
+    // (and toggleWatchMenu closes the send menu) — keep it that way.
     if (state.watchMenuOpen && e.type === 'click' && e.target.closest
         && !e.target.closest('#watch-menu') && !e.target.closest('#btn-watch')) {
         toggleWatchMenu(false);

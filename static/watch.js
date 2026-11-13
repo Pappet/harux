@@ -113,7 +113,10 @@ function pageHidden() {
     return typeof document !== 'undefined' && document.hidden === true;
 }
 
-// Called for every new message (ws.js, handleServerEvent).
+// Called for every new message (ws.js, handleServerEvent). Messages that
+// arrive while the WebSocket is away (`lagged`, a reconnect) come in with the
+// reloaded list, not as `new_message`, and are not counted: the counter is a
+// nudge, the list is what counts (#295 review).
 function watchNewMessage(msg) {
     if (!state.watch || !pageHidden() || !watchMatches(state.watch, msg)) return;
     state.watchCount += 1;
@@ -154,6 +157,9 @@ function playWatchSound() {
         const Ctx = window.AudioContext || window.webkitAudioContext;
         if (!Ctx) return;
         watchAudio = watchAudio || new Ctx();
+        // Made outside a click (the tab is in the background), a context can
+        // start suspended (#295 review).
+        if (watchAudio.state === 'suspended' && watchAudio.resume) watchAudio.resume();
         const osc = watchAudio.createOscillator();
         const gain = watchAudio.createGain();
         osc.frequency.value = 880;
@@ -220,7 +226,7 @@ function watchMenuHtml() {
     return `${head}
         <p class="hint">While this tab is in the background, matching messages count in its title${state.showBookmarkedOnly ? ' (the bookmark filter is left out: new messages are never bookmarked)' : ''}.</p>
         ${sw('sound', state.watchPrefs.sound, 'Play a sound', false, '')}
-        ${sw('desktop', state.watchPrefs.desktop && d.available, 'Desktop notification', !d.available, desktopHint)}
+        ${sw('desktop', state.watchPrefs.desktop && d.available && d.granted, 'Desktop notification', !d.available, desktopHint)}
         <p class="active">Active: ${esc(activeWatchChannels().join(', '))}</p>
         <div class="foot">${change}<span class="spacer"></span>
         ${w ? '<button class="ctl-btn" data-action="watch-stop">Stop watching</button>' : '<button class="ctl-btn on" data-action="watch-start">Watch</button>'}</div>`;

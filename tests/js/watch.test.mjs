@@ -189,3 +189,13 @@ test('the menu offers to watch the current filter, and to switch to a changed on
     state.showBookmarkedOnly = true;
     assert.match(ctx.watchMenuHtml(), /bookmark filter is left out/);
 });
+
+test('a blocked permission shows the desktop switch off, as the Active line says (#295 review)', () => {
+    const { ctx, state } = setup({ secure: true, permission: 'denied' });
+    state.watchPrefs.desktop = true; // kept from before the block
+    const html = ctx.watchMenuHtml();
+    assert.match(html, /class="switch" role="switch" aria-checked="false" data-action="watch-pref" data-pref="desktop"/);
+    assert.match(html, /Blocked in this browser/);
+    assert.match(html, /Active: title counter</);
+});
+
