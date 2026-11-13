@@ -325,6 +325,9 @@ pub fn create_router(state: AppState) -> Router {
             "/api/build",
             large_body(&state, axum::routing::post(build_draft)),
         )
+        // An /api path no route takes is a 404, never the SPA (#292
+        // review): a client must not read index.html as an API answer.
+        .route("/api/{*rest}", axum::routing::any(api_not_found))
         // WebSocket
         .route("/ws", get(ws_handler))
         // Static files (SPA)
@@ -615,6 +618,10 @@ async fn dictionary_segment(Path(segment): Path<String>) -> Response {
             .collect::<Vec<_>>(),
     }))
     .into_response()
+}
+
+async fn api_not_found() -> Response {
+    (StatusCode::NOT_FOUND, "No such API route").into_response()
 }
 
 // --- Templates (#279) ---

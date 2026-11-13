@@ -208,15 +208,21 @@ fn site_entries(dir: &Path, problems: &mut Vec<String>) -> Vec<SiteEntry> {
         }
     };
     let mut entries = Vec::new();
+    // Entries that look like templates (`*.hl7`) but are not listed: named
+    // so the site learns why (#292 review: `Klinik_Müller.hl7` would
+    // otherwise disappear without a word).
+    let mut skipped = Vec::new();
     for entry in read.flatten() {
-        let Ok(name) = entry.file_name().into_string() else {
-            continue;
-        };
+        let name = entry.file_name().to_string_lossy().into_owned();
+        let looks_like_one = name.to_ascii_lowercase().ends_with(".hl7");
         // `file_type` does not follow links: a link is never listed.
         let Ok(kind) = entry.file_type() else {
             continue;
         };
         if !kind.is_file() || !is_template_name(&name) {
+            if looks_like_one {
+                skipped.push(name);
+            }
             continue;
         }
         match entry.metadata() {
@@ -225,12 +231,26 @@ fn site_entries(dir: &Path, problems: &mut Vec<String>) -> Vec<SiteEntry> {
                 path: entry.path(),
             }),
             Ok(m) => problems.push(format!(
-                "template {name} is {} KB, above the {} KB limit",
-                m.len() / 1024,
-                MAX_TEMPLATE_BYTES / 1024
+                "template {name} is {} bytes, above the limit of {MAX_TEMPLATE_BYTES} bytes",
+                m.len()
             )),
             Err(_) => {}
         }
+    }
+    if !skipped.is_empty() {
+        skipped.sort();
+        let more = skipped.len().saturating_sub(5);
+        skipped.truncate(5);
+        problems.push(format!(
+            "not listed (a template is a plain file named with letters, digits, '.', '_' or '-' \
+             ending in .hl7 — no links, no folders): {}{}",
+            skipped.join(", "),
+            if more > 0 {
+                format!(" and {more} more")
+            } else {
+                String::new()
+            }
+        ));
     }
     entries.sort_by(|a, b| a.file_name.cmp(&b.file_name));
     if entries.len() > MAX_SITE_TEMPLATES {
@@ -341,9 +361,30 @@ mod tests {
         #[cfg(unix)]
         std::os::unix::fs::symlink(&outside, dir.join("link.hl7")).unwrap();
 
+        std::fs::write(dir.join("Klinik_Müller.hl7"), "MSH|^~\\&|X").unwrap();
         let (list, problems) = list(Some(&dir));
         let site: Vec<_> = list.iter().filter(|t| t.group == "Site").collect();
         assert_eq!(site.len(), 1, "{site:?}");
+        // Unlisted look-alikes are named; other files are not.
+        let skipped = problems
+            .iter()
+            .find(|p| p.starts_with("not listed"))
+            .unwrap();
+        assert!(
+            skipped.contains("Klinik_Müller.hl7") && skipped.contains("sub.hl7"),
+            "{skipped}"
+        );
+        #[cfg(unix)]
+        assert!(skipped.contains("link.hl7"), "{skipped}");
+        assert!(!skipped.contains("notes.txt"), "{skipped}");
+        let big = problems.iter().find(|p| p.contains("big.hl7")).unwrap();
+        assert!(
+            big.contains(&format!(
+                "{} bytes, above the limit of {MAX_TEMPLATE_BYTES} bytes",
+                MAX_TEMPLATE_BYTES + 1
+            )),
+            "{big}"
+        );
         assert_eq!(site[0].id, "site:Lab.hl7");
         assert_eq!(site[0].name, "Lab");
         assert_eq!(site[0].message_type, "ORU^R01");

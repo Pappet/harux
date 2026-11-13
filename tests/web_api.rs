@@ -1836,8 +1836,8 @@ async fn templates_are_listed_and_fetched_by_key_only() {
     );
 
     // An ID is looked up, never joined into a path: nothing outside the
-    // directory is ever returned. A one-segment ID that is not a key is a
-    // 404; `site:../x` has two segments and reaches the SPA fallback.
+    // directory is ever returned, and every one of these is a 404
+    // (`site:../x` has two segments: the /api fallback, #292 review).
     let secret = dir.with_extension("secret.hl7");
     let name = secret.file_name().unwrap().to_string_lossy();
     for (uri, status) in [
@@ -1857,7 +1857,10 @@ async fn templates_are_listed_and_fetched_by_key_only() {
             "/api/templates/builtin:nope".to_string(),
             Some(StatusCode::NOT_FOUND),
         ),
-        (format!("/api/templates/site:../{name}"), None),
+        (
+            format!("/api/templates/site:../{name}"),
+            Some(StatusCode::NOT_FOUND),
+        ),
     ] {
         let res = create_router(state.clone())
             .oneshot(Request::builder().uri(&uri).body(Body::empty()).unwrap())
@@ -1932,4 +1935,39 @@ async fn a_template_is_filled_out_and_sent() {
     )
     .await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
+}
+
+/// #292 review: an /api path no route takes is a 404 — never the SPA's
+/// index.html, which a client would misread as an answer.
+#[tokio::test]
+async fn unknown_api_paths_are_404_not_the_spa() {
+    let state = sending_state(|_| {});
+    for uri in [
+        "/api/templates/builtin:../../etc/passwd",
+        "/api/templates/site:../x.hl7",
+        "/api/nope",
+        "/api/messages/a/b/c",
+    ] {
+        let res = create_router(state.clone())
+            .oneshot(Request::builder().uri(uri).body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::NOT_FOUND, "{uri}");
+        let body = collect_body(res.into_body()).await;
+        assert!(!String::from_utf8_lossy(&body).contains("<html"), "{uri}");
+    }
+    // A known route keeps its method check, and the SPA still serves pages.
+    let res = create_router(state.clone())
+        .oneshot(
+            Request::builder()
+                .method(Method::POST)
+                .uri("/api/stats")
+                .header("host", "10.1.2.3:8080")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::METHOD_NOT_ALLOWED);
+    assert_eq!(get_status(&state, "/").await, StatusCode::OK);
 }
