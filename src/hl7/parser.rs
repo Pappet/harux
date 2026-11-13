@@ -388,6 +388,20 @@ pub fn new_control_id() -> String {
     uuid::Uuid::new_v4().simple().to_string()[..20].to_string()
 }
 
+/// A moment as HL7 `DTM` to the second, `YYYYMMDDHHMMSS`, in the host's
+/// **local** time and without an offset — what HL7 v2 means by a time without
+/// one, and what Orchestra and the other systems on the network write
+/// (#288). The one format of every time Harux writes into a message: MSH-7
+/// of its ACKs and the `{{now}}` placeholder.
+pub fn hl7_timestamp(t: &chrono::DateTime<chrono::Local>) -> String {
+    t.format("%Y%m%d%H%M%S").to_string()
+}
+
+/// The date part of [`hl7_timestamp`], `YYYYMMDD` (`{{today}}`).
+pub fn hl7_date(t: &chrono::DateTime<chrono::Local>) -> String {
+    t.format("%Y%m%d").to_string()
+}
+
 /// Render an [`AckSpec`] as `MSH…\rMSA…[\rERR…]`. Every ACK/NACK gets a
 /// fresh 20-character MSH-10 control ID.
 fn render_ack(spec: &AckSpec) -> String {
@@ -402,7 +416,8 @@ fn render_ack(spec: &AckSpec) -> String {
     let version = non_empty_or(spec.version, DEFAULT_ACK_VERSION);
     let acknowledged_control_id = non_empty_or(spec.acknowledged_control_id, "UNKNOWN");
     let control_id = new_control_id();
-    let now = chrono::Utc::now().format("%Y%m%d%H%M%S");
+    // Local time, like `{{now}}` and the sender's own MSH-7 (#288).
+    let now = hl7_timestamp(&chrono::Local::now());
     // MSH-13..17 empty, MSH-18 the charset the reply is written in.
     let msh18 = match spec.charset.filter(|c| !c.is_empty()) {
         Some(c) => format!("{f}{f}{f}{f}{f}{f}{}", super::escape::encode(c, d)),
@@ -827,6 +842,30 @@ mod tests {
         assert_eq!(field(&parsed, "MSA", 1), "AA");
         assert_eq!(field(&parsed, "MSA", 2), "MSG00001");
         assert_eq!(parsed.segments[1].fields.len(), 2, "no MSA-3 on an ACK");
+    }
+
+    /// #288: an ACK's MSH-7 and `{{now}}` come from the same clock in the
+    /// same format: local time, to the second, no offset.
+    #[test]
+    fn ack_time_and_now_placeholder_agree() {
+        use crate::hl7::compose::{fill_placeholders, PlaceholderContext};
+        let msg = parse_message(SAMPLE_ADT, "127.0.0.1:9999").unwrap();
+        let ack = parse_message(&build_ack(&msg, "AA"), "test").unwrap();
+        let msh7 = field(&ack, "MSH", 7);
+        let ctx = PlaceholderContext {
+            n: 1,
+            now: chrono::Local::now(),
+        };
+        let now = fill_placeholders("{{now}}", &ctx);
+        assert_eq!(msh7.len(), 14, "{msh7}");
+        assert_eq!(now.len(), 14, "{now}");
+        let parse = |v: &str| {
+            let naive = chrono::NaiveDateTime::parse_from_str(v, "%Y%m%d%H%M%S").unwrap();
+            naive.and_local_timezone(chrono::Local).earliest().unwrap()
+        };
+        let apart = (parse(&msh7) - parse(&now)).num_seconds().abs();
+        assert!(apart <= 2, "MSH-7 {msh7} vs {{{{now}}}} {now}");
+        assert_eq!(hl7_date(&ctx.now), fill_placeholders("{{today}}", &ctx));
     }
 
     /// #187: the NACK shares the ACK's MSH layout — it now carries its own

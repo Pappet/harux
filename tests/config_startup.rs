@@ -144,6 +144,17 @@ fn run_until(
     toml: impl Fn(u16, u16) -> String,
     check: impl FnOnce(u16, u16),
 ) -> String {
+    run_until_env(tag, host, &[], toml, check)
+}
+
+/// [`run_until`] with these environment variables set for Harux.
+fn run_until_env(
+    tag: &str,
+    host: &str,
+    env: &[(&str, &str)],
+    toml: impl Fn(u16, u16) -> String,
+    check: impl FnOnce(u16, u16),
+) -> String {
     let _serial = SERVER_TESTS.lock().unwrap_or_else(|e| e.into_inner());
     let dir = std::env::temp_dir().join(format!("harux-startup-{tag}-{}", std::process::id()));
     let stderr_path = dir.join("stderr.txt");
@@ -158,6 +169,7 @@ fn run_until(
             .env_remove("MLLP_PORT")
             .env_remove("WEB_PORT")
             .env_remove("RUST_LOG")
+            .envs(env.iter().copied())
             .stdout(std::process::Stdio::null())
             .stderr(std::fs::File::create(&stderr_path).unwrap())
             .spawn()
@@ -267,5 +279,45 @@ fn a_templates_dir_that_is_not_a_directory_stops_the_start() {
     assert!(
         stderr.contains("send.templates_dir") && stderr.contains("no-such-templates"),
         "{stderr}"
+    );
+}
+
+/// #288: an ACK's MSH-7 is the host's local time, as `{{now}}` and the
+/// systems on the network write it — not UTC. Harux runs here in UTC+05:30
+/// (a POSIX `TZ`, no time zone database needed), so the two cannot be
+/// mistaken for each other.
+#[cfg(unix)]
+#[test]
+fn ack_time_is_local_time() {
+    use std::io::{Read, Write};
+    run_until_env(
+        "ack-local-time",
+        "127.0.0.1",
+        &[("TZ", "IST-5:30")],
+        |mllp, web| {
+            format!(
+                "[server]\nmllp_port = {mllp}\nweb_port = {web}\nmllp_bind = \"127.0.0.1\"\nweb_bind = \"127.0.0.1\"\n"
+            )
+        },
+        |mllp, _| {
+            let mut s = std::net::TcpStream::connect(("127.0.0.1", mllp)).unwrap();
+            s.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+            s.write_all(b"\x0bMSH|^~\\&|A|B|||20260101||ADT^A01|T1|P|2.5\r\x1c\r")
+                .unwrap();
+            let mut ack = Vec::new();
+            let mut buf = [0u8; 1024];
+            while !ack.ends_with(b"\x1c\r") {
+                let n = s.read(&mut buf).unwrap();
+                assert!(n > 0, "connection closed before the ACK");
+                ack.extend_from_slice(&buf[..n]);
+            }
+            let text = String::from_utf8_lossy(&ack).into_owned();
+            let msh7 = text.split('|').nth(6).unwrap().to_string();
+            let sent = chrono::NaiveDateTime::parse_from_str(&msh7, "%Y%m%d%H%M%S")
+                .unwrap_or_else(|e| panic!("MSH-7 {msh7:?}: {e}"));
+            let local = chrono::Utc::now().naive_utc() + chrono::Duration::minutes(330);
+            let apart = (sent - local).num_seconds().abs();
+            assert!(apart <= 5, "MSH-7 {msh7} is not UTC+05:30 (now {local})");
+        },
     );
 }

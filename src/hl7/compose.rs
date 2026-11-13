@@ -255,8 +255,8 @@ pub fn fill_placeholders(value: &str, ctx: &PlaceholderContext) -> String {
 pub fn placeholder(name: &str, ctx: &PlaceholderContext) -> Option<String> {
     match name {
         "open" => Some("{{".into()),
-        "now" => Some(ctx.now.format("%Y%m%d%H%M%S").to_string()),
-        "today" => Some(ctx.now.format("%Y%m%d").to_string()),
+        "now" => Some(super::parser::hl7_timestamp(&ctx.now)),
+        "today" => Some(super::parser::hl7_date(&ctx.now)),
         "id" => Some(super::parser::new_control_id()),
         "n" => Some(ctx.n.to_string()),
         _ => {
