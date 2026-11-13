@@ -130,9 +130,13 @@ fn corpus() -> Vec<(String, String)> {
 fn estimated_bytes_tracks_the_real_heap() {
     let corpus = corpus();
     // Warm up the lazily built static dictionary and registry, which are
-    // shared and not part of any message.
+    // shared and not part of any message — and the local time zone, which
+    // `build_ack` reads for MSH-7 (#288) and chrono caches per thread on
+    // first use.
     for (_, raw) in &corpus {
-        let _ = parse_message(raw, "127.0.0.1:5000");
+        if let Ok(msg) = parse_message(raw, "127.0.0.1:5000") {
+            let _ = build_ack(&msg, "AA");
+        }
     }
 
     let mut checked = 0;
