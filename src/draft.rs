@@ -206,7 +206,7 @@ fn stored_encoding(msg: &Hl7Message) -> &'static Encoding {
 
 /// `text` with every line end (`CR LF`, `CR`, `LF`) as `LF` and no line end
 /// at the end — the form of a `<textarea>`.
-fn lines_lf(text: &str) -> String {
+pub(crate) fn lines_lf(text: &str) -> String {
     text.replace("\r\n", "\n")
         .replace('\r', "\n")
         .trim_end_matches('\n')
