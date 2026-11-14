@@ -988,10 +988,13 @@ mod tests {
             msg.parse_error.as_deref().unwrap().contains("4711"),
             "kept on the message"
         );
-        assert!(
-            log.contains("Panic at src/mllp.rs:"),
-            "where it happened: {log}"
+        // The place, in the platform's own path form (`src\mllp.rs` on
+        // Windows, where the release build runs the tests too).
+        let place = format!(
+            "Panic at {}:",
+            std::path::Path::new("src").join("mllp.rs").display()
         );
+        assert!(log.contains(&place), "where it happened: {log}");
         assert!(
             log.contains("Internal error while parsing a frame from 10.0.0.1:5000"),
             "{log}"
