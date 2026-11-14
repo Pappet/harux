@@ -19,6 +19,7 @@
 ## Component(s) Affected
 
 - [ ] MLLP Server (`mllp.rs`)
+- [ ] Sending (`send.rs`, `mllp_client.rs`, `tls.rs`, `draft.rs`, `templates.rs`)
 - [ ] HL7 Parser (`hl7/`) / Validation (`validation.rs`)
 - [ ] Configuration / Logging (`config.rs`, `logging.rs`)
 - [ ] Message Store (`store.rs`)
