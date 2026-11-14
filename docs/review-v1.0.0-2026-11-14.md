@@ -308,6 +308,11 @@ Serverzeit einschließlich der HTTP-Anfrage, Ziel ist die lokale Senke.
 | Run 30 × MDM 2 MB | 0,12 s (510 MB/s) |
 | Run 40 × MDM 2 MB | `413` (153 MB > 25 % des Stores) — wie vorgesehen |
 
+Die 153 MB sind die im Store **verbuchte** Größe, nicht die Bytes auf der
+Leitung: Eine 2-MB-MDM wird mit rund 3,8 MB verbucht (etwa das 1,9-Fache),
+weil ihr Anhang in `raw` und im Feldwert steht (`estimated_bytes`). Deshalb
+passen 30 solcher Nachrichten in die 128 MB eines Runs, 40 nicht.
+
 ### 2.3 Drafts: Vorschau, Draft-Text, Build
 
 | Vorgang | Zeit | Antwortgröße |
