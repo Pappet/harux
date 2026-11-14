@@ -19,6 +19,7 @@
 const DRAFTS_SESSION_KEY = 'harux_drafts';
 const DRAFTS_KEPT_KEY = 'harux_drafts_kept';
 const DRAFT_PREVIEW_DELAY_MS = 300; // the search's debounce
+const DRAFT_PREVIEW_STALE_MS = 30000; // a preview in flight longer is asked for anew (#313 review)
 const MAX_DRAFTS = 50;
 const MAX_DRAFT_HISTORY = 20;
 
@@ -534,12 +535,29 @@ function scheduleDraftPreview(d) {
     state.draftPreviewTimer = setTimeout(() => requestDraftPreview(d), DRAFT_PREVIEW_DELAY_MS);
 }
 
-async function requestDraftPreview(d, now = false) {
-    if (!d) return;
+// The same request still in flight — same draft, text and kind (filled or
+// as written) and no newer one since — is not sent again (#304): entering
+// the Diff tab asked twice for the filled preview, for an MDM the most
+// expensive request the editor makes (~30 MB of JSON for 8 MB). The key
+// is everything the request body holds; a request older than
+// DRAFT_PREVIEW_STALE_MS is not waited for again (#313 review): one that
+// never settles must not leave the Diff tab on "Reading the draft…".
+function requestDraftPreview(d, now = false) {
+    if (!d) return Promise.resolve();
     if (!now) clearTimeout(state.draftPreviewTimer);
     const fill = draftNeedsFilledPreview(d);
+    const f = state.draftPreviewInFlight;
+    if (f && f.draftId === d.id && f.raw === d.raw && f.basedOn === d.basedOn && f.fill === fill
+        && f.seq === state.draftPreviewSeq && Date.now() - f.at < DRAFT_PREVIEW_STALE_MS) {
+        return f.promise;
+    }
     const seq = ++state.draftPreviewSeq;
-    const raw = d.raw;
+    const promise = fetchDraftPreview(d, d.raw, fill, seq);
+    state.draftPreviewInFlight = { draftId: d.id, raw: d.raw, basedOn: d.basedOn, fill, seq, at: Date.now(), promise };
+    return promise;
+}
+
+async function fetchDraftPreview(d, raw, fill, seq) {
     let entry;
     try {
         const resp = await fetch('/api/parse', {
@@ -553,6 +571,8 @@ async function requestDraftPreview(d, now = false) {
     } catch (e) {
         entry = { draftId: d.id, raw, filled: fill, data: null, error: e.message || String(e) };
     }
+    const f = state.draftPreviewInFlight;
+    if (f && f.seq === seq) state.draftPreviewInFlight = null;
     // Last request wins, and only for the draft still open.
     if (seq !== state.draftPreviewSeq || state.selectedDraftId !== d.id) return;
     state.draftPreview = entry;
@@ -1364,6 +1384,7 @@ async function writeDraftFieldNow(path, value, draftId = state.selectedDraftId) 
     // shows when this draft is opened again.
     if (!isOpen()) return true;
     state.draftPreviewSeq++; // an older preview in flight must not win
+    state.draftPreviewInFlight = null; // nor be waited for again
     state.draftPreview = { draftId: d.id, raw: d.raw, filled: false, data, error: null };
     renderDraftHeader();
     if (state.activeTab === 'parsed') refreshDraftSegmentsInPlace(path, value, data);

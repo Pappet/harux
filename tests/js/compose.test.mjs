@@ -302,6 +302,7 @@ test('the preview: the last request wins, and it names the draft in the rail', a
     const d = ctx.addDraft({ raw: 'MSH|1' });
     state.selection = { kind: 'draft', id: d.id };
     const first = ctx.requestDraftPreview(d, true);
+    d.raw = 'MSH|1x'; // typed on: a new request (the same one in flight is not sent twice, #304)
     const second = ctx.requestDraftPreview(d, true);
     const reply = (type) => ({ ok: true, json: async () => ({ raw: d.raw, positions: [], message: { message_type: type, patient_name: 'P' } }) });
     answers[1](reply('NEW^ONE'));
@@ -988,4 +989,61 @@ test('the page\'s storage listener routes both shared keys, and nothing else (#3
     ctx.onSharedStorage({ key: null, newValue: null, storageArea: local }); // cleared
     assert.deepEqual(calls, [['drafts', '[1]'], ['targets', '[2]'], ['drafts', null], ['targets', null]]);
     assert.match(read('app.js'), /window\.addEventListener\('storage', onSharedStorage\)/, 'and app.js registers it');
+});
+
+test('entering the Diff tab of a draft with references asks once for the filled preview (#304)', async () => {
+    const pending = [];
+    const { ctx, state, requests, byId } = setup({
+        responses: { '/api/parse': (url, opts) => new Promise((resolve) => pending.push({ body: JSON.parse(opts.body), resolve })) },
+    });
+    ctx.renderDraftHeader = () => {};
+    const raw = 'MSH|^~\\&|A|B|||20260101||MDM^T02|C1|P|2.5\nOBX|1|ED|PDF||{{from:OBX-5}}';
+    const d = ctx.addDraft({ raw, basedOn: 'm1', references: [{ path: 'OBX-5', bytes: 8_000_000 }] });
+    state.selection = { kind: 'draft', id: d.id };
+    state.diffPinnedMessage = { id: 'm0', raw: 'MSH|^~\\&|A', segments: [] };
+    // The unfilled preview of this text is shown (the Segments tab).
+    state.draftPreview = { draftId: d.id, raw: d.raw, filled: false, data: previewOf(d.raw, {}), error: null };
+    const parses = () => requests.filter((r) => r.url === '/api/parse');
+    const content = byId('detail-content');
+
+    state.activeTab = 'diff';
+    ctx.renderDraftTab(content);
+    await new Promise((r) => setImmediate(r));
+    assert.equal(parses().length, 1, 'one request, not two');
+    assert.equal(pending[0].body.fill_references, true);
+
+    // A redraw while it is in flight does not ask again either.
+    ctx.renderDraftTab(content);
+    await new Promise((r) => setImmediate(r));
+    assert.equal(parses().length, 1);
+
+    pending[0].resolve({ ok: true, json: async () => previewOf(d.raw, {}), text: async () => '' });
+    await new Promise((r) => setImmediate(r));
+    await new Promise((r) => setImmediate(r));
+    assert.equal(state.draftPreview.filled, true);
+    assert.equal(state.draftPreviewInFlight, null, 'nothing under way any more');
+
+    // Leaving the Diff tab asks once for the preview as written.
+    state.activeTab = 'parsed';
+    ctx.renderDraftTab(content);
+    await new Promise((r) => setImmediate(r));
+    assert.equal(parses().length, 2);
+    assert.equal(pending[1].body.fill_references, false);
+
+    // A request that never settles is not waited for forever (#313 review):
+    // once it is older than DRAFT_PREVIEW_STALE_MS a redraw asks anew.
+    ctx.renderDraftTab(content);
+    await new Promise((r) => setImmediate(r));
+    assert.equal(parses().length, 2, 'still in flight: not sent again');
+    state.draftPreviewInFlight.at -= 31000;
+    ctx.renderDraftTab(content);
+    await new Promise((r) => setImmediate(r));
+    assert.equal(parses().length, 3, 'a stale request is replaced');
+
+    // Another base is another request, even for the same text.
+    d.basedOn = 'm2';
+    ctx.renderDraftTab(content);
+    await new Promise((r) => setImmediate(r));
+    assert.equal(parses().length, 4);
+    assert.equal(pending[3].body.based_on, 'm2');
 });
