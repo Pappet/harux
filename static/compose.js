@@ -141,9 +141,14 @@ function saveDrafts() {
 // Kept drafts another tab took out of the list (deleted, or kept in its
 // tab only). The one open here stays, in this tab only — what is on the
 // screen is never taken away; the others go. True if anything changed.
+//
+// Another tab that only stopped keeping a draft (*Kept* switched off) holds
+// it in its own tab then; here it goes like a deleted one — the storage
+// cannot tell the two apart.
 function applyKeptGone(gone) {
     if (!gone.size) return false;
     let openKept = false;
+    const before = state.drafts.length;
     state.drafts = state.drafts.filter((d) => {
         if (!gone.has(d.id) || !d.keep) return true;
         if (d.id !== state.selectedDraftId) return false;
@@ -155,7 +160,15 @@ function applyKeptGone(gone) {
         showToast('Another tab removed this draft from this computer — it stays in this tab until you close it', 'info');
         renderDraftHeader();
     }
-    return true;
+    return openKept || state.drafts.length !== before;
+}
+
+// The page's `storage` listener (registered in app.js, #300): another tab
+// wrote the kept drafts or the targets; `key === null` is a cleared storage.
+function onSharedStorage(e) {
+    if (e.storageArea && e.storageArea !== localStorage) return;
+    if (e.key === DRAFTS_KEPT_KEY || e.key === null) syncKeptDrafts(e.newValue);
+    if (e.key === TARGETS_KEY || e.key === null) syncTargets(e.newValue);
 }
 
 // Kept drafts of other tabs that this tab does not hold yet: added, in the

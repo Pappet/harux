@@ -521,11 +521,7 @@ loadDrafts();
 loadSendConfig();
 // Kept drafts and targets are shared by the browser's tabs (#300): when
 // another tab writes them, this one takes the list as it is now.
-window.addEventListener('storage', (e) => {
-    if (e.storageArea && e.storageArea !== localStorage) return;
-    if (e.key === DRAFTS_KEPT_KEY || e.key === null) syncKeptDrafts(e.newValue);
-    if (e.key === TARGETS_KEY || e.key === null) syncTargets(e.newValue);
-});
+window.addEventListener('storage', onSharedStorage);
 
 initSplitter();
 // Set autoscroll visual state — toggleAutoscroll flips the value, so pre-flip it

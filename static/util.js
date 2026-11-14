@@ -185,7 +185,8 @@ function utf8Length(str) {
 // there meanwhile (#300) — every tab saves from its own memory, so writing
 // that memory alone would erase what another tab added. Entries are
 // matched by `id`: this tab's entries (`mine`) replace their stored ones;
-// IDs this tab took out (`removed`) stay out; an entry of `mine` that this
+// IDs this tab took out (`removed`) stay out — unless `mine` holds them
+// again (a file loaded back, #312 review: mine wins); an entry of `mine` that this
 // tab saw stored before (`seen`) but is no longer stored was taken out by
 // another tab — it is not written back but returned in `gone`; every other
 // stored entry, another tab's, stays in its place.
@@ -196,7 +197,7 @@ function mergeStoredList(stored, mine, removed, seen) {
     const mineById = new Map(mine.map((e) => [e.id, e]));
     const list = [];
     for (const e of stored) {
-        if (!e || typeof e.id !== 'string' || removed.has(e.id)) continue;
+        if (!e || typeof e.id !== 'string' || (removed.has(e.id) && !mineById.has(e.id))) continue;
         list.push(mineById.has(e.id) ? mineById.get(e.id) : e);
     }
     for (const e of mine) if (!storedIds.has(e.id) && !gone.has(e.id)) list.push(e);

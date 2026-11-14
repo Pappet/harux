@@ -974,3 +974,18 @@ test('a kept draft another tab removes stays in this tab while it is open (#300)
     a.ctx.saveDrafts();
     assert.deepEqual(plain(JSON.parse(local.data.get('harux_drafts_kept')).map((x) => x.id)), [other.id], 'and not written back');
 });
+
+test('the page\'s storage listener routes both shared keys, and nothing else (#312 review)', () => {
+    const local = memoryStorage();
+    const { ctx } = setup({ local });
+    const calls = [];
+    ctx.syncKeptDrafts = (v) => calls.push(['drafts', v]);
+    ctx.syncTargets = (v) => calls.push(['targets', v]);
+    ctx.onSharedStorage({ key: 'harux_drafts_kept', newValue: '[1]', storageArea: local });
+    ctx.onSharedStorage({ key: 'harux_targets', newValue: '[2]', storageArea: local });
+    ctx.onSharedStorage({ key: 'harux_send_as', newValue: '"x"', storageArea: local });
+    ctx.onSharedStorage({ key: 'harux_drafts', newValue: '[3]', storageArea: {} }); // another tab's sessionStorage
+    ctx.onSharedStorage({ key: null, newValue: null, storageArea: local }); // cleared
+    assert.deepEqual(calls, [['drafts', '[1]'], ['targets', '[2]'], ['drafts', null], ['targets', null]]);
+    assert.match(read('app.js'), /window\.addEventListener\('storage', onSharedStorage\)/, 'and app.js registers it');
+});

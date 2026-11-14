@@ -123,7 +123,21 @@ function saveTargets() {
     const stored = readStored(TARGETS_KEY, []);
     const current = (Array.isArray(stored) ? stored : []).map(normalizeTarget).filter(Boolean);
     const { list } = mergeStoredList(current, state.targets, state.targetsRemoved, state.targetsSeen);
-    state.targets = list.slice(0, MAX_TARGETS);
+    // Over the limit (two tabs filled it at once): this tab's targets stay,
+    // the other tab's last ones are left out — and the user is told.
+    if (list.length > MAX_TARGETS) {
+        const mine = new Set(state.targets.map((t) => t.id));
+        let over = list.length - MAX_TARGETS;
+        for (let i = list.length - 1; i >= 0 && over > 0; i--) {
+            if (!mine.has(list[i].id)) {
+                list.splice(i, 1);
+                over--;
+            }
+        }
+        list.length = Math.min(list.length, MAX_TARGETS);
+        showToast(`At most ${MAX_TARGETS} targets: some added in another tab were left out`);
+    }
+    state.targets = list;
     if (writeStored(TARGETS_KEY, state.targets)) state.targetsSeen = new Set(state.targets.map((t) => t.id));
 }
 
@@ -934,8 +948,10 @@ function loadTargetsFromFile() {
         try {
             const targets = parseTargetFile(await file.text());
             if (state.targets.length > 0 && !confirm(`Replace your ${state.targets.length} target(s) with the ${targets.length} in ${file.name}?`)) return;
-            // The file replaces the list: the targets it had are removed.
-            for (const t of state.targets) state.targetsRemoved.add(t.id);
+            // The file replaces the list: the targets it does not hold are
+            // removed (a file this browser saved holds the same IDs).
+            const kept = new Set(targets.map((t) => t.id));
+            for (const t of state.targets) if (!kept.has(t.id)) state.targetsRemoved.add(t.id);
             state.targets = targets;
             saveTargets();
             pruneTargetResults();

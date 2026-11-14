@@ -94,6 +94,8 @@ const state = {
     targetStorageWarned: false,
     // What this tab last saw stored, and what it took out, so a save merges
     // with other tabs' lists instead of erasing them (#300, mergeStoredList).
+    // The `…Removed` sets are tombstones for the tab's lifetime, never a
+    // queue that is worked off.
     targetsSeen: new Set(),
     targetsRemoved: new Set(),
     directionFilter: 0,   // 0: In + Out, 1: Received, 2: Sent
@@ -116,7 +118,7 @@ const state = {
     draftSendAnyway: null, // id of a broken draft armed for "Send anyway"
     draftStorageWarned: false,
     keptSeen: new Set(),    // kept drafts' IDs as last seen in localStorage (#300)
-    keptRemoved: new Set(), // kept drafts deleted in this tab (#300)
+    keptRemoved: new Set(), // kept drafts deleted in this tab (#300), tombstones
     newMenuOpen: false,
     // Field-by-field editing (#278): segments showing their empty fields
     // ("PID[1]"), and the dictionary's field lists by segment name.
