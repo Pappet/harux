@@ -908,3 +908,69 @@ test('a field write leaves the Send button and unchanged rail chips alone (#299)
     assert.equal(writes, 2);
     assert.match(html, /data-action="draft-send"/);
 });
+
+// --- #300: kept drafts and a second tab ---
+
+test('a second tab never erases a kept draft; a deleted one never comes back (#300)', () => {
+    const local = memoryStorage();
+    const kept = () => plain(JSON.parse(local.data.get('harux_drafts_kept') || '[]').map((d) => d.id));
+    // The issue's steps: tab A and tab B open, A keeps a draft, B types into a new one.
+    const a = setup({ local });
+    const b = setup({ local });
+    a.ctx.loadDrafts();
+    b.ctx.loadDrafts();
+    const da = a.ctx.addDraft({ raw: 'MSH|^~\\&|A', origin: { kind: 'new' } });
+    a.ctx.toggleKeepDraft(da.id);
+    assert.deepEqual(kept(), [da.id]);
+    const db = b.ctx.addDraft({ raw: 'MSH|^~\\&|B', origin: { kind: 'new' } });
+    db.raw += 'x';
+    b.ctx.saveDrafts();
+    assert.deepEqual(kept(), [da.id], 'B\'s save kept A\'s draft');
+    assert.ok(b.state.drafts.some((d) => d.id === da.id && d.keep), 'and B shows it');
+    assert.ok(!kept().includes(db.id), 'B\'s own draft stays in its tab');
+
+    // A reload of A: the kept draft is there.
+    const again = setup({ local, session: a.session });
+    again.ctx.loadDrafts();
+    assert.ok(again.state.drafts.some((d) => d.id === da.id && d.keep));
+
+    // A deletes it; B saves again without having heard of that: it stays deleted.
+    a.ctx.deleteDraft(da.id);
+    assert.deepEqual(kept(), []);
+    db.raw += 'y';
+    b.ctx.saveDrafts();
+    assert.deepEqual(kept(), [], 'not merged back');
+    assert.ok(!b.state.drafts.some((d) => d.id === da.id), 'and gone from B');
+
+    // The storage event: a draft A keeps comes into B at once.
+    const dc = a.ctx.addDraft({ raw: 'MSH|^~\\&|C', origin: { kind: 'new' } });
+    a.ctx.toggleKeepDraft(dc.id);
+    b.ctx.syncKeptDrafts(local.data.get('harux_drafts_kept'));
+    assert.ok(b.state.drafts.some((d) => d.id === dc.id && d.keep));
+});
+
+test('a kept draft another tab removes stays in this tab while it is open (#300)', () => {
+    const local = memoryStorage();
+    const a = setup({ local });
+    const b = setup({ local });
+    a.ctx.loadDrafts();
+    const d = a.ctx.addDraft({ raw: 'MSH|^~\\&|A', origin: { kind: 'new' } });
+    a.ctx.toggleKeepDraft(d.id);
+    b.ctx.loadDrafts();
+    const other = b.ctx.addDraft({ raw: 'MSH|^~\\&|O', origin: { kind: 'new' } });
+    b.ctx.toggleKeepDraft(other.id);
+    a.ctx.syncKeptDrafts(local.data.get('harux_drafts_kept'));
+    a.state.selection = { kind: 'draft', id: d.id };
+    a.ctx.renderDraftHeader = () => {};
+
+    // B deletes A's open draft and the other one is edited in B.
+    b.ctx.deleteDraft(d.id);
+    a.ctx.syncKeptDrafts(local.data.get('harux_drafts_kept'));
+    const here = a.ctx.findDraft(d.id);
+    assert.ok(here, 'the open draft is not taken away');
+    assert.equal(here.keep, false, 'but it is no longer kept on this computer');
+    assert.ok(JSON.parse(a.session.data.get('harux_drafts')).some((x) => x.id === d.id), 'it is in this tab now');
+    assert.match(a.toasts.at(-1)[0], /Another tab removed this draft/);
+    a.ctx.saveDrafts();
+    assert.deepEqual(plain(JSON.parse(local.data.get('harux_drafts_kept')).map((x) => x.id)), [other.id], 'and not written back');
+});

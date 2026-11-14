@@ -106,6 +106,7 @@ function parseTargetFile(text) {
 function loadTargets() {
     const stored = readStored(TARGETS_KEY, []);
     state.targets = (Array.isArray(stored) ? stored : []).map(normalizeTarget).filter(Boolean);
+    state.targetsSeen = new Set(state.targets.map((t) => t.id));
     const results = readStored(TARGET_RESULTS_KEY, {});
     state.targetResults = results && typeof results === 'object' ? results : {};
     const last = readStored(LAST_TARGET_KEY, null);
@@ -114,8 +115,35 @@ function loadTargets() {
     state.sendAs = Object.hasOwn(SEND_AS, sendAs) ? sendAs : 'unchanged';
 }
 
+// The list is shared by every tab of the browser (#300): merged with what
+// is stored now, so a target another tab added stays (and comes into this
+// tab), one removed here stays out, and one another tab removed is not
+// written back.
 function saveTargets() {
-    writeStored(TARGETS_KEY, state.targets);
+    const stored = readStored(TARGETS_KEY, []);
+    const current = (Array.isArray(stored) ? stored : []).map(normalizeTarget).filter(Boolean);
+    const { list } = mergeStoredList(current, state.targets, state.targetsRemoved, state.targetsSeen);
+    state.targets = list.slice(0, MAX_TARGETS);
+    if (writeStored(TARGETS_KEY, state.targets)) state.targetsSeen = new Set(state.targets.map((t) => t.id));
+}
+
+// Another tab wrote the list (a `storage` event, #300): every write is
+// already a merge, so it is the list as it is now.
+function syncTargets(text) {
+    let list;
+    try {
+        list = text ? JSON.parse(text) : [];
+    } catch (e) {
+        return;
+    }
+    if (!Array.isArray(list)) return;
+    state.targets = list.map(normalizeTarget).filter((t) => t && !state.targetsRemoved.has(t.id)).slice(0, MAX_TARGETS);
+    state.targetsSeen = new Set(state.targets.map((t) => t.id));
+    if (state.sendMenu) {
+        if (!findTarget(state.sendMenu.pickedId)) state.sendMenu.pickedId = (allTargets()[0] || {}).id || null;
+        renderSendMenu();
+    }
+    updateSendButtons();
 }
 
 // "This Harux": the server's own MLLP listener, always in the list while
@@ -160,6 +188,7 @@ function pruneTargetResults() {
 
 function removeTarget(id) {
     state.targets = state.targets.filter((t) => t.id !== id);
+    state.targetsRemoved.add(id); // never merged back from the stored list (#300)
     saveTargets();
     pruneTargetResults();
     if (state.lastTargetId === id) {
@@ -905,6 +934,8 @@ function loadTargetsFromFile() {
         try {
             const targets = parseTargetFile(await file.text());
             if (state.targets.length > 0 && !confirm(`Replace your ${state.targets.length} target(s) with the ${targets.length} in ${file.name}?`)) return;
+            // The file replaces the list: the targets it had are removed.
+            for (const t of state.targets) state.targetsRemoved.add(t.id);
             state.targets = targets;
             saveTargets();
             pruneTargetResults();

@@ -181,6 +181,28 @@ function utf8Length(str) {
     return n;
 }
 
+// A list one tab keeps in localStorage, merged with what other tabs wrote
+// there meanwhile (#300) — every tab saves from its own memory, so writing
+// that memory alone would erase what another tab added. Entries are
+// matched by `id`: this tab's entries (`mine`) replace their stored ones;
+// IDs this tab took out (`removed`) stay out; an entry of `mine` that this
+// tab saw stored before (`seen`) but is no longer stored was taken out by
+// another tab — it is not written back but returned in `gone`; every other
+// stored entry, another tab's, stays in its place.
+function mergeStoredList(stored, mine, removed, seen) {
+    const storedIds = new Set();
+    for (const e of stored) if (e && typeof e.id === 'string') storedIds.add(e.id);
+    const gone = new Set(mine.filter((e) => seen.has(e.id) && !storedIds.has(e.id)).map((e) => e.id));
+    const mineById = new Map(mine.map((e) => [e.id, e]));
+    const list = [];
+    for (const e of stored) {
+        if (!e || typeof e.id !== 'string' || removed.has(e.id)) continue;
+        list.push(mineById.has(e.id) ? mineById.get(e.id) : e);
+    }
+    for (const e of mine) if (!storedIds.has(e.id) && !gone.has(e.id)) list.push(e);
+    return { list, gone };
+}
+
 function esc(str) {
     if (!str) return '';
     const div = document.createElement('div');
