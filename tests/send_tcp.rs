@@ -1646,6 +1646,109 @@ async fn one_run_too_many_is_busy_and_shutdown_ends_a_run() {
     assert!(sender.wait_for_runs(Duration::from_secs(2)).await);
 }
 
+/// MSH-7 of a frame.
+fn msh7(frame: &[u8]) -> String {
+    String::from_utf8_lossy(frame)
+        .split('|')
+        .nth(6)
+        .unwrap_or_default()
+        .to_string()
+}
+
+/// #298: what a run costs is checked before its messages are built. A value
+/// with a CR is refused only when a message is built, so an answer other
+/// than that refusal shows nothing was built.
+#[tokio::test]
+async fn a_run_is_refused_before_anything_is_built() {
+    let (addr, mut frames, connections) = counting(false).await;
+    let store = store();
+    // About 60 KB of text, most of it one field.
+    let big = format!(
+        "MSH|^~\\&|A|B|||20260101||ORU^R01|BIG|P|2.5\rPID|||1\rOBX|1|ED|PDF||{}\r",
+        "A".repeat(60_000)
+    );
+    let big = received(&store, big.as_bytes()).await;
+    let ids = vec![big.clone(); 5];
+    // 10 % of a 1 MB store: some 100 KB for the run, less than 5 × 60 KB.
+    let small = Sender::new(
+        settings(|c| {
+            c.store.max_memory_mb = 1;
+            c.send.max_run_store_percent = 10;
+        }),
+        store.clone(),
+    );
+    let mut too_large = run_of(to(addr, "t"), &ids);
+    too_large.set = [("PID-3".to_string(), "x\ry".to_string())].into();
+    let e = small.start(too_large, CLIENT).await.unwrap_err();
+    assert!(
+        matches!(e, SendError::TooLarge(ref m)
+            if m.contains("max_run_store_percent") && m.contains("at least")),
+        "refused by its lower bound, not by a build: {e:?}"
+    );
+
+    // The bound counts only the text that stays: emptying the large field
+    // makes the same run small enough.
+    let mut emptied = run_of(to(addr, "t"), &ids);
+    emptied.set = [("OBX-5".to_string(), String::new())].into();
+    let run = started(small.start(emptied, CLIENT).await.unwrap());
+    let status = finished(&small, &run.id).await;
+    assert_eq!(status.codes.get("AA"), Some(&5), "{status:?}");
+    for _ in 0..5 {
+        let frame = frames.recv().await.unwrap();
+        assert!(frame.len() < 200, "OBX-5 emptied");
+    }
+
+    // With every run permit taken, a request with changes is busy before
+    // it builds anything.
+    let ids = received_many(&store, 3).await;
+    let one = Sender::new(settings(|c| c.send.max_concurrent_runs = 1), store.clone());
+    let mut slow = run_of(to(addr, "t"), &ids);
+    slow.interval_ms = 1000;
+    let run = started(one.start(slow, CLIENT).await.unwrap());
+    frames.recv().await.unwrap();
+    let mut changed = run_of(to(addr, "t"), &ids);
+    changed.set = [("PID-3".to_string(), "x\ry".to_string())].into();
+    assert_eq!(
+        one.start(changed, CLIENT).await.unwrap_err(),
+        SendError::Busy
+    );
+    one.shutdown();
+    finished(&one, &run.id).await;
+
+    // An item that cannot be built still refuses the whole run before the
+    // first message is sent.
+    let before = connections.load(Ordering::SeqCst);
+    let sender = Sender::new(settings(|_| {}), store.clone());
+    let mut req = run_of(to(addr, "t"), &ids);
+    req.items[1] = ItemRequest::draft("PID|||not a message");
+    let e = sender.start(req, CLIENT).await.unwrap_err();
+    assert!(
+        matches!(e, SendError::Unprocessable(ref m) if m.starts_with("Item 2:")),
+        "{e:?}"
+    );
+    assert_eq!(connections.load(Ordering::SeqCst), before, "nothing sent");
+}
+
+/// #305: every copy of a run is built when it is sent, so `{{now}}` is the
+/// time of its send — in the first pass too, not the time of the request.
+#[tokio::test]
+async fn every_copy_of_a_run_carries_the_time_it_is_sent() {
+    let (addr, mut frames, _) = counting(false).await;
+    let store = store();
+    let ids = received_many(&store, 2).await;
+    let sender = Sender::new(settings(|_| {}), store.clone());
+    let mut req = run_of(to(addr, "t"), &ids);
+    req.set = [("MSH-7".to_string(), "{{now}}".to_string())].into();
+    req.interval_ms = 1100; // `{{now}}` is to the second
+    let run = started(sender.start(req, CLIENT).await.unwrap());
+    let status = finished(&sender, &run.id).await;
+    assert_eq!(status.codes.get("AA"), Some(&2), "{status:?}");
+    let first = msh7(&frames.recv().await.unwrap());
+    let second = msh7(&frames.recv().await.unwrap());
+    assert_eq!(first.len(), 14, "{first}");
+    assert!(second > first, "{first} then {second}");
+}
+
 /// #293 review: after a message written without awaiting an answer (here an
 /// ACK, which is never awaited) the target may still answer it. That late
 /// answer must not become the next message's: such a connection is not

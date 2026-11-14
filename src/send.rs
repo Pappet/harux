@@ -527,40 +527,77 @@ impl Sender {
             resolved.push(r);
         }
         let set = Arc::new(request.set);
-        let max_bytes = settings.max_message_bytes;
-        let allow_invalid = request.allow_invalid;
-        let (items, firsts) = tokio::task::spawn_blocking({
-            let set = Arc::clone(&set);
-            let peer = peer.clone();
-            move || prepare(resolved, &set, &peer, max_bytes, allow_invalid, several)
-        })
-        .await
-        .map_err(|e| SendError::Unprocessable(format!("Internal error while building: {e}")))??;
 
         // Every sent message is stored again (rule 1): a run may not take
         // more than its share of the store.
-        let run_bytes = items
-            .iter()
-            .map(|i| i.estimated)
-            .fold(0usize, usize::saturating_add)
-            .saturating_mul(request.repeat);
-        if run_bytes > settings.max_run_bytes {
-            return Err(SendError::TooLarge(format!(
-                "Storing {} again would take {} MB, more than send.max_run_store_percent \
+        // `at_least`: the lower bound before the build, not the size itself
+        // (#309 review).
+        let too_large = |run_bytes: usize, at_least: bool| {
+            SendError::TooLarge(format!(
+                "Storing {} again would take {}{} MB, more than send.max_run_store_percent \
                  ({} %) of the store",
                 if total == 1 {
                     "this message".to_string()
                 } else {
                     format!("these {total} messages")
                 },
+                if at_least { "at least " } else { "" },
                 run_bytes.div_ceil(1024 * 1024),
                 settings.max_run_store_percent
-            )));
+            ))
+        };
+        // First what the run takes at least, known without building a
+        // message: a run that is too large is refused before anything is
+        // built (#298).
+        let least = resolved
+            .iter()
+            .map(|r| least_bytes(r, &set))
+            .fold(0usize, usize::saturating_add)
+            .saturating_mul(request.repeat);
+        if least > settings.max_run_bytes {
+            return Err(too_large(least, true));
         }
-
+        // Building takes the run's permit: at most `max_concurrent_runs`
+        // requests build at once (#298).
         let permit = Arc::clone(&self.inner.runs)
             .try_acquire_owned()
             .map_err(|_| SendError::Busy)?;
+
+        let max_bytes = settings.max_message_bytes;
+        let allow_invalid = request.allow_invalid;
+        // A run of one message keeps the copy it builds as the check: it is
+        // sent right after. A longer run builds every copy when it is sent
+        // (`{{now}}` is the time of the send, #305), so it never holds more
+        // than one built message at a time (#298).
+        let keep_first = total == 1;
+        let (items, first) = tokio::task::spawn_blocking({
+            let set = Arc::clone(&set);
+            let peer = peer.clone();
+            move || {
+                prepare(
+                    resolved,
+                    &set,
+                    &peer,
+                    max_bytes,
+                    allow_invalid,
+                    several,
+                    keep_first,
+                )
+            }
+        })
+        .await
+        .map_err(|e| SendError::Unprocessable(format!("Internal error while building: {e}")))??;
+
+        // Then exactly, from the sizes of the copies built.
+        let run_bytes = items
+            .iter()
+            .map(|i| i.estimated)
+            .fold(0usize, usize::saturating_add)
+            .saturating_mul(request.repeat);
+        if run_bytes > settings.max_run_bytes {
+            return Err(too_large(run_bytes, false));
+        }
+
         let handle = self.register(RunStatus::new(
             &destination.label,
             total,
@@ -582,7 +619,7 @@ impl Sender {
         let run = tokio::spawn({
             let handle = Arc::clone(&handle);
             async move {
-                let result = sender.run(&handle, plan, firsts).await;
+                let result = sender.run(&handle, plan, first).await;
                 drop(permit);
                 result
             }
@@ -864,7 +901,7 @@ impl Sender {
         &self,
         handle: &RunHandle,
         plan: RunPlan,
-        mut firsts: Vec<Option<Hl7Message>>,
+        mut first: Option<Hl7Message>,
     ) -> Option<SendResult> {
         let inner = &self.inner;
         let run_id = handle.status().id;
@@ -892,10 +929,13 @@ impl Sender {
                     break 'run (RunState::Shutdown, None);
                 }
 
-                // The first copy of every item was built (and checked) when
-                // the request came in; later copies are built again, with
-                // their placeholders filled in anew.
-                let built = match firsts.get_mut(i).and_then(Option::take) {
+                // Every copy is built when it is sent, its placeholders
+                // filled in then (#305); only a run of one message brings
+                // the copy it was checked with. Either way `{{now}}` is taken
+                // before the copy is stored and connected (rule 1), so a slow
+                // connect delays every copy alike — don't "fix" the single
+                // message by building it again here.
+                let built = match if n == 1 { first.take() } else { None } {
                     Some(msg) => Ok(msg),
                     None => {
                         let items = Arc::clone(&plan.items);
@@ -1179,11 +1219,50 @@ impl Item {
     }
 }
 
-/// Build the first copy of every item (its position in the first pass) —
-/// it checks what can be checked before anything is sent, and is what the
-/// run sends at that position. Unchanged messages are not built: they are
-/// the stored ones.
-#[allow(clippy::type_complexity)]
+/// What one copy of `r` takes in the store **at least**, known without
+/// building it (#298) — so a run that is too large is refused before a
+/// message is built. A lower bound, never more than [`prepare`] measures:
+///
+/// - unchanged: the stored message's own size (exact);
+/// - with `set`: the text that stays — the stored text without the fields
+///   `set` replaces (a new value can be empty, a missing field only adds);
+/// - a draft, or a stored message that did not parse: nothing (its
+///   references and placeholders can shrink or grow it; the draft's text
+///   is in the request already).
+fn least_bytes(r: &Resolved, set: &std::collections::BTreeMap<String, String>) -> usize {
+    let original = match r {
+        Resolved::Stored(original) if set.is_empty() => return original.estimated_bytes(),
+        Resolved::Stored(original) if original.parse_error.is_none() => original,
+        _ => return 0,
+    };
+    let mut replaced = 0usize;
+    for path in set.keys() {
+        let Ok(path) = crate::hl7::compose::FieldPath::parse(path) else {
+            return 0; // refused when it is built
+        };
+        let Some(segment) = original
+            .segments
+            .iter()
+            .filter(|s| s.name == path.segment)
+            .nth(path.occurrence - 1)
+        else {
+            return 0; // refused when it is built
+        };
+        // `index` is the HL7 field number, MSH included (the parser's shift).
+        if let Some(field) = segment.fields.iter().find(|f| f.index == path.field) {
+            replaced = replaced.saturating_add(field.value.len());
+        }
+    }
+    original.raw.len().saturating_sub(replaced)
+}
+
+/// Build the first copy of every item (its position in the first pass) and
+/// measure it: it checks what can be checked before anything is sent. Each
+/// copy is dropped once measured, so a run never holds more than one built
+/// message here (#298); the run builds every copy again when it sends it,
+/// with the time of the send (#305). `keep_first` (a run of one message)
+/// keeps the one copy instead — it is sent right after. Unchanged messages
+/// are not built: they are the stored ones.
 fn prepare(
     resolved: Vec<Resolved>,
     set: &std::collections::BTreeMap<String, String>,
@@ -1191,9 +1270,10 @@ fn prepare(
     max_bytes: usize,
     allow_invalid: bool,
     several: bool,
-) -> Result<(Vec<Item>, Vec<Option<Hl7Message>>), SendError> {
+    keep_first: bool,
+) -> Result<(Vec<Item>, Option<Hl7Message>), SendError> {
     let mut items = Vec::with_capacity(resolved.len());
-    let mut firsts = Vec::with_capacity(resolved.len());
+    let mut first = None;
     for (i, r) in resolved.into_iter().enumerate() {
         let n = i + 1;
         let (source, origin) = match r {
@@ -1240,23 +1320,21 @@ fn prepare(
             origin,
             estimated: 0,
         };
-        let first = match &item.source {
-            Source::Unchanged(original) => {
-                item.estimated = original.estimated_bytes();
-                None
-            }
+        match &item.source {
+            Source::Unchanged(original) => item.estimated = original.estimated_bytes(),
             _ => {
                 let msg = item
                     .build(set, n, peer, max_bytes, allow_invalid)
                     .map_err(|e| e.for_item(several.then_some(n)))?;
                 item.estimated = msg.estimated_bytes();
-                Some(msg)
+                if keep_first && i == 0 {
+                    first = Some(msg);
+                }
             }
-        };
+        }
         items.push(item);
-        firsts.push(first);
     }
-    Ok((items, firsts))
+    Ok((items, first))
 }
 
 /// Everything a run needs once it has started.
