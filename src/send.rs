@@ -530,15 +530,18 @@ impl Sender {
 
         // Every sent message is stored again (rule 1): a run may not take
         // more than its share of the store.
-        let too_large = |run_bytes: usize| {
+        // `at_least`: the lower bound before the build, not the size itself
+        // (#309 review).
+        let too_large = |run_bytes: usize, at_least: bool| {
             SendError::TooLarge(format!(
-                "Storing {} again would take {} MB, more than send.max_run_store_percent \
+                "Storing {} again would take {}{} MB, more than send.max_run_store_percent \
                  ({} %) of the store",
                 if total == 1 {
                     "this message".to_string()
                 } else {
                     format!("these {total} messages")
                 },
+                if at_least { "at least " } else { "" },
                 run_bytes.div_ceil(1024 * 1024),
                 settings.max_run_store_percent
             ))
@@ -552,7 +555,7 @@ impl Sender {
             .fold(0usize, usize::saturating_add)
             .saturating_mul(request.repeat);
         if least > settings.max_run_bytes {
-            return Err(too_large(least));
+            return Err(too_large(least, true));
         }
         // Building takes the run's permit: at most `max_concurrent_runs`
         // requests build at once (#298).
@@ -592,7 +595,7 @@ impl Sender {
             .fold(0usize, usize::saturating_add)
             .saturating_mul(request.repeat);
         if run_bytes > settings.max_run_bytes {
-            return Err(too_large(run_bytes));
+            return Err(too_large(run_bytes, false));
         }
 
         let handle = self.register(RunStatus::new(
@@ -928,7 +931,10 @@ impl Sender {
 
                 // Every copy is built when it is sent, its placeholders
                 // filled in then (#305); only a run of one message brings
-                // the copy it was checked with.
+                // the copy it was checked with. Either way `{{now}}` is taken
+                // before the copy is stored and connected (rule 1), so a slow
+                // connect delays every copy alike — don't "fix" the single
+                // message by building it again here.
                 let built = match if n == 1 { first.take() } else { None } {
                     Some(msg) => Ok(msg),
                     None => {

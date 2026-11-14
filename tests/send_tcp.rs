@@ -1681,8 +1681,9 @@ async fn a_run_is_refused_before_anything_is_built() {
     too_large.set = [("PID-3".to_string(), "x\ry".to_string())].into();
     let e = small.start(too_large, CLIENT).await.unwrap_err();
     assert!(
-        matches!(e, SendError::TooLarge(ref m) if m.contains("max_run_store_percent")),
-        "refused by its size, not by a build: {e:?}"
+        matches!(e, SendError::TooLarge(ref m)
+            if m.contains("max_run_store_percent") && m.contains("at least")),
+        "refused by its lower bound, not by a build: {e:?}"
     );
 
     // The bound counts only the text that stays: emptying the large field
