@@ -304,3 +304,78 @@ test('send as: a message that did not parse goes out only as received', async ()
     assert.equal(requests.length, 0);
     assert.match(toasts[0][0], /only be resent as received/);
 });
+
+test('two tabs share the target list: a save keeps the other tab\'s targets, a removal stays removed (#300)', () => {
+    const storage = memoryStorage();
+    const a = setup({ storage });
+    const b = setup({ storage });
+    a.ctx.loadTargets();
+    b.ctx.loadTargets();
+    const ta = a.ctx.upsertTarget(a.ctx.normalizeTarget({ name: 'from A', host: 'h1', port: 1 }));
+    // Tab B never heard of it and saves its own.
+    b.ctx.upsertTarget(b.ctx.normalizeTarget({ name: 'from B', host: 'h2', port: 2 }));
+    const names = () => plain(JSON.parse(storage.data.get('harux_targets')).map((t) => t.name));
+    assert.deepEqual(names(), ['from A', 'from B'], 'B\'s save kept A\'s target');
+    assert.deepEqual(plain(b.state.targets.map((t) => t.name)), ['from A', 'from B'], 'and B shows it');
+
+    // A removes its target; B saves again without having heard of that.
+    a.ctx.syncTargets(storage.data.get('harux_targets'));
+    a.ctx.removeTarget(ta.id);
+    b.ctx.upsertTarget(b.ctx.normalizeTarget({ name: 'B again', host: 'h3', port: 3 }));
+    assert.deepEqual(names(), ['from B', 'B again'], 'the removed target does not come back');
+    assert.deepEqual(plain(b.state.targets.map((t) => t.name)), ['from B', 'B again']);
+
+    // The storage event: A takes the list as it is now.
+    a.ctx.syncTargets(storage.data.get('harux_targets'));
+    assert.deepEqual(plain(a.state.targets.map((t) => t.name)), ['from B', 'B again']);
+});
+
+test('a target file this browser saved loads back without losing the list (#312 review)', async () => {
+    const { ctx, state, storage, toasts } = setup();
+    ctx.loadTargets();
+    ctx.upsertTarget(ctx.normalizeTarget({ name: 'one', host: 'h1', port: 1 }));
+    ctx.upsertTarget(ctx.normalizeTarget({ name: 'two', host: 'h2', port: 2 }));
+    const saved = JSON.stringify({ targets: plain(state.targets) }); // what "Save to file" writes, IDs included
+    // The real loadTargetsFromFile with a file input that hands over `saved`.
+    const load = async (text) => {
+        let onChange = null;
+        ctx.document.createElement = () => {
+            const el = new El();
+            el.addEventListener = (type, f) => { if (type === 'change') onChange = f; };
+            el.click = () => {};
+            el.files = [{ name: 'harux-targets.json', text: async () => text }];
+            return el;
+        };
+        ctx.updateSendButtons = () => {};
+        ctx.loadTargetsFromFile();
+        await onChange();
+    };
+    const names = () => plain(JSON.parse(storage.data.get('harux_targets')).map((t) => t.name));
+    await load(saved);
+    assert.deepEqual(plain(state.targets.map((t) => t.name)), ['one', 'two']);
+    assert.deepEqual(names(), ['one', 'two'], 'the stored list survives');
+    await load(saved); // the same file twice
+    assert.deepEqual(names(), ['one', 'two']);
+    assert.match(toasts.at(-1)[0], /^Loaded 2 target/);
+    // A file without one of them removes it, and it stays removed.
+    await load(JSON.stringify({ targets: [plain(state.targets[1])] }));
+    assert.deepEqual(names(), ['two']);
+});
+
+test('a merge over the target limit keeps this tab\'s targets and says so (#312 review)', () => {
+    const storage = memoryStorage();
+    const a = setup({ storage });
+    const b = setup({ storage });
+    a.ctx.loadTargets();
+    b.ctx.loadTargets();
+    for (let i = 0; i < 199; i++) b.ctx.upsertTarget(b.ctx.normalizeTarget({ name: `b${i}`, host: 'h', port: i + 1 }));
+    a.ctx.syncTargets(storage.data.get('harux_targets')); // A sees B's 199
+    // At the same moment both tabs add the 200th: B first, A without having heard of it.
+    b.ctx.upsertTarget(b.ctx.normalizeTarget({ name: 'b-last', host: 'h', port: 999 }));
+    a.ctx.upsertTarget(a.ctx.normalizeTarget({ name: 'a-new', host: 'a', port: 1 }));
+    const stored = plain(JSON.parse(storage.data.get('harux_targets')).map((t) => t.name));
+    assert.equal(stored.length, 200);
+    assert.ok(stored.includes('a-new'), 'the target added here stays');
+    assert.ok(!stored.includes('b-last'), 'the other tab\'s newest is left out');
+    assert.match(a.toasts.at(-1)[0], /At most 200 targets/);
+});

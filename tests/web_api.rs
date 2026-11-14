@@ -2320,3 +2320,62 @@ async fn import_refusals_and_edges() {
     assert!(text.contains("store.max_memory_mb"), "{text}");
     assert_eq!(state.store.count().await, before);
 }
+
+/// #301: a preview grows with the draft — parse, validation, positions and
+/// the answer's JSON — and runs off the async workers. On a one-thread
+/// runtime a ticker keeps running while a large one is made; on the worker
+/// it would stop for the whole preview (and with it the listener's ACKs).
+#[tokio::test(flavor = "current_thread")]
+async fn a_large_preview_runs_off_the_async_workers() {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::time::{Duration, Instant};
+    let state = sending_state(|_| {});
+    let mut raw = String::from("MSH|^~\\&|A|B|||20260101||ORU^R01|C1|P|2.5\nPID|||1||Doe^Jane\n");
+    for i in 0..5000 {
+        raw.push_str(&format!("OBX|{i}|ST|CODE^Name^L||value {i}|||N|||F\n"));
+    }
+    // Ticks of a 1 ms timer, and the longest time between two of them.
+    let ticks = std::sync::Arc::new(AtomicU64::new(0));
+    let longest_gap = std::sync::Arc::new(AtomicU64::new(0));
+    let origin = Instant::now();
+    let last_tick = std::sync::Arc::new(AtomicU64::new(0)); // µs since `origin`
+    let ticker = tokio::spawn({
+        let (ticks, longest_gap, last_tick) = (
+            std::sync::Arc::clone(&ticks),
+            std::sync::Arc::clone(&longest_gap),
+            std::sync::Arc::clone(&last_tick),
+        );
+        async move {
+            loop {
+                tokio::time::sleep(Duration::from_millis(1)).await;
+                let now = origin.elapsed().as_micros() as u64;
+                let before = last_tick.swap(now, Ordering::Relaxed);
+                longest_gap.fetch_max(now - before, Ordering::Relaxed);
+                ticks.fetch_add(1, Ordering::Relaxed);
+            }
+        }
+    });
+    tokio::time::sleep(Duration::from_millis(5)).await; // the ticker is running
+    ticks.store(0, Ordering::Relaxed);
+    longest_gap.store(0, Ordering::Relaxed);
+    let started = Instant::now();
+    let (status, body) = post_json(&state, "/api/parse", serde_json::json!({ "raw": raw })).await;
+    let took = started.elapsed();
+    // The time since the last tick counts too: a runtime that never ticked
+    // during the request stopped for all of it.
+    let tail = origin.elapsed().as_micros() as u64 - last_tick.load(Ordering::Relaxed);
+    let gap = Duration::from_micros(longest_gap.load(Ordering::Relaxed).max(tail));
+    let ticked = ticks.load(Ordering::Relaxed);
+    ticker.abort();
+    assert_eq!(status, StatusCode::OK);
+    let json = json_of(&body);
+    assert_eq!(json["message"]["segments"].as_array().unwrap().len(), 5002);
+    assert!(
+        took > Duration::from_millis(20),
+        "the preview must take long enough to tell ({took:?})"
+    );
+    assert!(
+        gap < took / 2 && ticked > 5,
+        "the runtime stopped for {gap:?} of a {took:?} preview ({ticked} ticks): it ran on the async worker"
+    );
+}

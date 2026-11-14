@@ -605,6 +605,26 @@ fn refused(e: crate::send::SendError) -> Response {
 
 // --- Drafts (#276) ---
 
+/// Run work that grows with a message's size — parse, build, encode and the
+/// answer's JSON — off the async workers (#301). On a worker it holds up
+/// everything scheduled there, the MLLP listener's ACKs included: a filled
+/// preview of an 8 MB MDM delayed ACKs by up to 130 ms. `what` names the
+/// work in a `500` if the task panics (boxed: a `Response` is 128 bytes).
+async fn off_workers<T: Send + 'static>(
+    what: &str,
+    work: impl FnOnce() -> T + Send + 'static,
+) -> Result<T, Box<Response>> {
+    tokio::task::spawn_blocking(work).await.map_err(|e| {
+        Box::new(
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Internal error while {what}: {e}"),
+            )
+                .into_response(),
+        )
+    })
+}
+
 /// `GET /api/messages/{id}/draft`: a stored message as draft text, long
 /// values as references (`draft::draft_of`). Part of sending: `403` while it
 /// is off.
@@ -617,14 +637,14 @@ async fn message_draft(State(state): State<AppState>, Path(id): Path<String>) ->
     };
     // Linear in the message's size (#289 review), but up to
     // `mllp.max_message_size_mb` of text: off the async workers.
-    match tokio::task::spawn_blocking(move || crate::draft::draft_of(&msg)).await {
-        Ok(Ok(draft)) => Json(draft).into_response(),
+    let made = off_workers("making the draft", move || {
+        crate::draft::draft_of(&msg).map(|draft| Json(draft).into_response())
+    })
+    .await;
+    match made {
+        Ok(Ok(response)) => response,
         Ok(Err(e)) => refused(e),
-        Err(e) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            format!("Internal error while making the draft: {e}"),
-        )
-            .into_response(),
+        Err(response) => *response,
     }
 }
 
@@ -736,7 +756,11 @@ async fn parse_draft(
     // is a JSON request whatever its `Content-Type` says (#289 review), and
     // answered `400` if it does not parse.
     if !is_json(&headers) && !body.trim_ascii_start().starts_with(b"{") {
-        return Json(crate::draft::decode_file(&body)).into_response();
+        return off_workers("decoding the file", move || {
+            Json(crate::draft::decode_file(&body)).into_response()
+        })
+        .await
+        .unwrap_or_else(|response| *response);
     }
     let request: crate::draft::ParseRequest = match serde_json::from_slice(&body) {
         Ok(r) => r,
@@ -761,14 +785,21 @@ async fn parse_draft(
     } else {
         None
     };
-    match crate::draft::preview(
-        &request.raw,
-        &request.set,
-        based_on.as_deref(),
-        request.fill_references,
-    ) {
-        Ok(preview) => Json(preview).into_response(),
-        Err(e) => refused(e),
+    // The preview and its JSON (about 30 MB for a filled 8 MB MDM).
+    let previewed = off_workers("making the preview", move || {
+        crate::draft::preview(
+            &request.raw,
+            &request.set,
+            based_on.as_deref(),
+            request.fill_references,
+        )
+        .map(|preview| Json(preview).into_response())
+    })
+    .await;
+    match previewed {
+        Ok(Ok(response)) => response,
+        Ok(Err(e)) => refused(e),
+        Err(response) => *response,
     }
 }
 
@@ -903,23 +934,43 @@ async fn build_draft(State(state): State<AppState>, body: Bytes) -> Response {
         }
     };
     drop(body);
-    let built = async {
-        let (text, _) = crate::draft::apply_set(&request.raw, &request.set)?;
-        let based_on = state
-            .sender
-            .based_on(request.based_on.as_deref(), &text)
-            .await?;
+    let max_bytes = state.sender.max_message_bytes();
+    let BuildRequest {
+        raw,
+        charset,
+        based_on,
+        set,
+    } = request;
+    // Off the async workers (#301): `set` written in, then — after the
+    // store lookup the references need — the build and its framing.
+    let written = match off_workers("building the draft", move || {
+        crate::draft::apply_set(&raw, &set).map(|(text, _)| text)
+    })
+    .await
+    {
+        Ok(Ok(text)) => text,
+        Ok(Err(e)) => return refused(e),
+        Err(response) => return *response,
+    };
+    let based_on = match state.sender.based_on(based_on.as_deref(), &written).await {
+        Ok(m) => m,
+        Err(e) => return refused(e),
+    };
+    let built = off_workers("building the draft", move || {
         crate::draft::build_payload(
-            &text,
-            request.charset.as_deref(),
+            &written,
+            charset.as_deref(),
             based_on.as_deref(),
             1,
-            state.sender.max_message_bytes(),
+            max_bytes,
         )
-    }
+        .map(|bytes| crate::draft::framed(&bytes))
+    })
     .await;
     match built {
-        Ok(bytes) => (
+        Err(response) => *response,
+        Ok(Err(e)) => refused(e),
+        Ok(Ok(framed)) => (
             [
                 (
                     axum::http::header::CONTENT_TYPE,
@@ -930,10 +981,9 @@ async fn build_draft(State(state): State<AppState>, body: Bytes) -> Response {
                     HeaderValue::from_static("attachment; filename=\"harux-draft.hl7\""),
                 ),
             ],
-            crate::draft::framed(&bytes),
+            framed,
         )
             .into_response(),
-        Err(e) => refused(e),
     }
 }
 

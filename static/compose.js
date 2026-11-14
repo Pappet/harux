@@ -112,16 +112,111 @@ function loadDrafts() {
         seen.add(d.id);
         return true;
     }).sort((x, y) => x.created - y.created);
+    state.keptSeen = new Set(kept.map((d) => d && d.id).filter(Boolean));
     if (state.selectedDraftId && !findDraft(state.selectedDraftId)) state.selection = null;
 }
 
 // Drafts made from real messages hold patient data: by default they stay in
 // this tab (sessionStorage) and reach the disk only when the user keeps one
 // (plan section 6).
+//
+// The tab's list is this tab's alone. The kept list is shared by every tab
+// of the browser (#300): it is merged with what is stored now — other tabs'
+// kept drafts stay and come into this tab, a draft deleted or no longer
+// kept here stays out, and one another tab took out is not written back.
 function saveDrafts() {
+    const removed = new Set(state.keptRemoved);
+    for (const d of state.drafts) if (!d.keep) removed.add(d.id);
+    const stored = readDraftStore(localStorage, DRAFTS_KEPT_KEY);
+    const { list, gone } = mergeStoredList(stored, state.drafts.filter((d) => d.keep), removed, state.keptSeen);
+    let changed = applyKeptGone(gone);
+    changed = adoptKeptDrafts(list) || changed;
     const okTab = writeDraftStore(sessionStorage, DRAFTS_SESSION_KEY, state.drafts.filter((d) => !d.keep));
-    const okKept = writeDraftStore(localStorage, DRAFTS_KEPT_KEY, state.drafts.filter((d) => d.keep));
+    const okKept = writeDraftStore(localStorage, DRAFTS_KEPT_KEY, list);
+    if (okKept) state.keptSeen = new Set(list.map((d) => d.id));
+    if (changed) renderDraftRail();
     return okTab && okKept;
+}
+
+// Kept drafts another tab took out of the list (deleted, or kept in its
+// tab only). The one open here stays, in this tab only — what is on the
+// screen is never taken away; the others go. True if anything changed.
+//
+// Another tab that only stopped keeping a draft (*Kept* switched off) holds
+// it in its own tab then; here it goes like a deleted one — the storage
+// cannot tell the two apart.
+function applyKeptGone(gone) {
+    if (!gone.size) return false;
+    let openKept = false;
+    const before = state.drafts.length;
+    state.drafts = state.drafts.filter((d) => {
+        if (!gone.has(d.id) || !d.keep) return true;
+        if (d.id !== state.selectedDraftId) return false;
+        d.keep = false;
+        openKept = true;
+        return true;
+    });
+    if (openKept) {
+        showToast('Another tab removed this draft from this computer — it stays in this tab until you close it', 'info');
+        renderDraftHeader();
+    }
+    return openKept || state.drafts.length !== before;
+}
+
+// The page's `storage` listener (registered in app.js, #300): another tab
+// wrote the kept drafts or the targets; `key === null` is a cleared storage.
+function onSharedStorage(e) {
+    if (e.storageArea && e.storageArea !== localStorage) return;
+    if (e.key === DRAFTS_KEPT_KEY || e.key === null) syncKeptDrafts(e.newValue);
+    if (e.key === TARGETS_KEY || e.key === null) syncTargets(e.newValue);
+}
+
+// Kept drafts of other tabs that this tab does not hold yet: added, in the
+// order they were made. True if any was added.
+function adoptKeptDrafts(list) {
+    let added = false;
+    for (const raw of list) {
+        if (findDraft(raw.id) || state.keptRemoved.has(raw.id)) continue;
+        const d = normalizeDraft(raw);
+        if (!d) continue;
+        d.keep = true;
+        state.drafts.push(d);
+        added = true;
+    }
+    if (added) state.drafts.sort((x, y) => x.created - y.created);
+    return added;
+}
+
+// Another tab wrote the kept list (a `storage` event, #300): every write is
+// already a merge, so it is the list as it is now. Kept drafts change to
+// what it holds — except the one open here, which this tab's next save
+// writes — new ones come in, and ones it no longer holds go as on a save.
+function syncKeptDrafts(text) {
+    let list;
+    try {
+        list = text ? JSON.parse(text) : [];
+    } catch (e) {
+        return;
+    }
+    if (!Array.isArray(list)) return;
+    const ids = new Set(list.map((d) => d && d.id).filter((id) => typeof id === 'string'));
+    const gone = new Set(state.drafts.filter((d) => d.keep && state.keptSeen.has(d.id) && !ids.has(d.id)).map((d) => d.id));
+    let changed = applyKeptGone(gone);
+    for (const raw of list) {
+        const d = raw && findDraft(raw.id);
+        if (!d || !d.keep || d.id === state.selectedDraftId) continue;
+        const now = normalizeDraft(raw);
+        if (now && JSON.stringify(now) !== JSON.stringify({ ...d, keep: now.keep })) {
+            Object.assign(d, now, { keep: true });
+            changed = true;
+        }
+    }
+    changed = adoptKeptDrafts(list.filter((d) => d && typeof d.id === 'string')) || changed;
+    state.keptSeen = ids;
+    if (changed) {
+        writeDraftStore(sessionStorage, DRAFTS_SESSION_KEY, state.drafts.filter((d) => !d.keep));
+        renderDraftRail();
+    }
 }
 
 function findDraft(id) {
@@ -366,6 +461,7 @@ function deleteDraft(id) {
     if (!d) return false;
     if (d.raw.trim() && draftHasUnsentChanges(d) && !confirm('Delete this draft? Its changes were not sent.')) return false;
     state.drafts = state.drafts.filter((x) => x.id !== id);
+    state.keptRemoved.add(id); // never merged back from the stored list (#300)
     saveDrafts();
     if (state.selectedDraftId === id) closeDraftView();
     renderDraftRail();
