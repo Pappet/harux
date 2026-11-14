@@ -1029,4 +1029,21 @@ test('entering the Diff tab of a draft with references asks once for the filled 
     await new Promise((r) => setImmediate(r));
     assert.equal(parses().length, 2);
     assert.equal(pending[1].body.fill_references, false);
+
+    // A request that never settles is not waited for forever (#313 review):
+    // once it is older than DRAFT_PREVIEW_STALE_MS a redraw asks anew.
+    ctx.renderDraftTab(content);
+    await new Promise((r) => setImmediate(r));
+    assert.equal(parses().length, 2, 'still in flight: not sent again');
+    state.draftPreviewInFlight.at -= 31000;
+    ctx.renderDraftTab(content);
+    await new Promise((r) => setImmediate(r));
+    assert.equal(parses().length, 3, 'a stale request is replaced');
+
+    // Another base is another request, even for the same text.
+    d.basedOn = 'm2';
+    ctx.renderDraftTab(content);
+    await new Promise((r) => setImmediate(r));
+    assert.equal(parses().length, 4);
+    assert.equal(pending[3].body.based_on, 'm2');
 });

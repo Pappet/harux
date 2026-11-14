@@ -115,7 +115,7 @@ const state = {
     draftPreview: null,   // { draftId, raw, filled, data, error }
     draftPreviewSeq: 0,
     draftPreviewTimer: null,
-    draftPreviewInFlight: null, // { draftId, raw, fill, seq, promise } of the request under way (#304)
+    draftPreviewInFlight: null, // { draftId, raw, basedOn, fill, seq, at, promise } of the request under way (#304)
     draftSendAnyway: null, // id of a broken draft armed for "Send anyway"
     draftStorageWarned: false,
     keptSeen: new Set(),    // kept drafts' IDs as last seen in localStorage (#300)
