@@ -17,6 +17,7 @@ body:
       description: Which part of Harux is affected?
       options:
         - MLLP Server (TCP listener, framing, ACK/NACK)
+        - Sending (resend, drafts, templates, runs, import, TLS)
         - HL7 Parser (message parsing, delimiter detection)
         - Web UI (browser SPA, display, interaction)
         - WebSocket (real-time updates, connection)

@@ -207,7 +207,7 @@ This document tracks all milestones and planned features. Each milestone lists i
 
 **Extended Features**
 - [ ] **Multi-port listener** — multiple MLLP ports simultaneously (test separate Orchestra channels)
-- [ ] **TLS support for the listener** — encrypted incoming MLLP connections (MLLP/S); outgoing connections get TLS in Milestone 4. Until then, `server.web_bind = "127.0.0.1"` behind a TLS reverse proxy covers the web side (#237)
+- [ ] **TLS support for the listener** — encrypted incoming MLLP connections (MLLP/S); outgoing connections have TLS since Milestone 4 (#273). Until then, `server.web_bind = "127.0.0.1"` behind a TLS reverse proxy covers the web side (#237)
 - [ ] **ACK configuration** — customizable ACK responses (e.g. always send NAK to test retry logic)
 - [ ] **Regex filter** — extended search with regular expressions
 - [ ] **Dark/Light theme toggle**

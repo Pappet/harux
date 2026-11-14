@@ -17,6 +17,7 @@ body:
       description: Which area of Harux does this relate to?
       options:
         - MLLP Server (TCP listener, framing, ACK/NACK)
+        - Sending (resend, drafts, templates, runs, import, TLS)
         - HL7 Parser (message parsing, validation, HL7 versions)
         - Web UI (browser SPA, display, UX)
         - WebSocket (real-time updates)

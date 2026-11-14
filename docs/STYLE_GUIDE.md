@@ -54,61 +54,60 @@ When referencing the standard, include the following notice at least once per do
 
 ## 1. Color Palette (Dark Theme)
 
-The palette draws from **volcanic amber on deep obsidian** — a nod to Roman-era divination by firelight.
+The palette is a **cool blue accent on deep obsidian**; amber, green and red are kept for states (warning, success, error). These are the values of `static/style.css` since the UI redesign of v0.5.0 (#86), which replaced the earlier amber accent.
 
 | Role | Value | Note |
 |---|---|---|
-| **Primary Background** | `#0f1117` | Near-black base |
-| **Secondary Background** | `#1a1d27` | Panels, headers |
-| **Tertiary Background** | `#242736` | Hover, active, popups |
-| **Accent Hover** | `#2a2e3f` | |
-| **Borders** | `#2e3247` | |
+| **Primary Background** | `#0b0d12` | Near-black base |
+| **Secondary Background** | `#131620` | Panels, headers |
+| **Tertiary Background** | `#1b1f2c` | Active, popups |
+| **Hover Background** | `#242938` | |
+| **Borders** | `#262b3a` | |
 | **Primary Text** | `#e4e6f0` | |
 | **Secondary Text** | `#8b8fa3` | |
 | **Muted Text** | `#5c6078` | |
-| **Accent (Amber)** | `#d4944c` | Primary brand color (dimmed: `#a06e38`) |
-| **Accent Alt (Blue)** | `#6c8cff` | Links, interactive focus rings |
-| **Success (Green)** | `#4caf84` | ACK received, valid |
-| **Warning (Yellow)** | `#e5a54b` | Missing field |
-| **Error (Red)** | `#e05454` | Missing segment, NACK |
+| **Accent (Blue)** | `#7aa2ff` | Selection, links, focus rings, active controls (dimmed: `#5a82e8`) |
+| **Success (Green)** | `#4fb98a` | ACK received, valid |
+| **Warning (Amber)** | `#e5a54b` | Missing field |
+| **Error (Red)** | `#ea6363` | Missing segment, NACK |
+| **Reference (Violet)** | `#c4a7ff` | A draft's references and placeholders (`.ref-chip`, `.field-input.auto`); written out, not a variable |
 
 ### CSS Variables
 
 ```css
 :root {
-  --bg-primary:    #0f1117;
-  --bg-secondary:  #1a1d27;
-  --bg-tertiary:   #242736;
-  --accent-hover:  #2a2e3f;
-  --border:        #2e3247;
+  --bg-primary:    #0b0d12;
+  --bg-secondary:  #131620;
+  --bg-tertiary:   #1b1f2c;
+  --bg-hover:      #242938;
+  --border:        #262b3a;
 
   --text-primary:  #e4e6f0;
   --text-secondary:#8b8fa3;
   --text-muted:    #5c6078;
 
-  --accent:        #d4944c;
-  --accent-dim:    #a06e38;
-  --accent-alt:    #6c8cff;
-  --success:       #4caf84;
+  --accent:        #7aa2ff;
+  --accent-dim:    #5a82e8;
+  --success:       #4fb98a;
   --warning:       #e5a54b;
-  --error:         #e05454;
+  --error:         #ea6363;
 }
 ```
 
 ### Source Marker Palette
 
-Used for color-coded dots in the message list (mapped by sender IP/port):
+Used for the color-coded bars and chips of the sources (`SOURCE_PALETTE` in `static/util.js`):
 
 ```
-hsl(30,  85%, 60%)  — Amber       hsl(150, 70%, 55%)  — Green
-hsl(210, 90%, 65%)  — Blue        hsl(280, 75%, 65%)  — Purple
+hsl(210, 90%, 65%)  — Blue        hsl(150, 70%, 55%)  — Green
+hsl(30,  85%, 60%)  — Orange      hsl(280, 75%, 65%)  — Purple
 hsl(0,   80%, 62%)  — Red         hsl(180, 70%, 50%)  — Teal
 hsl(50,  85%, 55%)  — Gold        hsl(330, 75%, 62%)  — Pink
 hsl(200, 80%, 55%)  — Sky         hsl(100, 60%, 50%)  — Lime
 hsl(260, 65%, 60%)  — Indigo      hsl(15,  90%, 58%)  — Coral
 ```
 
-> **Note:** Amber is listed first — it is the brand colour and the default marker for the first source.
+> **Note:** A source's colour is picked by a hash of its key (the sender's IP, or IP and port with *color by port*), so it stays the same across reloads; the order of the list means nothing. A send target (`→ target`) always uses `--accent`.
 
 ---
 
@@ -123,7 +122,7 @@ hsl(260, 65%, 60%)  — Indigo      hsl(15,  90%, 58%)  — Coral
 
 ## 3. Spacing & Density
 
-- **List row padding:** `9px 16px` — compact for data-heavy interfaces
+- **List rows:** two lines, 61 px high (60 px content + 1 px border — `contain-intrinsic-size` in `static/style.css` depends on it, #216); content padding `11px 14px 11px 11px`
 - **Panel gaps:** Use consistent CSS variable spacing
 - **Borders:** 1 px solid `var(--border)` between sections
 
@@ -132,7 +131,7 @@ hsl(260, 65%, 60%)  — Indigo      hsl(15,  90%, 58%)  — Coral
 ## 4. Animations & Transitions
 
 - **Hover/focus transitions:** `0.15s` for background color changes on buttons and list rows
-- **New message flash:** Row flashes `rgba(212, 148, 76, 0.15)` and fades out over `0.6s`
+- **New message flash:** Row flashes `rgba(122, 162, 255, 0.15)` (the accent) and fades out over `0.6s`
 - **Toast notifications:** Slide in, auto-dismiss after a short delay
 
 ---
@@ -141,7 +140,7 @@ hsl(260, 65%, 60%)  — Indigo      hsl(15,  90%, 58%)  — Coral
 
 - **No native browser checkboxes or radios** — use custom CSS toggle switches
 - Toggle switches use `var(--bg-tertiary)` background and `var(--border)` for resting state
-- Active toggles use `var(--accent)` colour with `rgba(212, 148, 76, 0.15)` background glow
+- Active toggles use `var(--accent)` for the knob, on an accent-tinted background (`rgba(122, 162, 255, 0.18)`)
 - The toggle is a `<button class="switch" role="switch" aria-checked>` with a `data-action`, so it works with Tab, Enter and Space like every other control (#274)
 - Search inputs are debounced at `300ms`
 
@@ -150,7 +149,7 @@ hsl(260, 65%, 60%)  — Indigo      hsl(15,  90%, 58%)  — Coral
 ## 6. Frontend Architecture Rules
 
 - **No frameworks:** Vanilla JavaScript only. No React, Vue, Svelte.
-- **No build toolchain:** No npm, webpack, vite. Plain files only: `index.html`, `style.css` and the `<script>` files `state.js` → `util.js` → `ws.js` → `render.js` → `diff.js` → `send.js` → `app.js` (no module system, one global `state`).
+- **No build toolchain:** No npm, webpack, vite. Plain files only: `index.html`, `style.css` and the `<script>` files `state.js` → `util.js` → `ws.js` → `render.js` → `diff.js` → `send.js` → `compose.js` → `watch.js` → `app.js` (no module system, one global `state`).
 - **No inline code:** The Content-Security-Policy forbids inline scripts, inline styles and `on…=` attributes. Interactive elements get a `data-action` and are handled by the delegation in `app.js`; values in attributes are escaped with `escAttr`, text with `esc`.
 - **Embedded distribution:** Static files are baked into the binary via `rust-embed`. Changes require recompilation.
 - **DOM batching:** Buffer incoming messages and flush to the DOM every `250ms` to prevent freeze at high throughput.

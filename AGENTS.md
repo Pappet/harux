@@ -64,8 +64,8 @@ default. The configuration fails closed: an unknown key, a wrong type or a
 value out of range stops the start with an error naming the key (#233).
 
 Manual MLLP testing: `tests/test.sh` (Linux/macOS, needs `nc`) or
-`.\tests\test.ps1` (Windows) — sends ADT^A01, ORU^R01, SIU^S12 plus error
-cases and a load test.
+`.\tests\test.ps1` (Windows) — sends every fixture in `tests/messages/valid`
+and `tests/messages/errors`, then a load test.
 
 ## Branch Protection & CI
 
@@ -175,7 +175,7 @@ Off unless `send.enabled = true` (#272): every send route answers `403` and the 
 
 - `GET /api/messages?offset=&limit=&include_bookmarks=&before=` — Paginated message list (newest first; `limit` capped at 1000). `include_bookmarks=true` (also `1` / `yes`) adds every bookmarked message older than the page, in the same order — the UI loads with it so bookmarks survive a reload (#231). `before=<id>` pages through older history by cursor instead of `offset` (offsets shift as messages arrive): messages older than that one; an unknown ID gives `[]` (#198)
 - `GET /api/messages/{id}` — Full message with segments
-- `GET /api/search?q=&limit=&before=` — Server-side search with the UI filter's semantics (`SearchQuery` in `src/store.rs` mirrors `getParsedQuery` / `matchesSearch`: `has:warnings` / `has:errors`, then patient, type, facility, control ID, source, tags; Unicode case-insensitive). `before=<id>` searches only older messages (#197). Keep the two matchers in step
+- `GET /api/search?q=&limit=&before=` — Server-side search with the UI filter's semantics (`SearchQuery` in `src/store.rs` mirrors `getParsedQuery` / `matchesSearch`: `has:warnings` / `has:errors` and `is:sent` / `is:received` (#272) in any order, then patient, type, facility, control ID, source — for a sent message its destination and target name —, tags; Unicode case-insensitive). `before=<id>` searches only older messages (#197). Keep the two matchers in step
 - `GET /api/stats` — Server statistics
 - `POST /api/messages/{id}/tags` — Add a tag (JSON body `{"tag": "..."}`)
 - `DELETE /api/messages/{id}/tags/{tag}` — Remove a tag
@@ -242,7 +242,7 @@ Key frontend behaviors:
 - **OS:** Windows Server (primary). The `.exe` runs as a Windows Service via NSSM.
 - **Build pipeline:** GitHub Actions builds Windows, macOS (Apple Silicon) and Linux binaries on every push to `main` and attaches them to releases.
 - **Users:** several developers at the same time via browser — no local setup, no RDP window.
-- **Network:** hospital internal network, no internet access from the server. Network placement is the only access control: there is no authentication and no TLS (`server.mllp_bind` / `server.web_bind`, `server.allowed_hosts`).
+- **Network:** hospital internal network, no internet access from the server. Network placement is the only access control: there is no authentication and no TLS for incoming connections (`server.mllp_bind` / `server.web_bind`, `server.allowed_hosts`); outgoing sends can use TLS (#273).
 - **Traffic:** HL7 v2.x from Orchestra — ADT, ORU, ORM, SIU, MDM. MDM with Base64-encoded PDF attachments is daily traffic, not an edge case.
 - **Deployment:** single binary, xcopy-style. No installer, no runtime dependencies, no Docker.
 

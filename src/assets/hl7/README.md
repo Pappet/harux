@@ -4,8 +4,10 @@ Both files are compiled into the binary (`include_str!`) and parsed once at star
 
 ## `v2.5.1.json` — field / segment dictionary
 
-Used by `src/dictionary.rs` for field and segment descriptions and by
-`src/validation.rs` for datatype checks.
+Used by `src/dictionary.rs` for field and segment descriptions, by
+`src/validation.rs` for datatype checks and — since the draft editor (#276,
+#278) — for the `datatype` of every field in the detail JSON and for
+`GET /api/dictionary/{segment}`.
 
 Contract the code relies on — check these when refreshing or replacing the file
 (e.g. for version-aware dictionaries, #49):
