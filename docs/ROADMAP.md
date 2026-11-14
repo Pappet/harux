@@ -2,7 +2,7 @@
 
 This document tracks all milestones and planned features. Each milestone lists its tasks, completion status, and acceptance criteria. It is the one place for planning facts (current milestone, next work); `AGENTS.md` and the other guides link here instead of repeating them.
 
-**Current state:** Milestones 0–4 are complete. v1.0.0 shipped Milestone 4 (Workflow & Testing): resend, drafts and templates, runs, import and watch (#271). **Next planned:** Milestone 5 (Persistence).
+**Current state:** Milestones 0–4 are complete. v1.0.0 shipped Milestone 4 (Workflow & Testing): resend, drafts and templates, runs, import and watch (#271). v1.0.1 fixes the ten findings of the v1.0.0 review (#298–#307). **Next planned:** Milestone 5 (Persistence).
 
 ---
 
