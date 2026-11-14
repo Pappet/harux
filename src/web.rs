@@ -609,17 +609,19 @@ fn refused(e: crate::send::SendError) -> Response {
 /// answer's JSON — off the async workers (#301). On a worker it holds up
 /// everything scheduled there, the MLLP listener's ACKs included: a filled
 /// preview of an 8 MB MDM delayed ACKs by up to 130 ms. `what` names the
-/// work in a `500` if the task panics.
+/// work in a `500` if the task panics (boxed: a `Response` is 128 bytes).
 async fn off_workers<T: Send + 'static>(
     what: &str,
     work: impl FnOnce() -> T + Send + 'static,
-) -> Result<T, Response> {
+) -> Result<T, Box<Response>> {
     tokio::task::spawn_blocking(work).await.map_err(|e| {
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            format!("Internal error while {what}: {e}"),
+        Box::new(
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Internal error while {what}: {e}"),
+            )
+                .into_response(),
         )
-            .into_response()
     })
 }
 
@@ -642,7 +644,7 @@ async fn message_draft(State(state): State<AppState>, Path(id): Path<String>) ->
     match made {
         Ok(Ok(response)) => response,
         Ok(Err(e)) => refused(e),
-        Err(response) => response,
+        Err(response) => *response,
     }
 }
 
@@ -758,7 +760,7 @@ async fn parse_draft(
             Json(crate::draft::decode_file(&body)).into_response()
         })
         .await
-        .unwrap_or_else(|response| response);
+        .unwrap_or_else(|response| *response);
     }
     let request: crate::draft::ParseRequest = match serde_json::from_slice(&body) {
         Ok(r) => r,
@@ -797,7 +799,7 @@ async fn parse_draft(
     match previewed {
         Ok(Ok(response)) => response,
         Ok(Err(e)) => refused(e),
-        Err(response) => response,
+        Err(response) => *response,
     }
 }
 
@@ -948,7 +950,7 @@ async fn build_draft(State(state): State<AppState>, body: Bytes) -> Response {
     {
         Ok(Ok(text)) => text,
         Ok(Err(e)) => return refused(e),
-        Err(response) => return response,
+        Err(response) => return *response,
     };
     let based_on = match state.sender.based_on(based_on.as_deref(), &written).await {
         Ok(m) => m,
@@ -966,7 +968,7 @@ async fn build_draft(State(state): State<AppState>, body: Bytes) -> Response {
     })
     .await;
     match built {
-        Err(response) => response,
+        Err(response) => *response,
         Ok(Err(e)) => refused(e),
         Ok(Ok(framed)) => (
             [
