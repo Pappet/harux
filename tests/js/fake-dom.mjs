@@ -52,6 +52,15 @@ export class El {
         for (const n of nodes) this.appendChild(n);
     }
     appendChild(c) { c.remove(); c.parent = this; this.children.push(c); return c; }
+    replaceChild(c, old) {
+        const i = this.children.indexOf(old);
+        if (i < 0) throw new Error('fake-dom: replaceChild of a node that is no child');
+        c.remove();
+        old.parent = null;
+        c.parent = this;
+        this.children[i] = c;
+        return old;
+    }
     insertBefore(c, ref) {
         c.remove();
         c.parent = this;
