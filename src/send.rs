@@ -710,8 +710,17 @@ impl Sender {
             }
             (None, Some(raw)) => {
                 // `set` is written into the draft's text once; its
-                // placeholders are filled in for every copy (`{{n}}`).
-                let (text, _) = crate::draft::apply_set(raw, &request.set)?;
+                // placeholders are filled in for every copy (`{{n}}`). Off
+                // the async workers: the text can be megabytes (#301).
+                let (raw, set) = (raw.clone(), request.set.clone());
+                let (text, _) =
+                    tokio::task::spawn_blocking(move || crate::draft::apply_set(&raw, &set))
+                        .await
+                        .map_err(|e| {
+                            SendError::Unprocessable(format!(
+                                "Internal error while writing the changes: {e}"
+                            ))
+                        })??;
                 let based_on = self.based_on(item.based_on.as_deref(), &text).await?;
                 // A label only: no control characters, cut (it reaches the log).
                 let template = item.template.as_deref().map(|t| {
