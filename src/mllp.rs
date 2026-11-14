@@ -322,7 +322,7 @@ async fn process_frame(
 fn reply_for(msg: &mut Hl7Message, peer: &str, stats: &MllpStats) -> Option<String> {
     if let Some(e) = &msg.parse_error {
         stats.parse_errors.fetch_add(1, Ordering::Relaxed);
-        warn!("Parse error from {}: {}", peer, e);
+        warn!("Parse error from {}: {}", peer, loggable(e));
         // NACK (AE = Application Error) with the actual reason in MSA-3 and
         // an ERR segment, so the sender's log says what was wrong without
         // opening Harux (#218). A parser panic is Harux's fault (207), any
@@ -384,6 +384,22 @@ pub fn ingest(payload: &[u8], peer: &str) -> Hl7Message {
 /// answers those with ERR-3 `207` instead of `100` — one constant, so the
 /// two can't drift apart (#266 review).
 const PARSER_PANIC_PREFIX: &str = "Internal error while parsing the message";
+
+/// A parse error, or a sentence that carries one, as a log line may hold it
+/// (#307): log lines carry metadata only, never content (AGENTS.md, sending
+/// rule 7), but some parse errors quote the message — "does not start with
+/// MSH" its first 20 characters, a parser panic whatever the panic says.
+/// The text is cut where a quoted excerpt starts; the stored `parse_error`
+/// and a NACK's MSA-3 keep it all.
+pub fn loggable(error: &str) -> &str {
+    if let Some(i) = error.find(PARSER_PANIC_PREFIX) {
+        return &error[..i + PARSER_PANIC_PREFIX.len()];
+    }
+    match error.find(": \"") {
+        Some(i) => &error[..i],
+        None => error,
+    }
+}
 
 fn ingest_with(
     payload: &[u8],
@@ -885,6 +901,34 @@ fn wrap_mllp(message: &[u8]) -> Vec<u8> {
 
 #[cfg(test)]
 mod tests {
+    /// #307: what a log line may hold of a parse error — never the
+    /// message's text.
+    #[test]
+    fn loggable_parse_errors_quote_no_message_text() {
+        let msg = ingest(b"PID|1||4711^^^HOSP^M\r", "10.0.0.1:5000");
+        let e = msg.parse_error.as_deref().unwrap();
+        assert!(
+            e.contains("4711"),
+            "the stored error keeps the excerpt: {e}"
+        );
+        assert_eq!(loggable(e), "Message does not start with MSH");
+        assert_eq!(
+            loggable(&format!(
+                "The draft does not parse: {e}. Set allow_invalid to send it anyway"
+            )),
+            "The draft does not parse: Message does not start with MSH"
+        );
+        let panic =
+            format!("{PARSER_PANIC_PREFIX}: byte index 3 is not a char boundary of `PID|é`");
+        assert_eq!(loggable(&panic), PARSER_PANIC_PREFIX);
+        // Errors without an excerpt are logged whole.
+        assert_eq!(loggable("Empty message"), "Empty message");
+        assert_eq!(
+            loggable("MSH-1 field separator 0x07 is not printable ASCII"),
+            "MSH-1 field separator 0x07 is not printable ASCII"
+        );
+    }
+
     use super::*;
 
     #[test]
