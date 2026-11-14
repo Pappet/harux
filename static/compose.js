@@ -534,12 +534,25 @@ function scheduleDraftPreview(d) {
     state.draftPreviewTimer = setTimeout(() => requestDraftPreview(d), DRAFT_PREVIEW_DELAY_MS);
 }
 
-async function requestDraftPreview(d, now = false) {
-    if (!d) return;
+// The same request still in flight — same draft, text and kind (filled or
+// as written) and no newer one since — is not sent again (#304): entering
+// the Diff tab asked twice for the filled preview, for an MDM the most
+// expensive request the editor makes (~30 MB of JSON for 8 MB).
+function requestDraftPreview(d, now = false) {
+    if (!d) return Promise.resolve();
     if (!now) clearTimeout(state.draftPreviewTimer);
     const fill = draftNeedsFilledPreview(d);
+    const f = state.draftPreviewInFlight;
+    if (f && f.draftId === d.id && f.raw === d.raw && f.fill === fill && f.seq === state.draftPreviewSeq) {
+        return f.promise;
+    }
     const seq = ++state.draftPreviewSeq;
-    const raw = d.raw;
+    const promise = fetchDraftPreview(d, d.raw, fill, seq);
+    state.draftPreviewInFlight = { draftId: d.id, raw: d.raw, fill, seq, promise };
+    return promise;
+}
+
+async function fetchDraftPreview(d, raw, fill, seq) {
     let entry;
     try {
         const resp = await fetch('/api/parse', {
@@ -553,6 +566,8 @@ async function requestDraftPreview(d, now = false) {
     } catch (e) {
         entry = { draftId: d.id, raw, filled: fill, data: null, error: e.message || String(e) };
     }
+    const f = state.draftPreviewInFlight;
+    if (f && f.seq === seq) state.draftPreviewInFlight = null;
     // Last request wins, and only for the draft still open.
     if (seq !== state.draftPreviewSeq || state.selectedDraftId !== d.id) return;
     state.draftPreview = entry;
