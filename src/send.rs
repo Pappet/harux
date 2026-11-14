@@ -969,7 +969,7 @@ impl Sender {
                         // Never tried, so not stored: counted and named.
                         warn!(
                             "Run {run_id}: message {n} could not be built: {}",
-                            e.message()
+                            crate::mllp::loggable(&e.message())
                         );
                         handle.update(|s| {
                             s.done += 1;
@@ -1103,8 +1103,8 @@ impl Sender {
             &inner.stats.rejected
         };
         counter.fetch_add(1, Ordering::Relaxed);
-        // Metadata only — never content.
-        let outcome = describe(delivery);
+        // Metadata only — never content (#307).
+        let outcome = describe_for_log(delivery);
         let d = &plan.destination;
         if failed {
             warn!(
@@ -1532,6 +1532,28 @@ fn describe(d: &Delivery) -> String {
     }
 }
 
+/// `describe` as a log line may hold it (#307, rule 7: metadata only). A
+/// failure the target answered — a response that is not HL7 or has no
+/// usable MSA — is named by its short reason and the response's size: its
+/// detail can quote the response (a parse error quotes the first 20
+/// characters). The detail stays in the stored delivery, where the UI shows
+/// it. A failure without a response (refused, timed out, TLS) is Harux's own
+/// text and is logged in full.
+fn describe_for_log(d: &Delivery) -> String {
+    match (d.state, d.response_size) {
+        (DeliveryState::Failed, Some(size)) => {
+            let ms = d
+                .latency_ms
+                .map_or(String::new(), |ms| format!(" in {ms} ms"));
+            format!(
+                "{} ({size} bytes of response){ms}",
+                d.error.as_deref().unwrap_or("failed")
+            )
+        }
+        _ => describe(d),
+    }
+}
+
 /// One exchange of a run: on `connection` if it is open, else on a new one
 /// (with TLS if the target uses it); write the stored bytes, read the
 /// response. If the kept connection turns out to be closed by the target
@@ -1891,6 +1913,30 @@ mod tests {
         let d = read_response(b"MSH|^~\\&|R|RF|||20260101||ADT^A01|X|P|2.5\r", "C1", 1);
         assert_eq!(d.state, DeliveryState::Failed);
         assert!(d.response_error.unwrap().contains("no MSA"));
+    }
+
+    /// #307: the log line of a send whose response does not parse holds no
+    /// text of the response; the stored delivery keeps the detail.
+    #[test]
+    fn the_log_line_of_a_response_that_is_not_hl7_quotes_none_of_it() {
+        let d = read_response(b"PID|1||4711^^^HOSP^M\r", "C1", 3);
+        assert!(
+            d.error_detail.as_deref().unwrap().contains("4711"),
+            "kept for the UI"
+        );
+        let line = describe_for_log(&d);
+        assert_eq!(line, "invalid response (21 bytes of response) in 3 ms");
+        assert!(!line.contains("PID") && !line.contains("4711"), "{line}");
+        // A failure without a response keeps its detail: it is Harux's text.
+        let refused = Delivery::failed("refused", "Connection refused by 10.0.0.1:2575", Some(1));
+        assert!(describe_for_log(&refused).contains("Connection refused by 10.0.0.1:2575"));
+        // An answer is logged as before.
+        let acked = read_response(
+            b"MSH|^~\\&|R|RF|||20260101||ACK|X|P|2.5\rMSA|AA|C1\r",
+            "C1",
+            2,
+        );
+        assert_eq!(describe_for_log(&acked), "AA in 2 ms");
     }
 
     #[test]

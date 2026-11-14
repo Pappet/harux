@@ -217,6 +217,41 @@ async fn two_messages_on_one_connection() {
     }
 }
 
+/// #302: asking whether a kept connection can take the next message does
+/// not wait — it was a zero timeout, and tokio's timer waits for its next
+/// millisecond tick, so every message of a run cost about 1 ms. Fifty
+/// checks of an open, quiet connection now take a fraction of that; a
+/// connection the target closed or wrote to unasked is still not reused.
+#[tokio::test]
+async fn checking_a_kept_connection_does_not_wait() {
+    let (addr, _frames) = fake(|mut s, _tx| async move {
+        // Quiet until the client is done, then write unasked and close.
+        let mut b = [0u8; 1];
+        let _ = s.read(&mut b).await;
+        let _ = s.write_all(b"unasked").await;
+    })
+    .await;
+    let mut c = mllp_client::Connection::open(
+        &addr.ip().to_string(),
+        addr.port(),
+        Duration::from_secs(2),
+        None,
+    )
+    .await
+    .unwrap();
+    let started = std::time::Instant::now();
+    for _ in 0..50 {
+        assert!(c.is_reusable().await, "open and quiet");
+    }
+    let took = started.elapsed();
+    assert!(took < Duration::from_millis(25), "50 checks took {took:?}");
+
+    // The target writes unasked: not reusable.
+    let _ = c.exchange(b"x", false, timeouts()).await;
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert!(!c.is_reusable().await, "a target that wrote unasked");
+}
+
 #[tokio::test]
 async fn no_wait_without_await_response() {
     let (addr, mut frames) = fake(|mut s, tx| async move {

@@ -2379,3 +2379,75 @@ async fn a_large_preview_runs_off_the_async_workers() {
         "the runtime stopped for {gap:?} of a {took:?} preview ({ticked} ticks): it ran on the async worker"
     );
 }
+
+/// A body that records whether anyone read it (#306).
+struct Watched(std::sync::Arc<std::sync::atomic::AtomicBool>);
+
+impl futures_core::Stream for Watched {
+    type Item = Result<Vec<u8>, std::io::Error>;
+    fn poll_next(
+        self: std::pin::Pin<&mut Self>,
+        _: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Option<Self::Item>> {
+        self.0.store(true, std::sync::atomic::Ordering::SeqCst);
+        std::task::Poll::Ready(Some(Ok(vec![b'{'; 1024 * 1024])))
+    }
+}
+
+/// #306: while sending is off, a route that takes a message answers `403`
+/// before its body is read — no permit taken, no byte read — and every
+/// route of sending is behind the same guard.
+#[tokio::test]
+async fn with_sending_off_a_large_body_is_refused_unread() {
+    let state = make_state();
+    for uri in [
+        "/api/send",
+        "/api/parse",
+        "/api/build",
+        "/api/import?name=a.hl7",
+    ] {
+        let read = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let res = create_router(state.clone())
+            .oneshot(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri(uri)
+                    .header("host", "10.1.2.3:8080")
+                    .header("content-type", "application/json")
+                    .header("content-length", (20 * 1024 * 1024).to_string())
+                    .body(Body::from_stream(Watched(std::sync::Arc::clone(&read))))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::FORBIDDEN, "{uri}");
+        assert!(
+            !read.load(std::sync::atomic::Ordering::SeqCst),
+            "{uri}: the body was read"
+        );
+    }
+    // Every permit is still free: none was taken for a refused request.
+    let permits: Vec<_> = (0..harux::send::LARGE_BODY_PERMITS)
+        .map(|_| state.sender.large_body_permit())
+        .collect();
+    assert!(permits.iter().all(Option::is_some), "a permit was kept");
+    // The rest of sending answers 403 too; the dictionary is reference data.
+    for (method, uri) in [
+        (Method::GET, "/api/send/config"),
+        (Method::GET, "/api/send/runs/r1"),
+        (Method::POST, "/api/send/runs/r1/cancel"),
+        (Method::GET, "/api/messages/m1/draft"),
+        (Method::GET, "/api/templates"),
+        (Method::GET, "/api/templates/t1"),
+    ] {
+        assert_eq!(
+            call(&state, method, uri).await.0,
+            StatusCode::FORBIDDEN,
+            "{uri}"
+        );
+    }
+    assert_eq!(
+        call(&state, Method::GET, "/api/dictionary/PID").await.0,
+        StatusCode::OK
+    );
+}
