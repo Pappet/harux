@@ -722,6 +722,20 @@ async function saveDraftAsFile() {
 
 // --- Rendering ---
 
+function draftChipHtml(d) {
+    const active = d.id === state.selectedDraftId ? ' active' : '';
+    const title = d.title || (d.origin.kind === 'file' ? d.origin.name : '') || 'Draft';
+    const dot = draftHasUnsentChanges(d) ? '<span class="unsent" title="Changed since the last send"></span>' : '';
+    const gone = d.originGone && d.references.length ? '<span class="gone" title="The message it was made from is no longer stored">\u26a0</span>' : '';
+    return `<span class="draft-chip${active}" role="button" tabindex="0" data-action="draft-open" data-draft-id="${escAttr(d.id)}" title="Open the draft">`
+        + `${d.type ? `<span class="t">${esc(d.type)}</span>` : ''}<span class="n">${esc(title)}</span>${gone}${dot}`
+        + `<button class="x" data-action="draft-delete" data-draft-id="${escAttr(d.id)}" title="Delete the draft" aria-label="Delete the draft">✕</button></span>`;
+}
+
+// Chips that did not change stay the same elements (#299): a field write
+// redraws the rail while the user may be pressing the mouse on a chip, and
+// a button replaced between mousedown and mouseup gets no click. Only a
+// changed chip is replaced; another list of drafts rebuilds the rail.
 function renderDraftRail() {
     const rail = document.getElementById('draft-rail');
     if (!rail) return;
@@ -731,16 +745,26 @@ function renderDraftRail() {
         rail.innerHTML = '';
         return;
     }
-    const chips = state.drafts.map((d) => {
-        const active = d.id === state.selectedDraftId ? ' active' : '';
-        const title = d.title || (d.origin.kind === 'file' ? d.origin.name : '') || 'Draft';
-        const dot = draftHasUnsentChanges(d) ? '<span class="unsent" title="Changed since the last send"></span>' : '';
-        const gone = d.originGone && d.references.length ? '<span class="gone" title="The message it was made from is no longer stored">\u26a0</span>' : '';
-        return `<span class="draft-chip${active}" role="button" tabindex="0" data-action="draft-open" data-draft-id="${escAttr(d.id)}" title="Open the draft">`
-            + `${d.type ? `<span class="t">${esc(d.type)}</span>` : ''}<span class="n">${esc(title)}</span>${gone}${dot}`
-            + `<button class="x" data-action="draft-delete" data-draft-id="${escAttr(d.id)}" title="Delete the draft" aria-label="Delete the draft">✕</button></span>`;
-    }).join('');
-    rail.innerHTML = `<span class="label">Drafts</span><div class="draft-rail-chips">${chips}</div>`;
+    const chips = state.drafts.map((d) => ({ id: d.id, html: draftChipHtml(d) }));
+    const box = rail.querySelector ? rail.querySelector('.draft-rail-chips') : null;
+    const shown = box ? Array.from(box.children) : [];
+    const sameList = box && shown.length === chips.length
+        && shown.every((el, i) => el.dataset && el.dataset.draftId === chips[i].id && el.draftChipHtml);
+    if (!sameList) {
+        rail.innerHTML = `<span class="label">Drafts</span><div class="draft-rail-chips">${chips.map((c) => c.html).join('')}</div>`;
+        const built = rail.querySelector ? rail.querySelector('.draft-rail-chips') : null;
+        if (built) Array.from(built.children).forEach((el, i) => { if (chips[i]) el.draftChipHtml = chips[i].html; });
+        return;
+    }
+    shown.forEach((el, i) => {
+        if (el.draftChipHtml === chips[i].html) return;
+        const holder = document.createElement('div');
+        holder.innerHTML = chips[i].html;
+        const chip = holder.firstElementChild;
+        if (!chip) return;
+        chip.draftChipHtml = chips[i].html;
+        box.replaceChild(chip, el);
+    });
 }
 
 function draftOriginHtml(d) {
@@ -864,14 +888,21 @@ function renderDraftHeader() {
     if (state.sendMenu && typeof renderSendMenu === 'function') renderSendMenu();
 }
 
-// Re-render only the title row's buttons, keeping keyboard focus.
+// Re-render only the title row's buttons, keeping keyboard focus — and only
+// when they change (#299): after a field write they normally do not, and a
+// Send button replaced between mousedown and mouseup gets no click. The
+// markup is compared as the element serializes it now, so content another
+// view wrote in between (a message's actions) is always replaced.
 function updateDraftActions() {
     const d = openDraftObject();
     const el = document.getElementById('detail-actions');
     if (!d || !el) return;
+    const html = draftActionsHtml(d);
+    if (el.draftActions && el.draftActions.html === html && el.draftActions.shown === el.innerHTML) return;
     const active = document.activeElement;
     const focused = active && el.contains && el.contains(active) ? active.dataset.action : null;
-    el.innerHTML = draftActionsHtml(d);
+    el.innerHTML = html;
+    el.draftActions = { html, shown: el.innerHTML };
     if (focused) {
         const again = el.querySelector(`[data-action="${focused}"]`);
         if (again && again.focus) again.focus();
@@ -1130,7 +1161,9 @@ function buildDraftFieldRow(segName, index, path, value, description, datatype, 
         input.dataset.fieldPath = path;
         input.dataset.written = value;
         input.setAttribute('aria-label', `${segName}-${index}${description ? ' ' + description : ''}`);
-        input.addEventListener('change', () => writeDraftField(path, input.value));
+        // The row is built for the open draft: its writes stay with it (#303).
+        const draftId = state.selectedDraftId;
+        input.addEventListener('change', () => writeDraftField(path, input.value, draftId));
         tdVal.appendChild(input);
         syncPlaceholderMark(input, path);
     }
@@ -1163,14 +1196,26 @@ function syncPlaceholderMark(input, path) {
 // Write `value` into the field `path` of the open draft. Writes are queued,
 // so two quick changes apply in order to the right text.
 let draftWriteChain = Promise.resolve();
-function writeDraftField(path, value) {
-    draftWriteChain = draftWriteChain.then(() => writeDraftFieldNow(path, value)).catch(() => {});
+// A write belongs to the draft whose input changed — bound by its ID when
+// the `change` fires, not to whichever draft is open when the write runs or
+// its answer arrives (#303).
+function writeDraftField(path, value, draftId = state.selectedDraftId) {
+    draftWriteChain = draftWriteChain.then(() => writeDraftFieldNow(path, value, draftId)).catch(() => {});
     return draftWriteChain;
 }
 
-async function writeDraftFieldNow(path, value) {
-    const d = openDraftObject();
+async function writeDraftFieldNow(path, value, draftId = state.selectedDraftId) {
+    const d = findDraft(draftId);
     if (!d) return false;
+    // The inputs on screen are the open draft's: only then is one reverted
+    // or redrawn. The text is written either way.
+    const isOpen = () => state.selectedDraftId === d.id;
+    const where = () => (isOpen() ? '' : ` in the draft ${d.title || d.type || 'you left'}`);
+    const refuse = (text, type) => {
+        showToast(text, type);
+        if (isOpen()) revertDraftInput(path);
+        return false;
+    };
     // The text the field is written into: if the draft changed meanwhile
     // (the Raw tab), the answer would overwrite that change (#291 review).
     const base = d.raw;
@@ -1182,31 +1227,28 @@ async function writeDraftFieldNow(path, value) {
             body: JSON.stringify({ raw: base, set: { [path]: value }, based_on: d.basedOn }),
         });
     } catch (e) {
-        showToast(`${path} not written: ` + (e.message || e));
-        revertDraftInput(path);
-        return false;
+        return refuse(`${path} not written${where()}: ` + (e.message || e));
     }
     if (!resp.ok) {
-        showToast(`${path} not written: ${(await resp.text()) || `HTTP ${resp.status}`}`);
-        revertDraftInput(path);
-        return false;
+        return refuse(`${path} not written${where()}: ${(await resp.text()) || `HTTP ${resp.status}`}`);
     }
     const data = await resp.json();
-    if (state.selectedDraftId !== d.id) return false;
+    if (!findDraft(d.id)) return false; // deleted meanwhile
     if (d.raw !== base) {
-        showToast(`${path} not written: the draft changed meanwhile — write it again`, 'info');
-        revertDraftInput(path);
-        return false;
+        return refuse(`${path} not written${where()}: the draft changed meanwhile — write it again`, 'info');
     }
     d.raw = data.raw;
     if (state.draftSendAnyway === d.id) state.draftSendAnyway = null;
     saveDrafts();
-    state.draftPreviewSeq++; // an older preview in flight must not win
-    state.draftPreview = { draftId: d.id, raw: d.raw, filled: false, data, error: null };
     const m = data.message;
     d.type = m.parse_error ? '' : m.message_type || '';
     d.title = m.patient_name || m.patient_id || '';
     renderDraftRail();
+    // Another draft or a message is open: the value is in the text and
+    // shows when this draft is opened again.
+    if (!isOpen()) return true;
+    state.draftPreviewSeq++; // an older preview in flight must not win
+    state.draftPreview = { draftId: d.id, raw: d.raw, filled: false, data, error: null };
     renderDraftHeader();
     if (state.activeTab === 'parsed') refreshDraftSegmentsInPlace(path, value, data);
     return true;

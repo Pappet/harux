@@ -792,3 +792,114 @@ test('an import that will not fit says it pushes out older messages (#294 review
     assert.equal(ctx.importRoomNote(3 * MB, undefined, 10 * MB), '', 'no stats, no note');
 });
 
+
+// --- #299, #303: field writes and what is on screen ---
+
+test('a field write stays with its draft when another one is opened before the answer (#303)', async () => {
+    const pending = [];
+    const { ctx, state, toasts } = setup({
+        responses: { '/api/parse': (url, opts) => new Promise((resolve) => pending.push({ body: JSON.parse(opts.body), resolve })) },
+    });
+    for (const f of ['renderDraftRail', 'renderDraftHeader', 'refreshDraftSegmentsInPlace']) ctx[f] = () => {};
+    let reverted = null;
+    ctx.revertDraftInput = (path) => { reverted = path; };
+    const a = ctx.addDraft({ raw: 'MSH|^~\\&|A\nPID|||1||Old' });
+    const b = ctx.addDraft({ raw: 'MSH|^~\\&|B\nPID|||2||Other' });
+    state.selection = { kind: 'draft', id: a.id };
+    const answer = (raw, name) => ({ ok: true, json: async () => previewOf(raw, { message_type: 'ADT^A01', patient_name: name }), text: async () => '' });
+
+    // Changed in A; B is opened while the write is in flight.
+    const writing = ctx.writeDraftField('PID-5', 'New');
+    await new Promise((r) => setImmediate(r));
+    state.selection = { kind: 'draft', id: b.id };
+    const bPreview = { draftId: b.id, raw: b.raw, filled: false, data: previewOf(b.raw, {}), error: null };
+    state.draftPreview = bPreview;
+    pending[0].resolve(answer('MSH|^~\\&|A\nPID|||1||New', 'New'));
+    await writing;
+    assert.equal(a.raw, 'MSH|^~\\&|A\nPID|||1||New', 'A holds the new value');
+    assert.equal(a.title, 'New');
+    assert.equal(b.raw, 'MSH|^~\\&|B\nPID|||2||Other', 'B is untouched');
+    assert.equal(state.draftPreview, bPreview, 'the open draft keeps its preview');
+    assert.equal(reverted, null, 'no input of B is touched');
+    assert.equal(toasts.length, 0);
+
+    // Two writes queued in A, then B is opened: both land in A, B never changes.
+    state.selection = { kind: 'draft', id: a.id };
+    const first = ctx.writeDraftField('PID-5', 'One');
+    ctx.writeDraftField('PID-7', 'Two');
+    state.selection = { kind: 'draft', id: b.id };
+    await new Promise((r) => setImmediate(r));
+    assert.equal(pending[1].body.raw, a.raw, 'the first write is A\'s');
+    pending[1].resolve(answer('MSH|^~\\&|A\nPID|||1||One', 'One'));
+    await first;
+    await new Promise((r) => setImmediate(r));
+    assert.equal(pending[2].body.raw, 'MSH|^~\\&|A\nPID|||1||One', 'the queued write is A\'s too');
+    assert.deepEqual(plain(pending[2].body.set), { 'PID-7': 'Two' });
+    pending[2].resolve(answer('MSH|^~\\&|A\nPID|||1||One|||Two', 'One'));
+    await vm.runInContext('draftWriteChain', ctx);
+    assert.equal(a.raw, 'MSH|^~\\&|A\nPID|||1||One|||Two');
+    assert.equal(b.raw, 'MSH|^~\\&|B\nPID|||2||Other');
+
+    // A refused write of a draft that is not open says which draft.
+    state.selection = { kind: 'message', id: 'm1' };
+    const refused = ctx.writeDraftFieldNow('PID-5', 'x', a.id);
+    pending[3].resolve({ ok: false, status: 422, text: async () => 'PID-5: no' });
+    assert.equal(await refused, false);
+    assert.match(toasts.at(-1)[0], /^PID-5 not written in the draft One: PID-5: no/);
+    assert.equal(reverted, null, 'the message on screen has no draft inputs');
+});
+
+test('a field write leaves the Send button and unchanged rail chips alone (#299)', async () => {
+    const { ctx, state, byId } = setup({
+        responses: { '/api/parse': okJson(previewOf('MSH|^~\\&|A\nPID|||1||Doe', { message_type: 'ADT^A01', patient_name: 'Doe' })) },
+    });
+    ctx.refreshDraftSegmentsInPlace = () => {};
+    const a = ctx.addDraft({ raw: 'MSH|^~\\&|A\nPID|||1||Old', type: 'ADT^A01', title: 'Old' });
+    const b = ctx.addDraft({ raw: 'MSH|^~\\&|B', type: 'ORU^R01', title: 'Other' });
+    state.selection = { kind: 'draft', id: a.id };
+    state.lastTargetId = 'loopback';
+
+    // The title row: count every write of its markup.
+    const actions = byId('detail-actions');
+    let html = '';
+    let writes = 0;
+    Object.defineProperty(actions, 'innerHTML', { get: () => html, set: (v) => { html = v; writes += 1; } });
+    ctx.renderDraftHeader();
+    assert.equal(writes, 1);
+    assert.match(html, /data-action="draft-send"/);
+
+    // The rail as a browser builds it: one element per chip. A parsed chip
+    // comes from a holder <div>, as `renderDraftRail` makes one.
+    const rail = byId('draft-rail');
+    const box = new El('draft-rail-chips');
+    rail.appendChild(box);
+    const chipFor = (d, h) => {
+        const el = new El('draft-chip');
+        el.dataset.draftId = d.id;
+        el.draftChipHtml = h;
+        return el;
+    };
+    const chipA = box.appendChild(chipFor(a, ctx.draftChipHtml(a)));
+    const chipB = box.appendChild(chipFor(b, ctx.draftChipHtml(b)));
+    const make = ctx.document.createElement;
+    ctx.document.createElement = (tag) => {
+        const el = make(tag);
+        if (tag === 'div') {
+            Object.defineProperty(el, 'innerHTML', { set: (v) => { const id = /data-draft-id="([^"]+)"/.exec(v)[1]; el.appendChild(chipFor({ id }, v)); } });
+        }
+        return el;
+    };
+
+    assert.equal(await ctx.writeDraftFieldNow('PID-5', 'Doe'), true);
+    assert.equal(writes, 1, 'the title row\'s buttons are the same elements');
+    assert.equal(box.children[1], chipB, 'an unchanged chip is the same element');
+    assert.notEqual(box.children[0], chipA, 'the changed chip (its title) is replaced');
+    assert.equal(box.children[0].dataset.draftId, a.id);
+    assert.match(box.children[0].draftChipHtml, /Doe/);
+
+    // Another view wrote the title row meanwhile: it is redrawn.
+    html = '<button data-action="resend">Resend</button>';
+    ctx.renderDraftHeader();
+    assert.equal(writes, 2);
+    assert.match(html, /data-action="draft-send"/);
+});
