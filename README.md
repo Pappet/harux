@@ -37,19 +37,19 @@ It receives, inspects and — once switched on — sends messages as a central s
 - **Validation Engine** — warnings for missing required segments (red) and fields (amber) per message type, and for invalid NM/DT/TS/SI values such as impossible dates (blue); non-blocking, all messages are stored regardless
 - **Validation Filter** — one-click filter to show only messages with warnings or errors; also supports `has:warnings` / `has:errors` search prefixes
 - **Segment Diff** — pin any message as a reference and compare it field-by-field, with repeated segments paired by name and occurrence; optional toggle to hide always-changing dynamic fields (MSH-7, MSH-10)
-- **Search & Filter** — global shortcut `Cmd+K` to search the loaded messages by message type, patient name, facility, message control ID, source IP
+- **Search & Filter** — global shortcut `Cmd+K` to search the loaded messages by message type, patient name or ID, facility, message control ID, source IP and tags; `is:sent` / `is:received` narrow it to one direction, and older messages can be searched on the server
 - **Bookmark & Tag** — bookmark important messages, add custom text tags; bookmarks are protected from eviction within a configurable share of the store (`store.bookmark_budget_percent`, default 50 %) and survive a page reload
 - **Session-based Views** — each developer sees their own filters, selection, and scroll position
 - **Source Rail** — always-visible rail of color-coded source chips to instantly visually distinguish and filter by sender system/IP
 - **Smart Store** — in-memory with configurable capacity and dual eviction (count + real memory size); messages are lost on restart
-- **HL7 Export & Import** — download every stored message as one MLLP-framed `.hl7` file, byte for byte as received, ready to replay with any MLLP sender — and load such a file back into the list (*New message → From a file*)
+- **HL7 Export & Import** — download every stored message as one MLLP-framed `.hl7` file, byte for byte as received, ready to replay with any MLLP sender — and, with sending on, load such a file back into the list (*New message → From a file*)
 - **Resend** *(off until `send.enabled = true`)* — send a stored message again, byte for byte or with a new control ID and the current time, to a target from your own list (kept in your browser, with *This Harux* built in); plain MLLP or TLS with certificate checks; *ask before sending* for production systems. Every send is a row of the list with its response (`AA`, `AE`, a timeout, …) and the round-trip time
-- **Message Editor** — open any message as a draft, or start one blank, from a file, the clipboard or a **template** (ADT, ORM, ORU, SIU, MDM built in, plus the site's own directory); edit the raw text or field by field with live validation and the dictionary's empty fields; placeholders such as `{{now}}`, `{{id}}`, `{{n}}`; Base64 attachments stay on the server
-- **Send Runs** — resend the messages the filters show, oldest first, or repeat a draft n times, over one connection with a progress bar and *Cancel*
+- **Message Editor** *(with sending on)* — open any message as a draft, or start one blank, from a file, the clipboard or a **template** (ADT, ORM, ORU, SIU, MDM built in, plus the site's own directory); edit the raw text or field by field with live validation and the dictionary's empty fields; placeholders such as `{{now}}`, `{{id}}`, `{{n}}`; Base64 attachments stay on the server
+- **Send Runs** *(with sending on)* — resend the messages the filters show, oldest first, or repeat a draft n times, over one connection with a progress bar and *Cancel*
 - **Watch** — a bell that counts new messages matching a filter in the tab's title while you work elsewhere, with an optional sound and desktop notification
 - **Resizable Panels** — drag splitter between message list and detail view
 - **Configurable** — `harux.toml` for ports, bind addresses, allowed host names, memory limits, timeouts, log level and log retention; a broken configuration stops the start with a clear error
-- **Network-aware** — refuses cross-site and DNS-rebinding requests; no authentication or TLS, so place it on a trusted network (see [SECURITY.md](SECURITY.md))
+- **Network-aware** — refuses cross-site and DNS-rebinding requests; no authentication, and no TLS for incoming connections, so place it on a trusted network (see [SECURITY.md](SECURITY.md))
 - **Single Binary** — frontend embedded via `rust-embed`, zero runtime dependencies
 
 ---

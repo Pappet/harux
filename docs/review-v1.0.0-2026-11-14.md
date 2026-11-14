@@ -5,6 +5,10 @@
 > gelten für diesen Stand. Für die aktuellen Regeln siehe
 > [`AGENTS.md`](../AGENTS.md), die [Roadmap](ROADMAP.md) und das
 > [Changelog](../CHANGELOG.md).
+>
+> **Nachtrag (14.11.2026):** Alle zehn Befunde sind inzwischen behoben
+> (#309, #311, #312, #313, #314); die Issues #298–#307 sind geschlossen.
+> Die Beschreibungen und Messwerte unten zeigen den Stand davor.
 
 > Review der Änderungen von Milestone 4 (Senden, Drafts, Templates, Runs,
 > Import, Watch) und Lasttest des Release-Builds, verglichen mit v0.9.0.

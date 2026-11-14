@@ -64,7 +64,7 @@ Examples:
 
 - Add tests for new behavior and bug fixes
 - Unit tests go in the same file as the code (`#[cfg(test)]` module)
-- Integration tests go in `tests/` (real TCP in `tests/mllp_tcp.rs`, the real binary in `tests/config_startup.rs`, the REST API in `tests/web_api.rs`)
+- Integration tests go in `tests/` (real TCP in `tests/mllp_tcp.rs`, sending over TCP and TLS in `tests/send_tcp.rs`, the real binary in `tests/config_startup.rs`, the REST API in `tests/web_api.rs`)
 - Frontend logic is tested with `node:test` in `tests/js/` — no npm, no dependencies
 - Run the full suite before submitting: `cargo test` and `node --test 'tests/js/*.test.mjs'`
 
@@ -91,14 +91,21 @@ PRs will be reviewed as time allows. Small, focused PRs are reviewed faster than
 ```
 src/
 ├── main.rs          # Entry point: config, logging, both servers, shutdown
+├── lib.rs           # Library crate root: the modules, as the integration tests use them
 ├── config.rs        # harux.toml + environment, validated at startup
 ├── logging.rs       # Daily log file with retention
-├── mllp.rs          # MLLP TCP listener, framing, ACK/NACK
+├── mllp.rs          # MLLP TCP listener, framing, ACK/NACK, import
+├── mllp_client.rs   # Sending side of MLLP: connect, one exchange
+├── send.rs          # Sending: checks, runs, outcome of every send
+├── tls.rs           # TLS for outgoing connections
+├── draft.rs         # Drafts: draft text, preview, building the bytes
+├── templates.rs     # Built-in and site templates
 ├── store.rs         # In-memory message store with eviction and broadcast
 ├── web.rs           # Axum REST API, WebSocket, export, security headers
 ├── dictionary.rs    # Embedded HL7 v2.5.1 field/segment dictionary
 ├── validation.rs    # Required segments/fields and datatype checks
-└── hl7/             # Parser, charset decoding, escapes, types, message-type registry
+├── hl7/             # Parser, charset decoding, escapes, field overrides, types, message-type registry
+└── assets/          # Embedded dictionary, message-type registry and built-in templates
 static/              # Web UI (vanilla JS, embedded at compile time)
 tests/               # Integration tests, JS tests, HL7 fixtures, manual test scripts
 ```
