@@ -845,7 +845,7 @@ test('a field write stays with its draft when another one is opened before the a
     const refused = ctx.writeDraftFieldNow('PID-5', 'x', a.id);
     pending[3].resolve({ ok: false, status: 422, text: async () => 'PID-5: no' });
     assert.equal(await refused, false);
-    assert.match(toasts.at(-1)[0], /^PID-5 not written in the draft One: PID-5: no/);
+    assert.match(toasts.at(-1)[0], /^PID-5 not written \(draft "One" is not open\): PID-5: no/);
     assert.equal(reverted, null, 'the message on screen has no draft inputs');
 });
 
@@ -873,10 +873,13 @@ test('a field write leaves the Send button and unchanged rail chips alone (#299)
     const rail = byId('draft-rail');
     const box = new El('draft-rail-chips');
     rail.appendChild(box);
+    let focused = null;
     const chipFor = (d, h) => {
         const el = new El('draft-chip');
         el.dataset.draftId = d.id;
+        el.dataset.action = 'draft-open';
         el.draftChipHtml = h;
+        el.focus = () => { focused = el; };
         return el;
     };
     const chipA = box.appendChild(chipFor(a, ctx.draftChipHtml(a)));
@@ -890,8 +893,10 @@ test('a field write leaves the Send button and unchanged rail chips alone (#299)
         return el;
     };
 
+    ctx.document.activeElement = chipA; // the keyboard is on A's chip
     assert.equal(await ctx.writeDraftFieldNow('PID-5', 'Doe'), true);
     assert.equal(writes, 1, 'the title row\'s buttons are the same elements');
+    assert.equal(focused, box.children[0], 'the focus moves to the new chip');
     assert.equal(box.children[1], chipB, 'an unchanged chip is the same element');
     assert.notEqual(box.children[0], chipA, 'the changed chip (its title) is replaced');
     assert.equal(box.children[0].dataset.draftId, a.id);

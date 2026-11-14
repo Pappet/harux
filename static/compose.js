@@ -722,6 +722,10 @@ async function saveDraftAsFile() {
 
 // --- Rendering ---
 
+// Must render the same markup for the same draft and state — no timestamp,
+// no random ID: `renderDraftRail` keeps a chip only while its markup is
+// unchanged (#299), and markup that changes on every render would replace
+// the chip under the mouse again. The #299 test (`writes`) is the tripwire.
 function draftChipHtml(d) {
     const active = d.id === state.selectedDraftId ? ' active' : '';
     const title = d.title || (d.origin.kind === 'file' ? d.origin.name : '') || 'Draft';
@@ -746,13 +750,13 @@ function renderDraftRail() {
         return;
     }
     const chips = state.drafts.map((d) => ({ id: d.id, html: draftChipHtml(d) }));
-    const box = rail.querySelector ? rail.querySelector('.draft-rail-chips') : null;
+    const box = rail.querySelector('.draft-rail-chips');
     const shown = box ? Array.from(box.children) : [];
     const sameList = box && shown.length === chips.length
         && shown.every((el, i) => el.dataset && el.dataset.draftId === chips[i].id && el.draftChipHtml);
     if (!sameList) {
         rail.innerHTML = `<span class="label">Drafts</span><div class="draft-rail-chips">${chips.map((c) => c.html).join('')}</div>`;
-        const built = rail.querySelector ? rail.querySelector('.draft-rail-chips') : null;
+        const built = rail.querySelector('.draft-rail-chips');
         if (built) Array.from(built.children).forEach((el, i) => { if (chips[i]) el.draftChipHtml = chips[i].html; });
         return;
     }
@@ -763,7 +767,15 @@ function renderDraftRail() {
         const chip = holder.firstElementChild;
         if (!chip) return;
         chip.draftChipHtml = chips[i].html;
+        // The chip, or its ✕, may have the keyboard focus: it moves to the
+        // same control of the new chip, as `updateDraftActions` keeps it.
+        const active = document.activeElement;
+        const focused = active && el.contains(active) ? (active === el ? el : active).dataset.action : null;
         box.replaceChild(chip, el);
+        if (focused) {
+            const again = chip.dataset.action === focused ? chip : chip.querySelector(`[data-action="${focused}"]`);
+            if (again && again.focus) again.focus();
+        }
     });
 }
 
@@ -819,6 +831,8 @@ function draftMetaHtml(d) {
     return items.join('<span class="sep">·</span>');
 }
 
+// Deterministic like `draftChipHtml`: `updateDraftActions` skips unchanged
+// markup, which keeps the Send button under the mouse (#299).
 function draftActionsHtml(d) {
     const target = draftTarget(d);
     const busy = state.sending ? ' aria-disabled="true"' : '';
@@ -1198,7 +1212,9 @@ function syncPlaceholderMark(input, path) {
 let draftWriteChain = Promise.resolve();
 // A write belongs to the draft whose input changed — bound by its ID when
 // the `change` fires, not to whichever draft is open when the write runs or
-// its answer arrives (#303).
+// its answer arrives (#303). Without `draftId` it is the open draft at the
+// time of the call: a caller that passes none must be acting on the open
+// draft's input (the focused field, a quick value).
 function writeDraftField(path, value, draftId = state.selectedDraftId) {
     draftWriteChain = draftWriteChain.then(() => writeDraftFieldNow(path, value, draftId)).catch(() => {});
     return draftWriteChain;
@@ -1210,7 +1226,11 @@ async function writeDraftFieldNow(path, value, draftId = state.selectedDraftId) 
     // The inputs on screen are the open draft's: only then is one reverted
     // or redrawn. The text is written either way.
     const isOpen = () => state.selectedDraftId === d.id;
-    const where = () => (isOpen() ? '' : ` in the draft ${d.title || d.type || 'you left'}`);
+    const where = () => {
+        if (isOpen()) return '';
+        const name = d.title || d.type;
+        return name ? ` (draft "${name}" is not open)` : ' (a draft that is not open)';
+    };
     const refuse = (text, type) => {
         showToast(text, type);
         if (isOpen()) revertDraftInput(path);
