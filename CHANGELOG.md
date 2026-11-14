@@ -9,6 +9,9 @@ and this project follows [Semantic Versioning](https://semver.org/lang/en/).
 
 ## [Unreleased]
 
+### Added
+- **Review and performance test of v1.0.0 (`docs/review-v1.0.0-2026-11-14.md`)** — a review of the Milestone 4 changes and a load test of the release build, compared with v0.9.0. Receiving is as fast as before (about 38,000 small messages per second over eight connections on the test machine) and the new paths — sending, drafts, import — are fast. Ten findings are filed as issues, eight of them measured or reproduced in a browser: a run with changes builds every message before its limits are checked, so the store's memory limit can be bypassed (#298); a click on *Send* right after a field edit is lost (#299); kept drafts are erased by a second tab (#300); previews of large drafts run on the async workers and delay the listener's ACKs (#301); runs are limited to about 700 messages per second by a timer tick (#302); and five smaller ones (#303–#307). Docs only: no code or behaviour changes.
+
 ---
 
 ## [1.0.0] – 2026-11-13 – Workflow & Testing
