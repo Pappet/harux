@@ -390,7 +390,9 @@ const PARSER_PANIC_PREFIX: &str = "Internal error while parsing the message";
 /// rule 7), but some parse errors quote the message — "does not start with
 /// MSH" its first 20 characters, a parser panic whatever the panic says.
 /// The text is cut where a quoted excerpt starts; the stored `parse_error`
-/// and a NACK's MSA-3 keep it all.
+/// and a NACK's MSA-3 keep it all. The first `: "` is where an excerpt
+/// starts: Harux's error texts quote at most once, at their end — a new
+/// error that quotes earlier is cut there (#314 review).
 pub fn loggable(error: &str) -> &str {
     if let Some(i) = error.find(PARSER_PANIC_PREFIX) {
         return &error[..i + PARSER_PANIC_PREFIX.len()];
@@ -408,8 +410,9 @@ fn ingest_with(
 ) -> Hl7Message {
     // Bytes → text per MSH-18, with a fallback (and a warning on the
     // message) when the declared charset doesn't fit the bytes (#188).
-    let decoded = catch_panic(|| decode_payload(payload)).unwrap_or_else(|p| {
-        error!("Internal error while decoding a frame from {peer}: {p}");
+    let decoded = catch_panic(|| decode_payload(payload)).unwrap_or_else(|_| {
+        // Not the panic's text: it can quote the frame (#307, #314 review).
+        error!("Internal error while decoding a frame from {peer}; it is read as UTF-8");
         DecodedPayload {
             text: String::from_utf8_lossy(payload).into_owned(),
             declared: None,
@@ -441,7 +444,9 @@ fn parse_or_failed(
     parse: impl FnOnce(&str, &str) -> Result<Hl7Message, String>,
 ) -> Hl7Message {
     let parsed = catch_panic(|| parse(&text, peer)).unwrap_or_else(|p| {
-        error!("Internal error while parsing a frame from {peer}: {p}");
+        // The panic's text goes to the stored message (parse error, NACK),
+        // never to the log: it can quote the frame (#307, #314 review).
+        error!("Internal error while parsing a frame from {peer}; it is stored as a parse error");
         Err(format!("{PARSER_PANIC_PREFIX}: {p}"))
     });
     match parsed {
@@ -471,9 +476,45 @@ fn wire_form(payload: &[u8], raw: &str, encoding: &'static encoding_rs::Encoding
     WireForm::Original(payload.into())
 }
 
+thread_local! {
+    /// Set while `catch_panic` runs work on a message on this thread.
+    static IN_MESSAGE_WORK: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// The panic hook, installed once (#314 review): a panic while a message is
+/// decoded or parsed is logged with where it happened, not with what it
+/// says — a panic's text can quote the message (a string slice that misses
+/// a character boundary quotes the string), and the default hook would
+/// print it to stderr before `catch_unwind` catches it. The text is kept on
+/// the stored message. Every other panic goes to the hook that was there.
+fn install_panic_hook() {
+    static ONCE: std::sync::Once = std::sync::Once::new();
+    ONCE.call_once(|| {
+        let previous = std::panic::take_hook();
+        std::panic::set_hook(Box::new(move |info| {
+            if IN_MESSAGE_WORK.with(std::cell::Cell::get) {
+                let at = info.location().map_or_else(
+                    || "an unknown place".to_string(),
+                    |l| format!("{}:{}", l.file(), l.line()),
+                );
+                error!(
+                    "Panic at {at} while handling a message (its text is kept on the stored \
+                     message, not logged)"
+                );
+            } else {
+                previous(info);
+            }
+        }));
+    });
+}
+
 /// Run `f`, turning a panic into its message.
 fn catch_panic<T>(f: impl FnOnce() -> T) -> Result<T, String> {
-    std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)).map_err(|p| {
+    install_panic_hook();
+    let outer = IN_MESSAGE_WORK.with(|w| w.replace(true));
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(f));
+    IN_MESSAGE_WORK.with(|w| w.set(outer));
+    result.map_err(|p| {
         p.downcast_ref::<&str>()
             .map(|s| s.to_string())
             .or_else(|| p.downcast_ref::<String>().cloned())
@@ -901,6 +942,65 @@ fn wrap_mllp(message: &[u8]) -> Vec<u8> {
 
 #[cfg(test)]
 mod tests {
+    /// The log lines written while `f` runs on this thread.
+    fn logged<T>(f: impl FnOnce() -> T) -> (T, String) {
+        #[derive(Clone, Default)]
+        struct Captured(Arc<std::sync::Mutex<Vec<u8>>>);
+        impl std::io::Write for Captured {
+            fn write(&mut self, b: &[u8]) -> std::io::Result<usize> {
+                self.0.lock().unwrap().extend_from_slice(b);
+                Ok(b.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+        impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for Captured {
+            type Writer = Captured;
+            fn make_writer(&'a self) -> Captured {
+                self.clone()
+            }
+        }
+        let captured = Captured::default();
+        let subscriber = tracing_subscriber::fmt()
+            .with_writer(captured.clone())
+            .with_ansi(false)
+            .finish();
+        let out = tracing::subscriber::with_default(subscriber, f);
+        let text = String::from_utf8_lossy(&captured.0.lock().unwrap()).into_owned();
+        (out, text)
+    }
+
+    /// #314 review: a panic while a frame is parsed — its text quoting the
+    /// frame, as a string slice off a character boundary does — reaches
+    /// neither the log nor the panic hook's output; the stored message
+    /// keeps it.
+    #[test]
+    fn a_parser_panic_logs_where_it_happened_not_what_it_says() {
+        let (msg, log) = logged(|| {
+            ingest_with(
+                b"MSH|^~\\&|A|B|||20260101||ADT^A01|P1|P|2.5\r",
+                "10.0.0.1:5000",
+                |_, _| panic!("byte index 3 is not a char boundary of `PID|1||4711^^^HOSP`"),
+            )
+        });
+        assert!(
+            msg.parse_error.as_deref().unwrap().contains("4711"),
+            "kept on the message"
+        );
+        assert!(
+            log.contains("Panic at src/mllp.rs:"),
+            "where it happened: {log}"
+        );
+        assert!(
+            log.contains("Internal error while parsing a frame from 10.0.0.1:5000"),
+            "{log}"
+        );
+        assert!(!log.contains("4711") && !log.contains("PID|"), "{log}");
+        // A panic outside message work still goes to the previous hook.
+        assert!(!IN_MESSAGE_WORK.with(std::cell::Cell::get));
+    }
+
     /// #307: what a log line may hold of a parse error — never the
     /// message's text.
     #[test]
