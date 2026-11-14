@@ -130,7 +130,7 @@ hsl(260, 65%, 60%)  — Indigo      hsl(15,  90%, 58%)  — Coral
 
 ## 4. Animations & Transitions
 
-- **Hover/focus transitions:** `0.15s` for background color changes on buttons and list rows
+- **Hover/focus transitions:** short, on background, colour and border only: `0.15s` on the header's buttons, `0.12s` on the smaller controls (list controls, source chips, tabs, action and copy buttons), `0.1s` on list rows
 - **New message flash:** Row flashes `rgba(122, 162, 255, 0.15)` (the accent) and fades out over `0.6s`
 - **Toast notifications:** Slide in, auto-dismiss after a short delay
 

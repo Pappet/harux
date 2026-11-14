@@ -91,6 +91,7 @@ PRs will be reviewed as time allows. Small, focused PRs are reviewed faster than
 ```
 src/
 ├── main.rs          # Entry point: config, logging, both servers, shutdown
+├── lib.rs           # Library crate root: the modules, as the integration tests use them
 ├── config.rs        # harux.toml + environment, validated at startup
 ├── logging.rs       # Daily log file with retention
 ├── mllp.rs          # MLLP TCP listener, framing, ACK/NACK, import
