@@ -147,7 +147,7 @@ Limits are **config-driven** via `StoreConfig` (`src/config.rs`), not hardcoded 
 
 ### Sending (`src/send.rs`, `src/mllp_client.rs`)
 
-Off unless `send.enabled = true` (#272): every send route answers `403` and the UI shows nothing new. `POST /api/send` resends one stored message to the destination the request names; the server keeps no list of targets (each user keeps theirs in the browser). The rules:
+Off unless `send.enabled = true` (#272): every send route answers `403` and the UI shows nothing new. The routes of sending live in `sending_routes` (`src/web.rs`) behind one `route_layer`, `require_sending` (#306): it answers before the large-body permit is taken or a byte of the body is read — put a new route of sending there, never with a check of its own (`/api/dictionary` stays outside, it is reference data). `POST /api/send` resends one stored message to the destination the request names; the server keeps no list of targets (each user keeps theirs in the browser). The rules:
 
 1. **Everything Harux sends, or tries to send, is stored — before it connects** (`MessageStore::insert_sent`, delivery `pending`). A refused or timed-out send is a row too, and whatever the destination forwards because of the send is listed after it. Don't move the insert after the connect.
 2. **Unchanged means byte for byte:** an unchanged resend writes `wire_bytes()` (#230), borrowed from the stored sent message (`Arc`), never a re-encoding of `raw`.
