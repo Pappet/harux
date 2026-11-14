@@ -1,0 +1,5 @@
+# The built-in templates are embedded with include_str!: keep them LF on
+# every checkout, so a Windows build serves the same text as the others
+# (#297; templates::get normalizes the line ends as well). Only these: the
+# fixtures in tests/messages carry CR bytes on purpose and stay as they are.
+src/assets/templates/*.hl7 text eol=lf

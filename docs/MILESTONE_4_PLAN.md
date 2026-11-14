@@ -1,9 +1,10 @@
 # Milestone 4 — Workflow & Testing: implementation plan
 
-> **Status:** plan, 2026-11-12. Nothing in it is implemented yet. The owner
-> took the decisions of section 11 on 2026-11-12 and the plan is written to
-> them. One question is still open there, and one could not be answered yet;
-> the plan is built so that it does not have to be.
+> **Status:** done — released as v1.0.0 on 2026-11-13 (#271, M4-1 … M4-12).
+> This is now a historical document: what was built follows it, and the
+> rules that last are in `AGENTS.md` (*Sending*). The owner took the
+> decisions of section 11 on 2026-11-12; Q1 was answered on 2026-11-13;
+> Q2 did not have to be answered for the plan to work.
 >
 > **Planning document.** It names files, configuration keys and routes that do
 > not exist yet, so it is not among the documents `tests/doc_paths.rs` checks.
@@ -1104,7 +1105,7 @@ plan recommended; where the decision differs, the plan was rewritten.
 | D5 | Where do templates and drafts live? | Built-in set, a read-only directory, drafts in the browser | **As proposed** |
 | D6 | Loopback target on by default? | Yes | **Yes** |
 | D7 | How large may a run be? | 1,000 messages, a quarter of the store | **Set in `harux.toml`:** `send.max_run_messages`, `send.max_run_store_percent`, with those values as defaults |
-| D8 | Watch without desktop notifications on plain HTTP? | Yes | **Open** — the question was not clear; it is Q1 below |
+| D8 | Watch without desktop notifications on plain HTTP? | Yes | **Yes** — answered as Q1 on 2026-11-13 |
 | D9 | Import in this milestone? | Optional | **Yes**, M4-10 |
 | D10 | One release at the end, or one per stage? | v0.10.0 after stage 3 | **One release at the end, as v1.0.0** |
 | D11 | Is sending on or off after an update? (It became a question through D2.) | On, as D2 implies; off was named as the cautious choice | **Off for now**, to be looked at again later: `send.enabled = false` by default |
@@ -1113,7 +1114,7 @@ plan recommended; where the decision differs, the plan was rewritten.
 
 | # | Question | What the plan does until it is answered |
 |---|---|---|
-| Q1 | **Watch (was D8).** A browser shows its own notification window only for pages opened over HTTPS or on `localhost`; for `http://server:8080` it refuses. Harux can always count in the tab's title (`(3) Harux`) and play a sound. Is that enough, or must the notification window work, which means putting the web UI behind HTTPS? | Title counter and sound everywhere; the notification window where the browser allows it. Nothing else in the milestone depends on it |
+| Q1 | **Watch (was D8).** A browser shows its own notification window only for pages opened over HTTPS or on `localhost`; for `http://server:8080` it refuses. Harux can always count in the tab's title (`(3) Harux`) and play a sound. Is that enough, or must the notification window work, which means putting the web UI behind HTTPS? | **Answered 2026-11-13: title counter and sound are enough.** M4-11 shipped that way, with the notification window where the browser allows it |
 | Q2 | **The targets' certificates.** How are they issued — by a CA the Harux server already trusts, by a private CA, or self-signed — and does a target ask Harux for a certificate of its own? Asked on 2026-11-12; not known yet | Nothing has to be known in advance: M4-2 has a setting for each case and a failure reason that names the one that applies (5.10). Worth asking whoever runs Orchestra before M4-2 is tested against a real target |
 
 ---

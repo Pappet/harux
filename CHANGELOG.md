@@ -9,7 +9,14 @@ and this project follows [Semantic Versioning](https://semver.org/lang/en/).
 
 ## [Unreleased]
 
+---
+
+## [1.0.0] – 2026-11-13 – Workflow & Testing
+
+> Milestone 4 (#271): Harux sends as well as receives. Resend a stored message — byte for byte, or with a new control ID and the current time —, write or edit a message as a draft (in the Raw text or field by field), start one from a built-in or the site's own template, send the filtered list or a draft repeated in one run, load an exported file back into the list, all over plain MLLP or TLS and to targets every user keeps in their own browser. Everything Harux sends is a row of the shared list with its response. A watch tells a background tab about new messages that match a filter. **Sending is off until `send.enabled = true`**: an installation that does not switch it on looks and behaves as before, apart from the watch and the ACK time below.
+
 ### Upgrade Notes
+- **1.0.0 makes a promise:** the HTTP API (routes, request and response fields), the WebSocket events and the `harux.toml` keys are meant to stay; changes that break them will come with a major version. On a sent message, `received_at` is when Harux stored it (just before it connected) and `source_addr` is the destination — the names are kept for one shape of message across both directions; `direction` tells which it is. (#283)
 - **The ACKs Harux writes carry local time in MSH-7** (#288), no longer UTC: the host's time without an offset, as HL7 v2 means a time without one and as Orchestra and the other systems on the network write it — and as the `{{now}}` placeholder already did. On a CET host every ACK's MSH-7 moves one hour (two in summer) towards the sender's own times. `received_at` in the JSON and the UI is unchanged.
 - **New dependencies for outgoing TLS** (#273): `tokio-rustls` (rustls with the `ring` crypto provider) and `rustls-native-certs` — the first new crates since the "no new crates" rule, on the owner's decision D4. Harux stays one binary without OpenSSL at run time; the release binary grows by about 2.2 MB (Linux: 6.8 → 9.0 MB). Nothing is read from the certificate store or `[send.tls]` unless `send.enabled` is on.
 - **Nothing changes unless sending is switched on.** The new `[send]` section is off by default (`send.enabled = false`): every send route answers `403` and the UI looks as before. Once it is switched on, everyone who can open the web UI can make the server send HL7 messages to any host and port it reaches — limit that with `send.allowed_destinations` (see `SECURITY.md` → *Sending*). (#272)
@@ -34,6 +41,7 @@ and this project follows [Semantic Versioning](https://semver.org/lang/en/).
 - **Plan for Milestone 4 (Workflow & Testing)** — `docs/MILESTONE_4_PLAN.md` describes how sending, resending and editing messages become part of the existing window and architecture instead of separate dialogs: one message lifecycle (draft → sent → received), sent messages as rows of the shared list with their response where the ACK is shown, a target list for every user, TLS for outgoing connections, a switch in `harux.toml` that is off by default, limits, the API, the tests and twelve work packages (M4-1 … M4-12), to be released as v1.0.0. `docs/design/harux-m4-workbench.html` is the mockup, drawn with the application's stylesheet; `docs/ROADMAP.md` lists the work packages. Planning only: no code or behaviour changes. The owner's decisions are recorded in the plan's section 11.
 
 ### Fixed
+- **Built-in templates of a Windows build came out with `CR LF` line ends** (#297): they are embedded with `include_str!`, and Git on Windows checks the files out with `CR LF`, so a draft from a template carried `\r` in every line. The text is now normalized to the draft's `LF` form when a template is fetched, whatever the checkout — as a site template saved with `CR LF` already was — and a new `.gitattributes` keeps those files `LF` on every checkout. The Windows leg of the release build had failed on `main` since #292 for this reason. Found by the release builds of #297, which run the tests on Windows.
 - **One exchange no longer carries two clocks** (#288): a resent message with `{{now}}` had local time in MSH-7, Harux's ACK to it UTC — an hour apart on a CET host, two in summer, which misled anyone tracing an exchange by its timestamps or comparing Harux's ACKs with Orchestra's log. Both now come from one helper, `parser::hl7_timestamp` (local time, `YYYYMMDDHHMMSS`). A test runs the real binary in UTC+05:30 and checks the ACK's MSH-7.
 - **The web UI no longer fails to load when the browser blocks storage** (#277): `util.js` read `sessionStorage` at load without a guard; a browser that refuses storage threw there and the page stayed empty. Found by the draft storage tests.
 - **The web UI broke when opened over plain HTTP by address or name** (`http://<server>:8080`, the usual way): `static/util.js` called `crypto.randomUUID()`, which browsers provide only on HTTPS or `localhost`, so it threw while loading and left the constants below it uninitialized — the search filter failed (`Cannot access 'parsedQueryCache' before initialization`) and so did parts of the detail view. IDs now come from `newId()`, which falls back to `crypto.getRandomValues` (available everywhere). Opening the UI via `localhost` was not affected. (#274)
@@ -479,7 +487,8 @@ and this project follows [Semantic Versioning](https://semver.org/lang/en/).
 
 ---
 
-[Unreleased]: https://github.com/Pappet/harux/compare/v0.9.0...HEAD
+[Unreleased]: https://github.com/Pappet/harux/compare/v1.0.0...HEAD
+[1.0.0]: https://github.com/Pappet/harux/compare/v0.9.0...v1.0.0
 [0.9.0]: https://github.com/Pappet/harux/compare/v0.8.0...v0.9.0
 [0.8.0]: https://github.com/Pappet/harux/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/Pappet/harux/compare/v0.6.0...v0.7.0

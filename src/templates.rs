@@ -128,7 +128,10 @@ pub fn get(dir: Option<&Path>, id: &str) -> Option<Template> {
         let b = BUILTIN.iter().find(|b| b.key == key)?;
         return Some(Template {
             info: builtin_info(b),
-            raw: b.text.trim_end_matches('\n').to_owned(),
+            // Line ends as a draft has them, whatever the checkout the
+            // binary was built from wrote into the embedded file: Git on
+            // Windows turns them into CR LF (#297 CI).
+            raw: crate::draft::lines_lf(b.text),
             charset: None,
             encoding: "UTF-8",
             warning: None,
@@ -278,6 +281,22 @@ mod tests {
 
     /// Plan section 8: every built-in template parses without a warning once
     /// its placeholders are filled in.
+    /// #297 CI: a built-in template's text comes out with `LF` line ends
+    /// even when the checkout it was built from had `CR LF` (Git on Windows),
+    /// and without a line end at the end.
+    #[test]
+    fn built_in_templates_come_out_with_lf_line_ends() {
+        assert_eq!(
+            crate::draft::lines_lf("MSH|^~\\&|A\r\nPID|||1\r\n"),
+            "MSH|^~\\&|A\nPID|||1"
+        );
+        for b in BUILTIN {
+            let t = get(None, &format!("builtin:{}", b.key)).unwrap();
+            assert!(!t.raw.contains('\r'), "{}", b.key);
+            assert!(!t.raw.ends_with('\n'), "{}", b.key);
+        }
+    }
+
     #[test]
     fn built_in_templates_validate_once_filled_in() {
         let ctx = PlaceholderContext {
@@ -398,6 +417,10 @@ mod tests {
         assert_eq!(t.encoding, "windows-1252");
         assert_eq!(t.charset.as_deref(), Some("8859/1"));
         assert!(t.raw.ends_with("PID|||1||Müller"), "{:?}", t.raw);
+        // Saved with CR LF (Notepad on the server): LF lines like a draft
+        // (#297 review).
+        assert!(t.raw.contains("8859/1\nPID"), "{:?}", t.raw);
+        assert!(!t.raw.contains('\r'), "{:?}", t.raw);
         // Only keys of the listing: no path, no link, nothing outside.
         for id in [
             "site:../harux-templates-site.outside.hl7",
