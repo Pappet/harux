@@ -519,6 +519,9 @@ initWatch(); // #282
 // /api/send/config says sending is on.
 loadDrafts();
 loadSendConfig();
+// Kept drafts and targets are shared by the browser's tabs (#300): when
+// another tab writes them, this one takes the list as it is now.
+window.addEventListener('storage', onSharedStorage);
 
 initSplitter();
 // Set autoscroll visual state — toggleAutoscroll flips the value, so pre-flip it

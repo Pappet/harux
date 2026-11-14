@@ -19,6 +19,7 @@
 const DRAFTS_SESSION_KEY = 'harux_drafts';
 const DRAFTS_KEPT_KEY = 'harux_drafts_kept';
 const DRAFT_PREVIEW_DELAY_MS = 300; // the search's debounce
+const DRAFT_PREVIEW_STALE_MS = 30000; // a preview in flight longer is asked for anew (#313 review)
 const MAX_DRAFTS = 50;
 const MAX_DRAFT_HISTORY = 20;
 
@@ -112,16 +113,111 @@ function loadDrafts() {
         seen.add(d.id);
         return true;
     }).sort((x, y) => x.created - y.created);
+    state.keptSeen = new Set(kept.map((d) => d && d.id).filter(Boolean));
     if (state.selectedDraftId && !findDraft(state.selectedDraftId)) state.selection = null;
 }
 
 // Drafts made from real messages hold patient data: by default they stay in
 // this tab (sessionStorage) and reach the disk only when the user keeps one
 // (plan section 6).
+//
+// The tab's list is this tab's alone. The kept list is shared by every tab
+// of the browser (#300): it is merged with what is stored now — other tabs'
+// kept drafts stay and come into this tab, a draft deleted or no longer
+// kept here stays out, and one another tab took out is not written back.
 function saveDrafts() {
+    const removed = new Set(state.keptRemoved);
+    for (const d of state.drafts) if (!d.keep) removed.add(d.id);
+    const stored = readDraftStore(localStorage, DRAFTS_KEPT_KEY);
+    const { list, gone } = mergeStoredList(stored, state.drafts.filter((d) => d.keep), removed, state.keptSeen);
+    let changed = applyKeptGone(gone);
+    changed = adoptKeptDrafts(list) || changed;
     const okTab = writeDraftStore(sessionStorage, DRAFTS_SESSION_KEY, state.drafts.filter((d) => !d.keep));
-    const okKept = writeDraftStore(localStorage, DRAFTS_KEPT_KEY, state.drafts.filter((d) => d.keep));
+    const okKept = writeDraftStore(localStorage, DRAFTS_KEPT_KEY, list);
+    if (okKept) state.keptSeen = new Set(list.map((d) => d.id));
+    if (changed) renderDraftRail();
     return okTab && okKept;
+}
+
+// Kept drafts another tab took out of the list (deleted, or kept in its
+// tab only). The one open here stays, in this tab only — what is on the
+// screen is never taken away; the others go. True if anything changed.
+//
+// Another tab that only stopped keeping a draft (*Kept* switched off) holds
+// it in its own tab then; here it goes like a deleted one — the storage
+// cannot tell the two apart.
+function applyKeptGone(gone) {
+    if (!gone.size) return false;
+    let openKept = false;
+    const before = state.drafts.length;
+    state.drafts = state.drafts.filter((d) => {
+        if (!gone.has(d.id) || !d.keep) return true;
+        if (d.id !== state.selectedDraftId) return false;
+        d.keep = false;
+        openKept = true;
+        return true;
+    });
+    if (openKept) {
+        showToast('Another tab removed this draft from this computer — it stays in this tab until you close it', 'info');
+        renderDraftHeader();
+    }
+    return openKept || state.drafts.length !== before;
+}
+
+// The page's `storage` listener (registered in app.js, #300): another tab
+// wrote the kept drafts or the targets; `key === null` is a cleared storage.
+function onSharedStorage(e) {
+    if (e.storageArea && e.storageArea !== localStorage) return;
+    if (e.key === DRAFTS_KEPT_KEY || e.key === null) syncKeptDrafts(e.newValue);
+    if (e.key === TARGETS_KEY || e.key === null) syncTargets(e.newValue);
+}
+
+// Kept drafts of other tabs that this tab does not hold yet: added, in the
+// order they were made. True if any was added.
+function adoptKeptDrafts(list) {
+    let added = false;
+    for (const raw of list) {
+        if (findDraft(raw.id) || state.keptRemoved.has(raw.id)) continue;
+        const d = normalizeDraft(raw);
+        if (!d) continue;
+        d.keep = true;
+        state.drafts.push(d);
+        added = true;
+    }
+    if (added) state.drafts.sort((x, y) => x.created - y.created);
+    return added;
+}
+
+// Another tab wrote the kept list (a `storage` event, #300): every write is
+// already a merge, so it is the list as it is now. Kept drafts change to
+// what it holds — except the one open here, which this tab's next save
+// writes — new ones come in, and ones it no longer holds go as on a save.
+function syncKeptDrafts(text) {
+    let list;
+    try {
+        list = text ? JSON.parse(text) : [];
+    } catch (e) {
+        return;
+    }
+    if (!Array.isArray(list)) return;
+    const ids = new Set(list.map((d) => d && d.id).filter((id) => typeof id === 'string'));
+    const gone = new Set(state.drafts.filter((d) => d.keep && state.keptSeen.has(d.id) && !ids.has(d.id)).map((d) => d.id));
+    let changed = applyKeptGone(gone);
+    for (const raw of list) {
+        const d = raw && findDraft(raw.id);
+        if (!d || !d.keep || d.id === state.selectedDraftId) continue;
+        const now = normalizeDraft(raw);
+        if (now && JSON.stringify(now) !== JSON.stringify({ ...d, keep: now.keep })) {
+            Object.assign(d, now, { keep: true });
+            changed = true;
+        }
+    }
+    changed = adoptKeptDrafts(list.filter((d) => d && typeof d.id === 'string')) || changed;
+    state.keptSeen = ids;
+    if (changed) {
+        writeDraftStore(sessionStorage, DRAFTS_SESSION_KEY, state.drafts.filter((d) => !d.keep));
+        renderDraftRail();
+    }
 }
 
 function findDraft(id) {
@@ -366,6 +462,7 @@ function deleteDraft(id) {
     if (!d) return false;
     if (d.raw.trim() && draftHasUnsentChanges(d) && !confirm('Delete this draft? Its changes were not sent.')) return false;
     state.drafts = state.drafts.filter((x) => x.id !== id);
+    state.keptRemoved.add(id); // never merged back from the stored list (#300)
     saveDrafts();
     if (state.selectedDraftId === id) closeDraftView();
     renderDraftRail();
@@ -438,12 +535,29 @@ function scheduleDraftPreview(d) {
     state.draftPreviewTimer = setTimeout(() => requestDraftPreview(d), DRAFT_PREVIEW_DELAY_MS);
 }
 
-async function requestDraftPreview(d, now = false) {
-    if (!d) return;
+// The same request still in flight — same draft, text and kind (filled or
+// as written) and no newer one since — is not sent again (#304): entering
+// the Diff tab asked twice for the filled preview, for an MDM the most
+// expensive request the editor makes (~30 MB of JSON for 8 MB). The key
+// is everything the request body holds; a request older than
+// DRAFT_PREVIEW_STALE_MS is not waited for again (#313 review): one that
+// never settles must not leave the Diff tab on "Reading the draft…".
+function requestDraftPreview(d, now = false) {
+    if (!d) return Promise.resolve();
     if (!now) clearTimeout(state.draftPreviewTimer);
     const fill = draftNeedsFilledPreview(d);
+    const f = state.draftPreviewInFlight;
+    if (f && f.draftId === d.id && f.raw === d.raw && f.basedOn === d.basedOn && f.fill === fill
+        && f.seq === state.draftPreviewSeq && Date.now() - f.at < DRAFT_PREVIEW_STALE_MS) {
+        return f.promise;
+    }
     const seq = ++state.draftPreviewSeq;
-    const raw = d.raw;
+    const promise = fetchDraftPreview(d, d.raw, fill, seq);
+    state.draftPreviewInFlight = { draftId: d.id, raw: d.raw, basedOn: d.basedOn, fill, seq, at: Date.now(), promise };
+    return promise;
+}
+
+async function fetchDraftPreview(d, raw, fill, seq) {
     let entry;
     try {
         const resp = await fetch('/api/parse', {
@@ -457,6 +571,8 @@ async function requestDraftPreview(d, now = false) {
     } catch (e) {
         entry = { draftId: d.id, raw, filled: fill, data: null, error: e.message || String(e) };
     }
+    const f = state.draftPreviewInFlight;
+    if (f && f.seq === seq) state.draftPreviewInFlight = null;
     // Last request wins, and only for the draft still open.
     if (seq !== state.draftPreviewSeq || state.selectedDraftId !== d.id) return;
     state.draftPreview = entry;
@@ -722,6 +838,24 @@ async function saveDraftAsFile() {
 
 // --- Rendering ---
 
+// Must render the same markup for the same draft and state — no timestamp,
+// no random ID: `renderDraftRail` keeps a chip only while its markup is
+// unchanged (#299), and markup that changes on every render would replace
+// the chip under the mouse again. The #299 test (`writes`) is the tripwire.
+function draftChipHtml(d) {
+    const active = d.id === state.selectedDraftId ? ' active' : '';
+    const title = d.title || (d.origin.kind === 'file' ? d.origin.name : '') || 'Draft';
+    const dot = draftHasUnsentChanges(d) ? '<span class="unsent" title="Changed since the last send"></span>' : '';
+    const gone = d.originGone && d.references.length ? '<span class="gone" title="The message it was made from is no longer stored">\u26a0</span>' : '';
+    return `<span class="draft-chip${active}" role="button" tabindex="0" data-action="draft-open" data-draft-id="${escAttr(d.id)}" title="Open the draft">`
+        + `${d.type ? `<span class="t">${esc(d.type)}</span>` : ''}<span class="n">${esc(title)}</span>${gone}${dot}`
+        + `<button class="x" data-action="draft-delete" data-draft-id="${escAttr(d.id)}" title="Delete the draft" aria-label="Delete the draft">✕</button></span>`;
+}
+
+// Chips that did not change stay the same elements (#299): a field write
+// redraws the rail while the user may be pressing the mouse on a chip, and
+// a button replaced between mousedown and mouseup gets no click. Only a
+// changed chip is replaced; another list of drafts rebuilds the rail.
 function renderDraftRail() {
     const rail = document.getElementById('draft-rail');
     if (!rail) return;
@@ -731,16 +865,34 @@ function renderDraftRail() {
         rail.innerHTML = '';
         return;
     }
-    const chips = state.drafts.map((d) => {
-        const active = d.id === state.selectedDraftId ? ' active' : '';
-        const title = d.title || (d.origin.kind === 'file' ? d.origin.name : '') || 'Draft';
-        const dot = draftHasUnsentChanges(d) ? '<span class="unsent" title="Changed since the last send"></span>' : '';
-        const gone = d.originGone && d.references.length ? '<span class="gone" title="The message it was made from is no longer stored">\u26a0</span>' : '';
-        return `<span class="draft-chip${active}" role="button" tabindex="0" data-action="draft-open" data-draft-id="${escAttr(d.id)}" title="Open the draft">`
-            + `${d.type ? `<span class="t">${esc(d.type)}</span>` : ''}<span class="n">${esc(title)}</span>${gone}${dot}`
-            + `<button class="x" data-action="draft-delete" data-draft-id="${escAttr(d.id)}" title="Delete the draft" aria-label="Delete the draft">✕</button></span>`;
-    }).join('');
-    rail.innerHTML = `<span class="label">Drafts</span><div class="draft-rail-chips">${chips}</div>`;
+    const chips = state.drafts.map((d) => ({ id: d.id, html: draftChipHtml(d) }));
+    const box = rail.querySelector('.draft-rail-chips');
+    const shown = box ? Array.from(box.children) : [];
+    const sameList = box && shown.length === chips.length
+        && shown.every((el, i) => el.dataset && el.dataset.draftId === chips[i].id && el.draftChipHtml);
+    if (!sameList) {
+        rail.innerHTML = `<span class="label">Drafts</span><div class="draft-rail-chips">${chips.map((c) => c.html).join('')}</div>`;
+        const built = rail.querySelector('.draft-rail-chips');
+        if (built) Array.from(built.children).forEach((el, i) => { if (chips[i]) el.draftChipHtml = chips[i].html; });
+        return;
+    }
+    shown.forEach((el, i) => {
+        if (el.draftChipHtml === chips[i].html) return;
+        const holder = document.createElement('div');
+        holder.innerHTML = chips[i].html;
+        const chip = holder.firstElementChild;
+        if (!chip) return;
+        chip.draftChipHtml = chips[i].html;
+        // The chip, or its ✕, may have the keyboard focus: it moves to the
+        // same control of the new chip, as `updateDraftActions` keeps it.
+        const active = document.activeElement;
+        const focused = active && el.contains(active) ? (active === el ? el : active).dataset.action : null;
+        box.replaceChild(chip, el);
+        if (focused) {
+            const again = chip.dataset.action === focused ? chip : chip.querySelector(`[data-action="${focused}"]`);
+            if (again && again.focus) again.focus();
+        }
+    });
 }
 
 function draftOriginHtml(d) {
@@ -795,6 +947,8 @@ function draftMetaHtml(d) {
     return items.join('<span class="sep">·</span>');
 }
 
+// Deterministic like `draftChipHtml`: `updateDraftActions` skips unchanged
+// markup, which keeps the Send button under the mouse (#299).
 function draftActionsHtml(d) {
     const target = draftTarget(d);
     const busy = state.sending ? ' aria-disabled="true"' : '';
@@ -864,14 +1018,21 @@ function renderDraftHeader() {
     if (state.sendMenu && typeof renderSendMenu === 'function') renderSendMenu();
 }
 
-// Re-render only the title row's buttons, keeping keyboard focus.
+// Re-render only the title row's buttons, keeping keyboard focus — and only
+// when they change (#299): after a field write they normally do not, and a
+// Send button replaced between mousedown and mouseup gets no click. The
+// markup is compared as the element serializes it now, so content another
+// view wrote in between (a message's actions) is always replaced.
 function updateDraftActions() {
     const d = openDraftObject();
     const el = document.getElementById('detail-actions');
     if (!d || !el) return;
+    const html = draftActionsHtml(d);
+    if (el.draftActions && el.draftActions.html === html && el.draftActions.shown === el.innerHTML) return;
     const active = document.activeElement;
     const focused = active && el.contains && el.contains(active) ? active.dataset.action : null;
-    el.innerHTML = draftActionsHtml(d);
+    el.innerHTML = html;
+    el.draftActions = { html, shown: el.innerHTML };
     if (focused) {
         const again = el.querySelector(`[data-action="${focused}"]`);
         if (again && again.focus) again.focus();
@@ -1130,7 +1291,9 @@ function buildDraftFieldRow(segName, index, path, value, description, datatype, 
         input.dataset.fieldPath = path;
         input.dataset.written = value;
         input.setAttribute('aria-label', `${segName}-${index}${description ? ' ' + description : ''}`);
-        input.addEventListener('change', () => writeDraftField(path, input.value));
+        // The row is built for the open draft: its writes stay with it (#303).
+        const draftId = state.selectedDraftId;
+        input.addEventListener('change', () => writeDraftField(path, input.value, draftId));
         tdVal.appendChild(input);
         syncPlaceholderMark(input, path);
     }
@@ -1163,14 +1326,32 @@ function syncPlaceholderMark(input, path) {
 // Write `value` into the field `path` of the open draft. Writes are queued,
 // so two quick changes apply in order to the right text.
 let draftWriteChain = Promise.resolve();
-function writeDraftField(path, value) {
-    draftWriteChain = draftWriteChain.then(() => writeDraftFieldNow(path, value)).catch(() => {});
+// A write belongs to the draft whose input changed — bound by its ID when
+// the `change` fires, not to whichever draft is open when the write runs or
+// its answer arrives (#303). Without `draftId` it is the open draft at the
+// time of the call: a caller that passes none must be acting on the open
+// draft's input (the focused field, a quick value).
+function writeDraftField(path, value, draftId = state.selectedDraftId) {
+    draftWriteChain = draftWriteChain.then(() => writeDraftFieldNow(path, value, draftId)).catch(() => {});
     return draftWriteChain;
 }
 
-async function writeDraftFieldNow(path, value) {
-    const d = openDraftObject();
+async function writeDraftFieldNow(path, value, draftId = state.selectedDraftId) {
+    const d = findDraft(draftId);
     if (!d) return false;
+    // The inputs on screen are the open draft's: only then is one reverted
+    // or redrawn. The text is written either way.
+    const isOpen = () => state.selectedDraftId === d.id;
+    const where = () => {
+        if (isOpen()) return '';
+        const name = d.title || d.type;
+        return name ? ` (draft "${name}" is not open)` : ' (a draft that is not open)';
+    };
+    const refuse = (text, type) => {
+        showToast(text, type);
+        if (isOpen()) revertDraftInput(path);
+        return false;
+    };
     // The text the field is written into: if the draft changed meanwhile
     // (the Raw tab), the answer would overwrite that change (#291 review).
     const base = d.raw;
@@ -1182,31 +1363,29 @@ async function writeDraftFieldNow(path, value) {
             body: JSON.stringify({ raw: base, set: { [path]: value }, based_on: d.basedOn }),
         });
     } catch (e) {
-        showToast(`${path} not written: ` + (e.message || e));
-        revertDraftInput(path);
-        return false;
+        return refuse(`${path} not written${where()}: ` + (e.message || e));
     }
     if (!resp.ok) {
-        showToast(`${path} not written: ${(await resp.text()) || `HTTP ${resp.status}`}`);
-        revertDraftInput(path);
-        return false;
+        return refuse(`${path} not written${where()}: ${(await resp.text()) || `HTTP ${resp.status}`}`);
     }
     const data = await resp.json();
-    if (state.selectedDraftId !== d.id) return false;
+    if (!findDraft(d.id)) return false; // deleted meanwhile
     if (d.raw !== base) {
-        showToast(`${path} not written: the draft changed meanwhile — write it again`, 'info');
-        revertDraftInput(path);
-        return false;
+        return refuse(`${path} not written${where()}: the draft changed meanwhile — write it again`, 'info');
     }
     d.raw = data.raw;
     if (state.draftSendAnyway === d.id) state.draftSendAnyway = null;
     saveDrafts();
-    state.draftPreviewSeq++; // an older preview in flight must not win
-    state.draftPreview = { draftId: d.id, raw: d.raw, filled: false, data, error: null };
     const m = data.message;
     d.type = m.parse_error ? '' : m.message_type || '';
     d.title = m.patient_name || m.patient_id || '';
     renderDraftRail();
+    // Another draft or a message is open: the value is in the text and
+    // shows when this draft is opened again.
+    if (!isOpen()) return true;
+    state.draftPreviewSeq++; // an older preview in flight must not win
+    state.draftPreviewInFlight = null; // nor be waited for again
+    state.draftPreview = { draftId: d.id, raw: d.raw, filled: false, data, error: null };
     renderDraftHeader();
     if (state.activeTab === 'parsed') refreshDraftSegmentsInPlace(path, value, data);
     return true;

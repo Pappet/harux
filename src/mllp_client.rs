@@ -397,12 +397,17 @@ impl Connection {
             Connection::Tls(s, _) => s.get_ref().0,
         };
         let mut probe = [0u8; 1];
-        // `timeout` polls the peek once before it looks at the deadline:
-        // with nothing to read, the zero timeout ends it at once.
-        matches!(
-            timeout(Duration::ZERO, tcp.peek(&mut probe)).await,
-            Err(_elapsed)
-        )
+        let mut buf = tokio::io::ReadBuf::new(&mut probe);
+        // Poll the peek exactly once, without a timer (#302): a zero
+        // `timeout` registers a timer that tokio rounds up to its next
+        // millisecond tick, so it cost about 1 ms per message of a run.
+        // Pending: nothing to read and not closed — the connection can be
+        // used. Ready: closed (0 bytes), data nobody asked for, or an error.
+        // `poll_peek` registers this task's waker for readability; the
+        // connection goes to the exchange task right after, so at most one
+        // spurious wake-up of the run task follows.
+        std::future::poll_fn(|cx| std::task::Poll::Ready(tcp.poll_peek(cx, &mut buf).is_pending()))
+            .await
     }
 }
 

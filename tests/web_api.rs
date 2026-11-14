@@ -2320,3 +2320,134 @@ async fn import_refusals_and_edges() {
     assert!(text.contains("store.max_memory_mb"), "{text}");
     assert_eq!(state.store.count().await, before);
 }
+
+/// #301: a preview grows with the draft — parse, validation, positions and
+/// the answer's JSON — and runs off the async workers. On a one-thread
+/// runtime a ticker keeps running while a large one is made; on the worker
+/// it would stop for the whole preview (and with it the listener's ACKs).
+#[tokio::test(flavor = "current_thread")]
+async fn a_large_preview_runs_off_the_async_workers() {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::time::{Duration, Instant};
+    let state = sending_state(|_| {});
+    let mut raw = String::from("MSH|^~\\&|A|B|||20260101||ORU^R01|C1|P|2.5\nPID|||1||Doe^Jane\n");
+    for i in 0..5000 {
+        raw.push_str(&format!("OBX|{i}|ST|CODE^Name^L||value {i}|||N|||F\n"));
+    }
+    // Ticks of a 1 ms timer, and the longest time between two of them.
+    let ticks = std::sync::Arc::new(AtomicU64::new(0));
+    let longest_gap = std::sync::Arc::new(AtomicU64::new(0));
+    let origin = Instant::now();
+    let last_tick = std::sync::Arc::new(AtomicU64::new(0)); // µs since `origin`
+    let ticker = tokio::spawn({
+        let (ticks, longest_gap, last_tick) = (
+            std::sync::Arc::clone(&ticks),
+            std::sync::Arc::clone(&longest_gap),
+            std::sync::Arc::clone(&last_tick),
+        );
+        async move {
+            loop {
+                tokio::time::sleep(Duration::from_millis(1)).await;
+                let now = origin.elapsed().as_micros() as u64;
+                let before = last_tick.swap(now, Ordering::Relaxed);
+                longest_gap.fetch_max(now - before, Ordering::Relaxed);
+                ticks.fetch_add(1, Ordering::Relaxed);
+            }
+        }
+    });
+    tokio::time::sleep(Duration::from_millis(5)).await; // the ticker is running
+    ticks.store(0, Ordering::Relaxed);
+    longest_gap.store(0, Ordering::Relaxed);
+    let started = Instant::now();
+    let (status, body) = post_json(&state, "/api/parse", serde_json::json!({ "raw": raw })).await;
+    let took = started.elapsed();
+    // The time since the last tick counts too: a runtime that never ticked
+    // during the request stopped for all of it.
+    let tail = origin.elapsed().as_micros() as u64 - last_tick.load(Ordering::Relaxed);
+    let gap = Duration::from_micros(longest_gap.load(Ordering::Relaxed).max(tail));
+    let ticked = ticks.load(Ordering::Relaxed);
+    ticker.abort();
+    assert_eq!(status, StatusCode::OK);
+    let json = json_of(&body);
+    assert_eq!(json["message"]["segments"].as_array().unwrap().len(), 5002);
+    assert!(
+        took > Duration::from_millis(20),
+        "the preview must take long enough to tell ({took:?})"
+    );
+    assert!(
+        gap < took / 2 && ticked > 5,
+        "the runtime stopped for {gap:?} of a {took:?} preview ({ticked} ticks): it ran on the async worker"
+    );
+}
+
+/// A body that records whether anyone read it (#306).
+struct Watched(std::sync::Arc<std::sync::atomic::AtomicBool>);
+
+impl futures_core::Stream for Watched {
+    type Item = Result<Vec<u8>, std::io::Error>;
+    fn poll_next(
+        self: std::pin::Pin<&mut Self>,
+        _: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Option<Self::Item>> {
+        self.0.store(true, std::sync::atomic::Ordering::SeqCst);
+        std::task::Poll::Ready(Some(Ok(vec![b'{'; 1024 * 1024])))
+    }
+}
+
+/// #306: while sending is off, a route that takes a message answers `403`
+/// before its body is read — no permit taken, no byte read — and every
+/// route of sending is behind the same guard.
+#[tokio::test]
+async fn with_sending_off_a_large_body_is_refused_unread() {
+    let state = make_state();
+    for uri in [
+        "/api/send",
+        "/api/parse",
+        "/api/build",
+        "/api/import?name=a.hl7",
+    ] {
+        let read = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let res = create_router(state.clone())
+            .oneshot(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri(uri)
+                    .header("host", "10.1.2.3:8080")
+                    .header("content-type", "application/json")
+                    .header("content-length", (20 * 1024 * 1024).to_string())
+                    .body(Body::from_stream(Watched(std::sync::Arc::clone(&read))))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::FORBIDDEN, "{uri}");
+        assert!(
+            !read.load(std::sync::atomic::Ordering::SeqCst),
+            "{uri}: the body was read"
+        );
+    }
+    // Every permit is still free: none was taken for a refused request.
+    let permits: Vec<_> = (0..harux::send::LARGE_BODY_PERMITS)
+        .map(|_| state.sender.large_body_permit())
+        .collect();
+    assert!(permits.iter().all(Option::is_some), "a permit was kept");
+    // The rest of sending answers 403 too; the dictionary is reference data.
+    for (method, uri) in [
+        (Method::GET, "/api/send/config"),
+        (Method::GET, "/api/send/runs/r1"),
+        (Method::POST, "/api/send/runs/r1/cancel"),
+        (Method::GET, "/api/messages/m1/draft"),
+        (Method::GET, "/api/templates"),
+        (Method::GET, "/api/templates/t1"),
+    ] {
+        assert_eq!(
+            call(&state, method, uri).await.0,
+            StatusCode::FORBIDDEN,
+            "{uri}"
+        );
+    }
+    assert_eq!(
+        call(&state, Method::GET, "/api/dictionary/PID").await.0,
+        StatusCode::OK
+    );
+}

@@ -305,39 +305,10 @@ pub fn create_router(state: AppState) -> Router {
         )
         .route("/api/clear", axum::routing::post(clear_messages))
         .route("/api/export", get(export_raw_hl7))
-        // Sending (#272) — `403` while `send.enabled` is off.
-        .route("/api/send/config", get(send_config))
-        .route("/api/send/runs/{id}", get(run_status))
-        .route(
-            "/api/send/runs/{id}/cancel",
-            axum::routing::post(cancel_run),
-        )
-        .route("/api/messages/{id}/draft", get(message_draft))
+        // Sending (#272): every route of it behind one guard (#306).
+        .merge(sending_routes(&state))
+        // Reference data for the draft editor, not tied to sending (#278).
         .route("/api/dictionary/{segment}", get(dictionary_segment))
-        .route("/api/templates", get(list_templates))
-        .route("/api/templates/{id}", get(get_template))
-        // Routes with a message in the body (#276): a body limit above
-        // axum's 2 MB default, and a permit before a large body is read.
-        .route(
-            "/api/send",
-            large_body(&state, axum::routing::post(send_message)),
-        )
-        .route(
-            "/api/parse",
-            large_body(&state, axum::routing::post(parse_draft)),
-        )
-        .route(
-            "/api/build",
-            large_body(&state, axum::routing::post(build_draft)),
-        )
-        // Import (#281): streamed, so no body limit of axum's — the handler
-        // counts — but the permit, held for the whole import.
-        .route(
-            "/api/import",
-            axum::routing::post(import_file).layer::<_, Infallible>(
-                middleware::from_fn_with_state(state.clone(), take_large_body_permit),
-            ),
-        )
         // An /api path no route takes is a 404, never the SPA (#292
         // review): a client must not read index.html as an API answer.
         .route("/api/{*rest}", axum::routing::any(api_not_found))
@@ -348,6 +319,63 @@ pub fn create_router(state: AppState) -> Router {
         .with_state(state.clone())
         .layer(middleware::from_fn_with_state(state, guard_cross_site))
         .layer(middleware::from_fn(add_security_headers))
+}
+
+/// The routes of sending (#272), all behind `require_sending` (#306): while
+/// `send.enabled` is off they answer `403` before anything else runs — the
+/// large-body permit is not taken and the body is not read (a `POST` of up
+/// to `message_body_limit` would be read into memory before a handler's own
+/// check). A new route of sending goes here, never with a check of its own.
+fn sending_routes(state: &AppState) -> Router<AppState> {
+    Router::new()
+        .route("/api/send/config", get(send_config))
+        .route("/api/send/runs/{id}", get(run_status))
+        .route(
+            "/api/send/runs/{id}/cancel",
+            axum::routing::post(cancel_run),
+        )
+        .route("/api/messages/{id}/draft", get(message_draft))
+        .route("/api/templates", get(list_templates))
+        .route("/api/templates/{id}", get(get_template))
+        // Routes with a message in the body (#276): a body limit above
+        // axum's 2 MB default, and a permit before a large body is read.
+        .route(
+            "/api/send",
+            large_body(state, axum::routing::post(send_message)),
+        )
+        .route(
+            "/api/parse",
+            large_body(state, axum::routing::post(parse_draft)),
+        )
+        .route(
+            "/api/build",
+            large_body(state, axum::routing::post(build_draft)),
+        )
+        // Import (#281): streamed, so no body limit of axum's — the handler
+        // counts — but the permit, held for the whole import.
+        .route(
+            "/api/import",
+            axum::routing::post(import_file).layer::<_, Infallible>(
+                middleware::from_fn_with_state(state.clone(), take_large_body_permit),
+            ),
+        )
+        // Outermost: runs before every layer above.
+        .route_layer(middleware::from_fn_with_state(
+            state.clone(),
+            require_sending,
+        ))
+}
+
+/// `403` while sending is off (#306), before the request goes any further.
+async fn require_sending(
+    State(state): State<AppState>,
+    req: axum::extract::Request,
+    next: middleware::Next,
+) -> Response {
+    if !state.sender.enabled() {
+        return sending_off();
+    }
+    next.run(req).await
 }
 
 /// The body limit of the routes that carry a message (#276): twice
@@ -534,9 +562,6 @@ fn sending_off() -> Response {
 }
 
 async fn send_config(State(state): State<AppState>) -> Response {
-    if !state.sender.enabled() {
-        return sending_off();
-    }
     Json(state.sender.config_response()).into_response()
 }
 
@@ -551,9 +576,6 @@ async fn send_message(
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
     body: Bytes,
 ) -> Response {
-    if !state.sender.enabled() {
-        return sending_off();
-    }
     let request: crate::send::SendRequest = match serde_json::from_slice(&body) {
         Ok(r) => r,
         Err(e) => {
@@ -576,9 +598,6 @@ async fn send_message(
 /// `GET /api/send/runs/{id}` (#280): a run's progress and result, while the
 /// server keeps it (every run under way, the newest finished ones).
 async fn run_status(State(state): State<AppState>, Path(id): Path<String>) -> Response {
-    if !state.sender.enabled() {
-        return sending_off();
-    }
     match state.sender.run_status(&id) {
         Some(status) => Json(status).into_response(),
         None => (StatusCode::NOT_FOUND, "No such run").into_response(),
@@ -588,9 +607,6 @@ async fn run_status(State(state): State<AppState>, Path(id): Path<String>) -> Re
 /// `POST /api/send/runs/{id}/cancel` (#280): stop a run before its next
 /// message. Answers the run's status; a finished run stays as it was.
 async fn cancel_run(State(state): State<AppState>, Path(id): Path<String>) -> Response {
-    if !state.sender.enabled() {
-        return sending_off();
-    }
     match state.sender.cancel_run(&id) {
         Some(status) => Json(status).into_response(),
         None => (StatusCode::NOT_FOUND, "No such run").into_response(),
@@ -605,26 +621,43 @@ fn refused(e: crate::send::SendError) -> Response {
 
 // --- Drafts (#276) ---
 
+/// Run work that grows with a message's size — parse, build, encode and the
+/// answer's JSON — off the async workers (#301). On a worker it holds up
+/// everything scheduled there, the MLLP listener's ACKs included: a filled
+/// preview of an 8 MB MDM delayed ACKs by up to 130 ms. `what` names the
+/// work in a `500` if the task panics (boxed: a `Response` is 128 bytes).
+async fn off_workers<T: Send + 'static>(
+    what: &str,
+    work: impl FnOnce() -> T + Send + 'static,
+) -> Result<T, Box<Response>> {
+    tokio::task::spawn_blocking(work).await.map_err(|e| {
+        Box::new(
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Internal error while {what}: {e}"),
+            )
+                .into_response(),
+        )
+    })
+}
+
 /// `GET /api/messages/{id}/draft`: a stored message as draft text, long
 /// values as references (`draft::draft_of`). Part of sending: `403` while it
 /// is off.
 async fn message_draft(State(state): State<AppState>, Path(id): Path<String>) -> Response {
-    if !state.sender.enabled() {
-        return sending_off();
-    }
     let Some(msg) = state.sender.stored(&id).await else {
         return (StatusCode::NOT_FOUND, "Message not found").into_response();
     };
     // Linear in the message's size (#289 review), but up to
     // `mllp.max_message_size_mb` of text: off the async workers.
-    match tokio::task::spawn_blocking(move || crate::draft::draft_of(&msg)).await {
-        Ok(Ok(draft)) => Json(draft).into_response(),
+    let made = off_workers("making the draft", move || {
+        crate::draft::draft_of(&msg).map(|draft| Json(draft).into_response())
+    })
+    .await;
+    match made {
+        Ok(Ok(response)) => response,
         Ok(Err(e)) => refused(e),
-        Err(e) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            format!("Internal error while making the draft: {e}"),
-        )
-            .into_response(),
+        Err(response) => *response,
     }
 }
 
@@ -672,9 +705,6 @@ async fn api_not_found() -> Response {
 /// (`send.templates_dir`, read now), with name, group and message type.
 /// Part of sending: `403` while it is off.
 async fn list_templates(State(state): State<AppState>) -> Response {
-    if !state.sender.enabled() {
-        return sending_off();
-    }
     let dir = state.sender.templates_dir().map(|d| d.to_path_buf());
     match tokio::task::spawn_blocking(move || crate::templates::list(dir.as_deref())).await {
         Ok((templates, problems)) => {
@@ -694,9 +724,6 @@ async fn list_templates(State(state): State<AppState>) -> Response {
 /// `GET /api/templates/{id}`: a template as draft text. The ID is looked up
 /// in the listing, never joined into a path; anything else is `404`.
 async fn get_template(State(state): State<AppState>, Path(id): Path<String>) -> Response {
-    if !state.sender.enabled() {
-        return sending_off();
-    }
     let dir = state.sender.templates_dir().map(|d| d.to_path_buf());
     match tokio::task::spawn_blocking(move || crate::templates::get(dir.as_deref(), &id)).await {
         Ok(Some(t)) => Json(t).into_response(),
@@ -729,14 +756,15 @@ async fn parse_draft(
     headers: axum::http::HeaderMap,
     body: Bytes,
 ) -> Response {
-    if !state.sender.enabled() {
-        return sending_off();
-    }
     // A file is HL7 (`MSH…`) or MLLP-framed; a body that starts with `{`
     // is a JSON request whatever its `Content-Type` says (#289 review), and
     // answered `400` if it does not parse.
     if !is_json(&headers) && !body.trim_ascii_start().starts_with(b"{") {
-        return Json(crate::draft::decode_file(&body)).into_response();
+        return off_workers("decoding the file", move || {
+            Json(crate::draft::decode_file(&body)).into_response()
+        })
+        .await
+        .unwrap_or_else(|response| *response);
     }
     let request: crate::draft::ParseRequest = match serde_json::from_slice(&body) {
         Ok(r) => r,
@@ -761,14 +789,21 @@ async fn parse_draft(
     } else {
         None
     };
-    match crate::draft::preview(
-        &request.raw,
-        &request.set,
-        based_on.as_deref(),
-        request.fill_references,
-    ) {
-        Ok(preview) => Json(preview).into_response(),
-        Err(e) => refused(e),
+    // The preview and its JSON (about 30 MB for a filled 8 MB MDM).
+    let previewed = off_workers("making the preview", move || {
+        crate::draft::preview(
+            &request.raw,
+            &request.set,
+            based_on.as_deref(),
+            request.fill_references,
+        )
+        .map(|preview| Json(preview).into_response())
+    })
+    .await;
+    match previewed {
+        Ok(Ok(response)) => response,
+        Ok(Err(e)) => refused(e),
+        Err(response) => *response,
     }
 }
 
@@ -809,9 +844,6 @@ async fn import_file(
     request: axum::extract::Request,
 ) -> Response {
     use futures_core::Stream;
-    if !state.sender.enabled() {
-        return sending_off();
-    }
     let (_, max_bytes) = state.store.memory_usage().await;
     let length = request
         .headers()
@@ -889,9 +921,6 @@ async fn import_file(
 /// write for this draft, MLLP-framed like the export, as a download. A
 /// browser writes text as UTF-8 only, so a Latin-1 draft is built here.
 async fn build_draft(State(state): State<AppState>, body: Bytes) -> Response {
-    if !state.sender.enabled() {
-        return sending_off();
-    }
     let request: BuildRequest = match serde_json::from_slice(&body) {
         Ok(r) => r,
         Err(e) => {
@@ -903,23 +932,43 @@ async fn build_draft(State(state): State<AppState>, body: Bytes) -> Response {
         }
     };
     drop(body);
-    let built = async {
-        let (text, _) = crate::draft::apply_set(&request.raw, &request.set)?;
-        let based_on = state
-            .sender
-            .based_on(request.based_on.as_deref(), &text)
-            .await?;
+    let max_bytes = state.sender.max_message_bytes();
+    let BuildRequest {
+        raw,
+        charset,
+        based_on,
+        set,
+    } = request;
+    // Off the async workers (#301): `set` written in, then — after the
+    // store lookup the references need — the build and its framing.
+    let written = match off_workers("building the draft", move || {
+        crate::draft::apply_set(&raw, &set).map(|(text, _)| text)
+    })
+    .await
+    {
+        Ok(Ok(text)) => text,
+        Ok(Err(e)) => return refused(e),
+        Err(response) => return *response,
+    };
+    let based_on = match state.sender.based_on(based_on.as_deref(), &written).await {
+        Ok(m) => m,
+        Err(e) => return refused(e),
+    };
+    let built = off_workers("building the draft", move || {
         crate::draft::build_payload(
-            &text,
-            request.charset.as_deref(),
+            &written,
+            charset.as_deref(),
             based_on.as_deref(),
             1,
-            state.sender.max_message_bytes(),
+            max_bytes,
         )
-    }
+        .map(|bytes| crate::draft::framed(&bytes))
+    })
     .await;
     match built {
-        Ok(bytes) => (
+        Err(response) => *response,
+        Ok(Err(e)) => refused(e),
+        Ok(Ok(framed)) => (
             [
                 (
                     axum::http::header::CONTENT_TYPE,
@@ -930,10 +979,9 @@ async fn build_draft(State(state): State<AppState>, body: Bytes) -> Response {
                     HeaderValue::from_static("attachment; filename=\"harux-draft.hl7\""),
                 ),
             ],
-            crate::draft::framed(&bytes),
+            framed,
         )
             .into_response(),
-        Err(e) => refused(e),
     }
 }
 
