@@ -5,10 +5,17 @@ on:
     branches: [main]
   # A pull request that changes the dependencies builds on all three
   # release targets before it is merged (#273: new crates must build on
-  # Windows and macOS too, not only on the Linux CI runner).
+  # Windows and macOS too, not only on the Linux CI runner). The tests do
+  # too: a test can be green on the Linux CI runner and red on a Windows
+  # one (timer granularity, line endings) with nothing but the test changed
+  # — a test-only PR must not be the first place that shows.
   pull_request:
     branches: [main]
-    paths: ['Cargo.toml', 'Cargo.lock', '.github/workflows/build.yml']
+    paths:
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - '.github/workflows/build.yml'
+      - 'tests/**'
   release:
     types: [published]
 
