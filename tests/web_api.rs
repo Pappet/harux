@@ -2325,13 +2325,24 @@ async fn import_refusals_and_edges() {
 /// the answer's JSON — and runs off the async workers. On a one-thread
 /// runtime a ticker keeps running while a large one is made; on the worker
 /// it would stop for the whole preview (and with it the listener's ACKs).
+///
+/// The ticker is compared with the preview's own duration, never with an
+/// absolute count: Windows' timer granularity without `timeBeginPeriod` is
+/// ~15.6 ms, so a 1 ms sleep ticks about 64 times a second there while the
+/// same code shows ~1000 ticks on Linux and macOS. With 5000 segments the
+/// preview lasted 48 ms on a Windows runner — 3–4 ticks, which an absolute
+/// `ticked > 5` reads as "it ran on the worker" although the code does the
+/// work in `spawn_blocking`. A preview that really blocks the worker stops
+/// the ticker for all of its duration, so `gap >= took / 2` still catches it
+/// whatever the granularity, and the larger draft keeps `took` far above
+/// one timer period.
 #[tokio::test(flavor = "current_thread")]
 async fn a_large_preview_runs_off_the_async_workers() {
     use std::sync::atomic::{AtomicU64, Ordering};
     use std::time::{Duration, Instant};
     let state = sending_state(|_| {});
     let mut raw = String::from("MSH|^~\\&|A|B|||20260101||ORU^R01|C1|P|2.5\nPID|||1||Doe^Jane\n");
-    for i in 0..5000 {
+    for i in 0..10_000 {
         raw.push_str(&format!("OBX|{i}|ST|CODE^Name^L||value {i}|||N|||F\n"));
     }
     // Ticks of a 1 ms timer, and the longest time between two of them.
@@ -2369,13 +2380,20 @@ async fn a_large_preview_runs_off_the_async_workers() {
     ticker.abort();
     assert_eq!(status, StatusCode::OK);
     let json = json_of(&body);
-    assert_eq!(json["message"]["segments"].as_array().unwrap().len(), 5002);
+    assert_eq!(
+        json["message"]["segments"].as_array().unwrap().len(),
+        10_002
+    );
     assert!(
         took > Duration::from_millis(20),
         "the preview must take long enough to tell ({took:?})"
     );
+    // `took / 2` is the portable form: the preview blocks the worker for all
+    // of `took` if it runs on it, whatever the timer granularity, while a
+    // ticker on a coarse timer still ticks several times in a preview this
+    // large. The absolute floor of 2 keeps "no tick at all" a failure.
     assert!(
-        gap < took / 2 && ticked > 5,
+        gap < took / 2 && ticked >= 2,
         "the runtime stopped for {gap:?} of a {took:?} preview ({ticked} ticks): it ran on the async worker"
     );
 }
