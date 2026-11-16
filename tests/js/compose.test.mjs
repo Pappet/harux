@@ -9,12 +9,11 @@
 //   node --test 'tests/js/*.test.mjs'
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
 import { webcrypto } from 'node:crypto';
 import vm from 'node:vm';
 import { El } from './fake-dom.mjs';
+import { loadStatic, staticSource } from './static.mjs';
 
-const read = (f) => readFileSync(new URL(`../../static/${f}`, import.meta.url), 'utf8');
 
 function memoryStorage() {
     const data = new Map();
@@ -76,7 +75,7 @@ function setup({ local = memoryStorage(), session = memoryStorage(), confirmAnsw
     };
     vm.createContext(ctx);
     for (const f of ['state.js', 'util.js', 'ws.js', 'render.js', 'diff.js', 'send.js', 'compose.js']) {
-        vm.runInContext(read(f), ctx);
+        loadStatic(ctx, f);
     }
     // esc() needs a real DOM to escape; the fake one only keeps text.
     const escape = (v) => String(v ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
@@ -1050,7 +1049,7 @@ test('the page\'s storage listener routes both shared keys, and nothing else (#3
     ctx.onSharedStorage({ key: 'harux_drafts', newValue: '[3]', storageArea: {} }); // another tab's sessionStorage
     ctx.onSharedStorage({ key: null, newValue: null, storageArea: local }); // cleared
     assert.deepEqual(calls, [['drafts', '[1]'], ['targets', '[2]'], ['drafts', null], ['targets', null]]);
-    assert.match(read('app.js'), /window\.addEventListener\('storage', onSharedStorage\)/, 'and app.js registers it');
+    assert.match(staticSource('app.js'), /window\.addEventListener\('storage', onSharedStorage\)/, 'and app.js registers it');
 });
 
 test('entering the Diff tab of a draft with references asks once for the filled preview (#304)', async () => {

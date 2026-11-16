@@ -6,10 +6,9 @@
 //   node --test 'tests/js/*.test.mjs'
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
+import { loadStatic } from './static.mjs';
 
-const read = (f) => readFileSync(new URL(`../../static/${f}`, import.meta.url), 'utf8');
 
 function setup() {
     const requests = [];
@@ -46,8 +45,8 @@ function setup() {
         fetch: (url) => new Promise((resolve) => requests.push({ url, resolve })),
     };
     vm.createContext(ctx);
-    vm.runInContext(read('state.js'), ctx);
-    vm.runInContext(read('ws.js'), ctx);
+    loadStatic(ctx, 'state.js');
+    loadStatic(ctx, 'ws.js');
     const state = ctx.window.state;
     const respond = (i, list) => requests[i].resolve({ ok: true, json: async () => list });
     const held = () => [...state.pendingMessages, ...state.messages].map((m) => m.id);

@@ -7,12 +7,11 @@
 //   node --test 'tests/js/*.test.mjs'
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
 import { webcrypto } from 'node:crypto';
 import vm from 'node:vm';
 import { El } from './fake-dom.mjs';
+import { loadStatic } from './static.mjs';
 
-const read = (f) => readFileSync(new URL(`../../static/${f}`, import.meta.url), 'utf8');
 
 // A localStorage that can be made to fail.
 function memoryStorage() {
@@ -51,7 +50,7 @@ function setup({ storage = memoryStorage(), confirmAnswer = true, crypto = webcr
         },
     };
     vm.createContext(ctx);
-    for (const f of ['state.js', 'util.js', 'render.js', 'send.js']) vm.runInContext(read(f), ctx);
+    for (const f of ['state.js', 'util.js', 'render.js', 'send.js']) loadStatic(ctx, f);
     Object.assign(ctx, {
         showToast: (m, type) => toasts.push([m, type]),
         renderDetail: noop,
