@@ -146,7 +146,7 @@ Limits are **config-driven** via `StoreConfig` (`src/config.rs`), not hardcoded 
 - Start: `0x0B` (VT, Vertical Tab)
 - End: `0x1C 0x0D` (FS + CR)
 - Max payload: `mllp.max_message_size_mb` (10 MB) — an over-limit frame is answered with `AR` (`build_reject`), stored as a parse-error entry holding only its first 4 KB, and the rest of the frame is skipped; the connection stays open (#223)
-- **Never lose a frame silently:** decode/parse run under `catch_unwind` (`ingest` in `src/mllp.rs`) — a panic becomes a stored parse error + NACK (#235). Messages are stored *before* the ACK/NACK is written. `active_connections` is maintained by `ConnectionGuard` (drop guard); shutdown waits via `mllp::wait_for_drain` on the count, not on a single `Notify` wake-up (#241). An `accept()` error is logged and retried, never fatal (#224)
+- **Never lose a frame silently:** decode/parse run under `catch_unwind` (`ingest` in `src/mllp.rs`) — a panic becomes a stored parse error + NACK (#235). Messages are stored *before* the ACK/NACK is written. `active_connections` is maintained by `ConnectionGuard` (drop guard); shutdown waits via `mllp::wait_for_drain` on the count, not on a single `Notify` wake-up (#241). An `accept()` error is logged and retried, never fatal (#224). **Both listeners are bound before either server takes a connection** (`mllp::bind`, then the web listener, then `mllp::serve` / `axum::serve` in `main.rs`, #327): a start that fails on the second port must not have accepted — and acknowledged — MLLP messages that are then lost with the process. Don't move a bind into a spawned task
 - Covered end to end by `tests/mllp_tcp.rs` (real TCP, ephemeral port via `mllp::serve`)
 - **One frame splitter (#281):** `FrameSplitter` (`src/mllp.rs`) finds frames in bytes that arrive in pieces and cuts over-limit ones (`Frame::Oversize`, the rest skipped). `handle_connection` and the import (`Importer`) share it — don't write a second one. `FrameSplitter::ignoring_noise` (the import) drops and counts bytes outside frames instead of turning them into an over-limit entry as the listener does
 - Read timeout: 60s, Write timeout: 30s
@@ -334,7 +334,7 @@ tests/
 ├── send_tcp.rs                   # Sending over real TCP and TLS: fake receivers, round trip to Harux, bytes on the wire, TLS failure reasons, runs (order, one connection, cancel, eviction, reconnect) (#272, #273, #280)
 ├── tls/                          # Static test certificates (CA, server, wrong name, unknown CA, client) and generate.sh
 ├── fuzz_ingest.rs                # Mutation fuzz of decode → parse → ACK → JSON, no panic + invariants (#243)
-├── config_startup.rs             # Real binary: broken config stops the start; unwritable log, bind addresses
+├── config_startup.rs             # Real binary: broken config stops the start; unwritable log, bind addresses, a taken web port stops it before MLLP serves (#327)
 ├── accept_errors.rs              # Real binary under ulimit: accept() errors are not fatal, SIGTERM (Unix)
 ├── alloc_accounting.rs           # Counting allocator: estimated_bytes() matches the real heap (#226)
 ├── doc_paths.rs                  # Paths named in the docs exist (#246)

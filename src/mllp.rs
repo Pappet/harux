@@ -71,20 +71,13 @@ const ACCEPT_ERROR_BACKOFF: Duration = Duration::from_millis(100);
 /// header and the start of the message, never the payload (#223).
 const OVERSIZE_KEEP_BYTES: usize = 4096;
 
-/// Start the MLLP TCP server: bind `bind_addr`, then [`serve`]. Only a failed
-/// bind is an error.
-pub async fn start_mllp_server(
-    bind_addr: &str,
-    store: MessageStore,
-    stats: MllpStats,
-    shutdown: watch::Receiver<bool>,
-    config: MllpConfig,
-) -> anyhow::Result<()> {
-    let listener = TcpListener::bind(bind_addr).await.map_err(|e| {
+/// Bind the MLLP listener on `bind_addr`; the error names the address and
+/// the configuration keys. `main` binds it — and the web listener — before
+/// either server takes a connection (#327).
+pub async fn bind(bind_addr: &str) -> anyhow::Result<TcpListener> {
+    TcpListener::bind(bind_addr).await.map_err(|e| {
         anyhow::anyhow!("cannot listen on {bind_addr} (server.mllp_bind / mllp_port): {e}")
-    })?;
-    serve(listener, store, stats, shutdown, config).await;
-    Ok(())
+    })
 }
 
 /// Accept MLLP connections on an already bound listener until `shutdown`
