@@ -579,7 +579,7 @@ test('after a write the tab is updated in place: the focused input keeps what wa
     const { ctx, state, byId } = setup();
     const d = ctx.addDraft({ raw: 'MSH|^~\\&|A\nPID|||1||' });
     state.selection = { kind: 'draft', id: d.id };
-    const missing = [{ code: 'MISSING_FIELD', segment: 'PID', field: 5, message: 'PID-5 is required' }];
+    const missing = [{ code: 'MISSING_FIELD', segment: 'PID', field: 5, segment_index: 1, message: 'PID-5 is required' }];
     const content = segmentsTab(ctx, state, byId, d, adtMessage('', missing));
     const input = (path) => content.querySelector(`.field-input[data-field-path="${path}"]`);
     assert.ok(input('PID-5'), 'a required empty field is listed');
@@ -612,6 +612,68 @@ test('after a write the tab is updated in place: the focused input keeps what wa
     ctx.refreshDraftSegmentsInPlace('PID-5', 'Doe^Jane', { raw: d.raw, positions: [], message: more });
     assert.equal(content.querySelectorAll('.segment-block').length, 3);
     assert.notEqual(input('PID-7'), pid7);
+});
+
+// An ORU^R01 with two OBX: the first complete, the second without OBX-3
+// and OBX-11 — the server's warnings name the second (#318).
+const twoObxMessage = () => ({
+    message_type: 'ORU^R01',
+    delimiters: '|^~\\&',
+    typical_segments: [],
+    typical_segment_descriptions: {},
+    validation_warnings: [
+        { code: 'MISSING_FIELD', segment: 'OBX', field: 3, segment_index: 3, message: 'OBX[2]-3 (Observation Identifier) is required for ORU^R01' },
+        { code: 'MISSING_FIELD', segment: 'OBX', field: 11, segment_index: 3, message: 'OBX[2]-11 (Observation Result Status) is required for ORU^R01' },
+        { code: 'MISSING_SEGMENT', segment: 'PV1', message: 'PV1 segment is expected' },
+    ],
+    segments: [
+        { name: 'MSH', fields: [{ index: 1, value: '|' }, { index: 2, value: '^~\\&' }, { index: 3, value: 'LAB' }] },
+        { name: 'OBR', fields: [{ index: 1, value: '1' }, { index: 3, value: 'F1' }] },
+        { name: 'OBX', fields: [{ index: 1, value: '1' }, { index: 2, value: 'CE' }, { index: 3, value: 'PDF^UUID' }, { index: 5, value: '42' }, { index: 11, value: 'F' }] },
+        { name: 'OBX', fields: [{ index: 1, value: '2' }, { index: 2, value: 'ST' }, { index: 3, value: '' }, { index: 5, value: 'x' }] },
+    ],
+});
+
+// The warned rows of each segment block, as `block index: field labels`
+// (the fake DOM keeps a cell's label in its first text node).
+function warnedRows(content) {
+    return content.querySelectorAll('.segment-block').map((block, i) =>
+        `${i}: ${block.querySelectorAll('tr').filter((tr) => tr.classList.contains('warn'))
+            .map((tr) => tr.querySelector('.field-idx').children[0].textContent).join(' ')}`);
+}
+
+test('a field missing in one OBX is marked in that OBX only, in the detail view (#318)', () => {
+    const { ctx, state, byId } = setup();
+    state.collapsedSegments = new Set();
+    const content = byId('detail-content');
+    ctx.renderParsedTab(content, { id: 'm1', ...twoObxMessage() });
+    assert.deepEqual(warnedRows(content), ['0: ', '1: ', '2: ', '3: OBX-3 OBX-11'],
+        'the complete first OBX carries no mark; the second gets an empty row for the OBX-11 it does not reach');
+    const lastObx = content.querySelectorAll('.segment-block')[3];
+    assert.deepEqual(lastObx.querySelectorAll('tr').map((tr) => tr.querySelector('.field-idx').children[0].textContent),
+        ['OBX-1', 'OBX-2', 'OBX-3', 'OBX-5', 'OBX-11'], 'in field order');
+    const badges = content.querySelectorAll('.validation-seg').map((b) => b.textContent);
+    assert.deepEqual(badges, ['OBX[2]-3', 'OBX[2]-11', 'PV1'], 'the banner names the occurrence');
+    const summary = content.querySelector('.seg-list').textContent;
+    assert.equal(summary, 'OBX[2]-3, OBX[2]-11');
+});
+
+test('a field missing in one OBX is marked in that OBX only, in the draft editor (#318)', () => {
+    const { ctx, state, byId } = setup();
+    const d = ctx.addDraft({ raw: 'MSH|^~\\&|LAB' });
+    state.selection = { kind: 'draft', id: d.id };
+    const message = twoObxMessage();
+    const content = segmentsTab(ctx, state, byId, d, message);
+    assert.deepEqual(warnedRows(content), ['0: ', '1: ', '2: ', '3: OBX-3 OBX-11'],
+        'the missing OBX-11 is listed in the second OBX, and nothing in the first');
+    assert.ok(content.querySelector('.field-input[data-field-path="OBX[2]-11"]'), 'an input for the missing field');
+
+    // A write that fills OBX[2]-3 takes its mark away in place.
+    const fixed = twoObxMessage();
+    fixed.validation_warnings.shift();
+    fixed.segments[3].fields[2].value = 'NA^Sodium';
+    ctx.refreshDraftSegmentsInPlace('OBX[2]-3', 'NA^Sodium', { raw: d.raw, positions: [], message: fixed });
+    assert.deepEqual(warnedRows(content), ['0: ', '1: ', '2: ', '3: OBX-11']);
 });
 
 test('a field write never overwrites a change made meanwhile (#291 review)', async () => {

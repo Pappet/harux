@@ -125,6 +125,8 @@ pub fn decode_payload(bytes: &[u8]) -> DecodedPayload {
             message,
             segment: "MSH".to_owned(),
             field: Some(18),
+            // MSH, always the first segment of a message that parses.
+            segment_index: Some(0),
         }),
     }
 }

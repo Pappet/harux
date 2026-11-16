@@ -9,6 +9,9 @@ and this project follows [Semantic Versioning](https://semver.org/lang/en/).
 
 ## [Unreleased]
 
+### Fixed
+- **A required field missing in one occurrence of a segment is no longer marked in every occurrence** (#318). In an ORU^R01 whose first OBX lacks OBX-11, the field was marked *required* in every OBX — also where it holds `F` — because a validation warning named the segment and the field but not which OBX, and the detail view (`renderParsedTab`, `static/render.js`) and the draft editor (`draftWarningIndex`, `static/compose.js`) marked the field in every segment of the name. A warning about a field now carries `segment_index` (its segment's position in `segments`, `src/validation.rs`; `MISSING_SEGMENT` has none), its text names a repeated segment by occurrence (`OBX[2]-11 (Observation Result Status) is required for ORU^R01`, also for datatype warnings: `OBX[2]-14`), and both views mark the field in that segment only, the banner with the same label. A warned field after the segment's last field (OBX-11 of an OBX that ends at field 5) now gets an empty, marked row instead of no row at all — in the detail view and in the draft editor. A segment that occurs once keeps its plain name (`PID-3 …`).
+
 ---
 
 ## [1.0.1] – 2026-11-14 – Review fixes

@@ -10,6 +10,8 @@
 /// fields at a glance without consulting the spec.
 use crate::hl7::types::{Hl7Message, Hl7Segment};
 use serde::{Deserialize, Serialize};
+use std::cell::OnceCell;
+use std::collections::HashMap;
 
 // ─── Public types ─────────────────────────────────────────────────────────────
 
@@ -23,6 +25,12 @@ pub struct ValidationWarning {
     pub segment: String,
     /// Field index within the segment, if applicable (1-based, HL7 standard)
     pub field: Option<usize>,
+    /// Position in `Hl7Message::segments` of the segment the warning was
+    /// found in, so the UI marks the field in that occurrence only and not
+    /// in every segment of the name (#318). Absent for a warning about no
+    /// single segment (`MISSING_SEGMENT`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub segment_index: Option<usize>,
 }
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -37,7 +45,7 @@ const PV1_REQUIRED_ADT_EVENTS: &[&str] = &[
 /// Validate a parsed HL7 message and return all warnings found.
 /// Returns an empty `Vec` if the message is fully valid (or unknown type).
 pub fn validate_message(msg: &Hl7Message) -> Vec<ValidationWarning> {
-    let mut warnings = Vec::new();
+    let mut warnings = Warnings::new(msg);
 
     // Always validate MSH required fields first
     validate_msh(msg, &mut warnings);
@@ -55,13 +63,70 @@ pub fn validate_message(msg: &Hl7Message) -> Vec<ValidationWarning> {
 
     validate_data_types(msg, &mut warnings);
 
-    warnings
+    warnings.list
+}
+
+/// The warnings found so far, and how they name a segment.
+struct Warnings<'a> {
+    msg: &'a Hl7Message,
+    list: Vec<ValidationWarning>,
+    /// Per segment: its occurrence among the segments of its name (from 1)
+    /// and whether the name repeats. Counted once, when the first warning
+    /// names a segment — a message of 10,000 OBX that each lack OBX-11 must
+    /// not count the segments again for every warning (#318).
+    places: OnceCell<Vec<(usize, bool)>>,
+}
+
+impl<'a> Warnings<'a> {
+    fn new(msg: &'a Hl7Message) -> Self {
+        Self {
+            msg,
+            list: Vec::new(),
+            places: OnceCell::new(),
+        }
+    }
+
+    fn push(&mut self, warning: ValidationWarning) {
+        self.list.push(warning);
+    }
+
+    /// How a warning names the segment at `index`: `PID` when the name
+    /// occurs once, `OBX[2]` (occurrence from 1, the notation of the draft
+    /// field paths) when it repeats (#318).
+    fn label(&self, index: usize) -> String {
+        let places = self.places.get_or_init(|| {
+            let segments = &self.msg.segments;
+            let mut total: HashMap<&str, usize> = HashMap::new();
+            let occurrence: Vec<usize> = segments
+                .iter()
+                .map(|s| {
+                    let n = total.entry(s.name.as_str()).or_insert(0);
+                    *n += 1;
+                    *n
+                })
+                .collect();
+            segments
+                .iter()
+                .zip(occurrence)
+                .map(|(s, n)| (n, total[s.name.as_str()] > 1))
+                .collect()
+        });
+        let name = &self.msg.segments[index].name;
+        match places[index] {
+            (occurrence, true) => format!("{name}[{occurrence}]"),
+            _ => name.clone(),
+        }
+    }
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
-fn find_segment<'a>(msg: &'a Hl7Message, name: &str) -> Option<&'a Hl7Segment> {
-    msg.segments.iter().find(|s| s.name == name)
+/// The first segment of the name, with its position in `msg.segments`.
+fn find_segment<'a>(msg: &'a Hl7Message, name: &str) -> Option<(usize, &'a Hl7Segment)> {
+    msg.segments
+        .iter()
+        .enumerate()
+        .find(|(_, s)| s.name == name)
 }
 
 fn has_segment(msg: &Hl7Message, name: &str) -> bool {
@@ -77,34 +142,40 @@ fn field_value(seg: &Hl7Segment, index: usize) -> Option<&str> {
         .filter(|v| !v.is_empty())
 }
 
-fn warn_missing_segment(warnings: &mut Vec<ValidationWarning>, seg: &str, context: &str) {
+fn warn_missing_segment(warnings: &mut Warnings, seg: &str, context: &str) {
     warnings.push(ValidationWarning {
         code: "MISSING_SEGMENT".into(),
         message: format!("{seg} segment is required for {context}"),
         segment: seg.into(),
         field: None,
+        segment_index: None,
     });
 }
 
+/// A required field missing in the segment at `at` (position in
+/// `segments`).
 fn warn_missing_field(
-    warnings: &mut Vec<ValidationWarning>,
-    seg: &str,
+    warnings: &mut Warnings,
+    at: usize,
     field: usize,
     field_name: &str,
     context: &str,
 ) {
+    let label = warnings.label(at);
+    let segment = warnings.msg.segments[at].name.clone();
     warnings.push(ValidationWarning {
         code: "MISSING_FIELD".into(),
-        message: format!("{seg}-{field} ({field_name}) is required for {context}"),
-        segment: seg.into(),
+        message: format!("{label}-{field} ({field_name}) is required for {context}"),
+        segment,
         field: Some(field),
+        segment_index: Some(at),
     });
 }
 
 // ─── MSH — universal required fields ─────────────────────────────────────────
 
-fn validate_msh(msg: &Hl7Message, warnings: &mut Vec<ValidationWarning>) {
-    let Some(msh) = find_segment(msg, "MSH") else {
+fn validate_msh(msg: &Hl7Message, warnings: &mut Warnings) {
+    let Some((msh_at, msh)) = find_segment(msg, "MSH") else {
         // Without MSH the parser would have failed; guard anyway
         warn_missing_segment(warnings, "MSH", "all HL7 messages");
         return;
@@ -114,7 +185,7 @@ fn validate_msh(msg: &Hl7Message, warnings: &mut Vec<ValidationWarning>) {
     if field_value(msh, 3).is_none() {
         warn_missing_field(
             warnings,
-            "MSH",
+            msh_at,
             3,
             "Sending Application",
             "all HL7 messages",
@@ -122,17 +193,17 @@ fn validate_msh(msg: &Hl7Message, warnings: &mut Vec<ValidationWarning>) {
     }
     // MSH-4: Sending Facility
     if field_value(msh, 4).is_none() {
-        warn_missing_field(warnings, "MSH", 4, "Sending Facility", "all HL7 messages");
+        warn_missing_field(warnings, msh_at, 4, "Sending Facility", "all HL7 messages");
     }
     // MSH-9: Message Type
     if field_value(msh, 9).is_none() {
-        warn_missing_field(warnings, "MSH", 9, "Message Type", "all HL7 messages");
+        warn_missing_field(warnings, msh_at, 9, "Message Type", "all HL7 messages");
     }
     // MSH-10: Message Control ID
     if field_value(msh, 10).is_none() {
         warn_missing_field(
             warnings,
-            "MSH",
+            msh_at,
             10,
             "Message Control ID",
             "all HL7 messages",
@@ -140,17 +211,17 @@ fn validate_msh(msg: &Hl7Message, warnings: &mut Vec<ValidationWarning>) {
     }
     // MSH-11: Processing ID (P/T/D)
     if field_value(msh, 11).is_none() {
-        warn_missing_field(warnings, "MSH", 11, "Processing ID", "all HL7 messages");
+        warn_missing_field(warnings, msh_at, 11, "Processing ID", "all HL7 messages");
     }
     // MSH-12: Version ID
     if field_value(msh, 12).is_none() {
-        warn_missing_field(warnings, "MSH", 12, "Version ID", "all HL7 messages");
+        warn_missing_field(warnings, msh_at, 12, "Version ID", "all HL7 messages");
     }
 }
 
 // ─── ADT ──────────────────────────────────────────────────────────────────────
 
-fn validate_adt(msg: &Hl7Message, warnings: &mut Vec<ValidationWarning>) {
+fn validate_adt(msg: &Hl7Message, warnings: &mut Warnings) {
     let ctx = &msg.message_type;
 
     // EVN is required for all ADT messages except A19 (query)
@@ -167,8 +238,8 @@ fn validate_adt(msg: &Hl7Message, warnings: &mut Vec<ValidationWarning>) {
     }
     let pid_required = !matches!(msg.message_type.as_str(), "ADT^A19" | "ADT^A20");
 
-    let pid = match find_segment(msg, "PID") {
-        Some(pid) => pid,
+    let (pid_at, pid) = match find_segment(msg, "PID") {
+        Some(found) => found,
         None => {
             if pid_required {
                 warn_missing_segment(warnings, "PID", ctx);
@@ -179,11 +250,11 @@ fn validate_adt(msg: &Hl7Message, warnings: &mut Vec<ValidationWarning>) {
 
     // PID-3: Patient Identifier List
     if field_value(pid, 3).is_none() {
-        warn_missing_field(warnings, "PID", 3, "Patient Identifier List", ctx);
+        warn_missing_field(warnings, pid_at, 3, "Patient Identifier List", ctx);
     }
     // PID-5: Patient Name
     if field_value(pid, 5).is_none() {
-        warn_missing_field(warnings, "PID", 5, "Patient Name", ctx);
+        warn_missing_field(warnings, pid_at, 5, "Patient Name", ctx);
     }
     // PID-7 (date of birth) and PID-8 (administrative sex) are optional in
     // the base standard; a site that requires them needs a profile rule,
@@ -192,10 +263,10 @@ fn validate_adt(msg: &Hl7Message, warnings: &mut Vec<ValidationWarning>) {
     // PV1 is required for most ADT events (transfer/admit/discharge)
     let pv1_required = PV1_REQUIRED_ADT_EVENTS.contains(&msg.message_type.as_str());
     if pv1_required {
-        if let Some(pv1) = find_segment(msg, "PV1") {
+        if let Some((pv1_at, pv1)) = find_segment(msg, "PV1") {
             // PV1-2: Patient Class (I/O/E/P/R/B/C/N/U)
             if field_value(pv1, 2).is_none() {
-                warn_missing_field(warnings, "PV1", 2, "Patient Class", ctx);
+                warn_missing_field(warnings, pv1_at, 2, "Patient Class", ctx);
             }
         } else {
             warn_missing_segment(warnings, "PV1", ctx);
@@ -205,46 +276,51 @@ fn validate_adt(msg: &Hl7Message, warnings: &mut Vec<ValidationWarning>) {
 
 // ─── ORU^R01 ─────────────────────────────────────────────────────────────────
 
-fn validate_oru_r01(msg: &Hl7Message, warnings: &mut Vec<ValidationWarning>) {
+fn validate_oru_r01(msg: &Hl7Message, warnings: &mut Warnings) {
     let ctx = "ORU^R01";
 
     // OBR is required
-    let Some(obr) = find_segment(msg, "OBR") else {
+    let Some((obr_at, obr)) = find_segment(msg, "OBR") else {
         warn_missing_segment(warnings, "OBR", ctx);
         return;
     };
     // OBR-2 / OBR-3 (placer / filler order number) are conditional: one of
     // the two identifies the order (#250).
     if field_value(obr, 2).is_none() && field_value(obr, 3).is_none() {
+        let obr_label = warnings.label(obr_at);
         warnings.push(ValidationWarning {
             code: "MISSING_FIELD".into(),
             message: format!(
-                "OBR-2 (Placer Order Number) or OBR-3 (Filler Order Number) is required for {ctx}"
+                "{obr_label}-2 (Placer Order Number) or {obr_label}-3 (Filler Order Number) is required for {ctx}"
             ),
             segment: "OBR".into(),
             field: Some(3),
+            segment_index: Some(obr_at),
         });
     }
     // OBR-4: Universal Service Identifier
     if field_value(obr, 4).is_none() {
-        warn_missing_field(warnings, "OBR", 4, "Universal Service Identifier", ctx);
+        warn_missing_field(warnings, obr_at, 4, "Universal Service Identifier", ctx);
     }
 
     // ORU_R01 (v2.5.1): the OBSERVATION group is optional — an order-level
     // result (status update, result in OBR/NTE) has OBR but no OBX (#250).
     // Each OBX that is present is checked.
-    for seg in msg.segments.iter().filter(|s| s.name == "OBX") {
+    for (obx_at, seg) in msg.segments.iter().enumerate() {
+        if seg.name != "OBX" {
+            continue;
+        }
         // OBX-2: Value Type — conditional, required when OBX-5 is valued.
         if field_value(seg, 2).is_none() && field_value(seg, 5).is_some() {
-            warn_missing_field(warnings, "OBX", 2, "Value Type (OBX-5 is valued)", ctx);
+            warn_missing_field(warnings, obx_at, 2, "Value Type (OBX-5 is valued)", ctx);
         }
         // OBX-3: Observation Identifier
         if field_value(seg, 3).is_none() {
-            warn_missing_field(warnings, "OBX", 3, "Observation Identifier", ctx);
+            warn_missing_field(warnings, obx_at, 3, "Observation Identifier", ctx);
         }
         // OBX-11: Observation Result Status
         if field_value(seg, 11).is_none() {
-            warn_missing_field(warnings, "OBX", 11, "Observation Result Status", ctx);
+            warn_missing_field(warnings, obx_at, 11, "Observation Result Status", ctx);
         }
     }
 }
@@ -256,16 +332,16 @@ fn validate_oru_r01(msg: &Hl7Message, warnings: &mut Vec<ValidationWarning>) {
 // detail are optional, and the detail is not necessarily an OBR (a pharmacy
 // order carries RXO) — only ORC is required (#229).
 
-fn validate_orm_o01(msg: &Hl7Message, warnings: &mut Vec<ValidationWarning>) {
+fn validate_orm_o01(msg: &Hl7Message, warnings: &mut Warnings) {
     let ctx = "ORM^O01";
 
-    let Some(orc) = find_segment(msg, "ORC") else {
+    let Some((orc_at, orc)) = find_segment(msg, "ORC") else {
         warn_missing_segment(warnings, "ORC", ctx);
         return;
     };
     // ORC-1: Order Control
     if field_value(orc, 1).is_none() {
-        warn_missing_field(warnings, "ORC", 1, "Order Control", ctx);
+        warn_missing_field(warnings, orc_at, 1, "Order Control", ctx);
     }
 }
 
@@ -275,7 +351,7 @@ fn validate_orm_o01(msg: &Hl7Message, warnings: &mut Vec<ValidationWarning>) {
 // OBR …] … }. As with ORM, the patient group and the OBR group are optional;
 // ORC is required (#229).
 
-fn validate_oml_o21(msg: &Hl7Message, warnings: &mut Vec<ValidationWarning>) {
+fn validate_oml_o21(msg: &Hl7Message, warnings: &mut Warnings) {
     let ctx = "OML^O21";
 
     if !has_segment(msg, "ORC") {
@@ -285,22 +361,24 @@ fn validate_oml_o21(msg: &Hl7Message, warnings: &mut Vec<ValidationWarning>) {
 
 // ─── SIU ─────────────────────────────────────────────────────────────────────
 
-fn validate_siu(msg: &Hl7Message, warnings: &mut Vec<ValidationWarning>) {
+fn validate_siu(msg: &Hl7Message, warnings: &mut Warnings) {
     let ctx = &msg.message_type;
 
-    let Some(sch) = find_segment(msg, "SCH") else {
+    let Some((sch_at, sch)) = find_segment(msg, "SCH") else {
         warn_missing_segment(warnings, "SCH", ctx);
         return;
     };
     // SCH-1 or SCH-2 must identify the appointment
     if field_value(sch, 1).is_none() && field_value(sch, 2).is_none() {
+        let sch_label = warnings.label(sch_at);
         warnings.push(ValidationWarning {
             code: "MISSING_FIELD".into(),
             message: format!(
-                "SCH-1 (Placer Appointment ID) or SCH-2 (Filler Appointment ID) is required for {ctx}"
+                "{sch_label}-1 (Placer Appointment ID) or {sch_label}-2 (Filler Appointment ID) is required for {ctx}"
             ),
             segment: "SCH".into(),
             field: Some(1),
+            segment_index: Some(sch_at),
         });
     }
     // SCH-7: Appointment Reason
@@ -309,7 +387,7 @@ fn validate_siu(msg: &Hl7Message, warnings: &mut Vec<ValidationWarning>) {
 
 // ─── MDM ─────────────────────────────────────────────────────────────────────
 
-fn validate_mdm(msg: &Hl7Message, warnings: &mut Vec<ValidationWarning>) {
+fn validate_mdm(msg: &Hl7Message, warnings: &mut Warnings) {
     let ctx = &msg.message_type;
 
     if !has_segment(msg, "EVN") {
@@ -322,18 +400,18 @@ fn validate_mdm(msg: &Hl7Message, warnings: &mut Vec<ValidationWarning>) {
         warn_missing_segment(warnings, "PV1", ctx);
     }
 
-    let Some(txa) = find_segment(msg, "TXA") else {
+    let Some((txa_at, txa)) = find_segment(msg, "TXA") else {
         warn_missing_segment(warnings, "TXA", ctx);
         return;
     };
     // TXA-2: Document Type
     if field_value(txa, 2).is_none() {
-        warn_missing_field(warnings, "TXA", 2, "Document Type", ctx);
+        warn_missing_field(warnings, txa_at, 2, "Document Type", ctx);
     }
     // TXA-9: Originator Code/Name
     // TXA-17: Document Completion Status
     if field_value(txa, 17).is_none() {
-        warn_missing_field(warnings, "TXA", 17, "Document Completion Status", ctx);
+        warn_missing_field(warnings, txa_at, 17, "Document Completion Status", ctx);
     }
 }
 
@@ -354,9 +432,9 @@ fn validate_mdm(msg: &Hl7Message, warnings: &mut Vec<ValidationWarning>) {
 /// Only the first component of each repetition is checked (escape-decoded).
 /// Multi-component values (e.g. `CODE^Text^System`) are typical for composite
 /// types and are skipped at the `check_datatype` level.
-fn validate_data_types(msg: &Hl7Message, warnings: &mut Vec<ValidationWarning>) {
+fn validate_data_types(msg: &Hl7Message, warnings: &mut Warnings) {
     let dict = crate::dictionary::get_v251();
-    for seg in &msg.segments {
+    for (at, seg) in msg.segments.iter().enumerate() {
         let Some(seg_def) = dict.segments.get(&seg.name) else {
             continue;
         };
@@ -379,16 +457,18 @@ fn validate_data_types(msg: &Hl7Message, warnings: &mut Vec<ValidationWarning>) 
                 check_datatype(&field_def.datatype, &primary).map(|err| (rep, err))
             });
             if let Some((rep, err)) = failure {
+                let label = warnings.label(at);
                 let position = if repetitions > 1 {
-                    format!("{}-{}[{}]", seg.name, field.index, rep + 1)
+                    format!("{label}-{}[{}]", field.index, rep + 1)
                 } else {
-                    format!("{}-{}", seg.name, field.index)
+                    format!("{label}-{}", field.index)
                 };
                 warnings.push(ValidationWarning {
                     code: "INVALID_DATATYPE".into(),
                     message: format!("{position} ({}): {err}", field_def.desc),
                     segment: seg.name.clone(),
                     field: Some(field.index),
+                    segment_index: Some(at),
                 });
             }
         }
@@ -851,6 +931,75 @@ mod tests {
         assert!(warnings_for(base)
             .iter()
             .any(|w| w.code == "MISSING_SEGMENT" && w.segment == "OBR"));
+    }
+
+    /// #318: a field missing in one OBX names that OBX — its position in
+    /// `segments` and its occurrence in the text — not every OBX.
+    #[test]
+    fn a_missing_field_names_the_occurrence_it_is_missing_in() {
+        let raw = "MSH|^~\\&|LAB|KLINIK|RCV|RZ|20240101120000||ORU^R01|X|P|2.5\r\
+                   PID|||4711^^^H||M^M\r\
+                   OBR|1||F1|GLU\r\
+                   OBX|1|ST|GLU^Glucose||5.4||||||F\r\
+                   OBX|2|ST|NA^Sodium||140\r";
+        let missing: Vec<_> = warnings_for(raw)
+            .into_iter()
+            .filter(|w| w.code == "MISSING_FIELD")
+            .collect();
+        assert_eq!(missing.len(), 1, "{missing:?}");
+        assert_eq!(missing[0].segment, "OBX");
+        assert_eq!(missing[0].field, Some(11));
+        assert_eq!(missing[0].segment_index, Some(4), "the second OBX");
+        assert!(
+            missing[0].message.starts_with("OBX[2]-11 "),
+            "{}",
+            missing[0].message
+        );
+
+        // A segment that occurs once keeps its plain name; a warning about
+        // no single segment has no position.
+        let raw = "MSH|^~\\&|APP|FAC|R|RF|20240101||ADT^A01|C1|P|2.5\rEVN|A01\rPID|1\rPV1|1|I\r";
+        let warnings = warnings_for(raw);
+        let pid3 = warnings
+            .iter()
+            .find(|w| w.code == "MISSING_FIELD" && w.field == Some(3))
+            .expect("PID-3 is missing");
+        assert!(pid3.message.starts_with("PID-3 "), "{}", pid3.message);
+        assert_eq!(pid3.segment_index, Some(2));
+        let json = serde_json::to_value(pid3).unwrap();
+        assert_eq!(json["segment_index"], 2);
+
+        let no_pv1 = warnings_for(
+            "MSH|^~\\&|APP|FAC|R|RF|20240101||ADT^A01|C1|P|2.5\rEVN|A01\rPID|1||4711||M^M\r",
+        );
+        let seg = no_pv1
+            .iter()
+            .find(|w| w.code == "MISSING_SEGMENT")
+            .expect("PV1 is missing");
+        assert_eq!(seg.segment_index, None);
+        let json = serde_json::to_value(seg).unwrap();
+        assert!(json.get("segment_index").is_none(), "omitted: {json}");
+    }
+
+    /// #318: a datatype warning in a repeated segment names its occurrence.
+    #[test]
+    fn a_datatype_warning_names_the_occurrence() {
+        let raw = "MSH|^~\\&|LAB|KLINIK|RCV|RZ|20240101120000||ORU^R01|X|P|2.5\r\
+                   PID|||4711^^^H||M^M\r\
+                   OBR|1||F1|GLU\r\
+                   OBX|1|NM|GLU^Glucose||5.4||||||F\r\
+                   OBX|2|NM|NA^Sodium||140||||||F|||notadate\r";
+        let bad: Vec<_> = warnings_for(raw)
+            .into_iter()
+            .filter(|w| w.code == "INVALID_DATATYPE")
+            .collect();
+        assert_eq!(bad.len(), 1, "{bad:?}");
+        assert_eq!(bad[0].segment_index, Some(4));
+        assert!(
+            bad[0].message.starts_with("OBX[2]-14 "),
+            "{}",
+            bad[0].message
+        );
     }
 
     #[test]
