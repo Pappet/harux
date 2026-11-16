@@ -329,3 +329,79 @@ fn ack_time_is_local_time() {
         },
     );
 }
+
+/// #327: both listeners are bound before either server takes a connection.
+/// With the web port taken, Harux exits naming it — and its MLLP port never
+/// answers in the meantime, so no message is acknowledged and then lost with
+/// the process. (Before, the MLLP listener was bound in a task of its own
+/// and could serve while the web bind failed; under `ulimit -n` a flood of
+/// MLLP connections could even be what made the web bind fail.)
+#[test]
+fn a_taken_web_port_stops_the_start_before_mllp_serves() {
+    let _serial = SERVER_TESTS.lock().unwrap_or_else(|e| e.into_inner());
+    let dir = std::env::temp_dir().join(format!("harux-startup-taken-{}", std::process::id()));
+    for attempt in 1..=3 {
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let taken = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let web = taken.local_addr().unwrap().port();
+        let mllp = free_port();
+        std::fs::write(
+            dir.join("harux.toml"),
+            format!(
+                "[server]\nmllp_port = {mllp}\nweb_port = {web}\n\
+                 mllp_bind = \"127.0.0.1\"\nweb_bind = \"127.0.0.1\"\n"
+            ),
+        )
+        .unwrap();
+        let mut child = Command::new(env!("CARGO_BIN_EXE_harux"))
+            .current_dir(&dir)
+            .env_remove("MLLP_PORT")
+            .env_remove("WEB_PORT")
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .unwrap();
+        let deadline = Instant::now() + Duration::from_secs(10);
+        let mut mllp_answered = false;
+        let status = loop {
+            if let Some(st) = child.try_wait().unwrap() {
+                break Some(st);
+            }
+            if Instant::now() > deadline {
+                let _ = child.kill();
+                let _ = child.wait();
+                break None;
+            }
+            mllp_answered |= std::net::TcpStream::connect(("127.0.0.1", mllp)).is_ok();
+            std::thread::sleep(Duration::from_millis(5));
+        };
+        let mut stderr = String::new();
+        use std::io::Read;
+        child
+            .stderr
+            .take()
+            .unwrap()
+            .read_to_string(&mut stderr)
+            .unwrap();
+        drop(taken);
+        if attempt < 3 && stderr.contains("mllp_port") {
+            continue; // the MLLP port was taken in between by someone else
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(
+            matches!(status, Some(st) if !st.success()),
+            "Harux did not stop: {status:?}; stderr:\n{stderr}"
+        );
+        assert!(
+            stderr.contains(&format!("cannot listen on 127.0.0.1:{web}")),
+            "{stderr}"
+        );
+        assert!(
+            !mllp_answered,
+            "the MLLP port answered before Harux stopped"
+        );
+        return;
+    }
+    unreachable!()
+}

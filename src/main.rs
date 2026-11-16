@@ -150,19 +150,27 @@ async fn main() -> anyhow::Result<()> {
 
     let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
 
+    // Both listeners are bound before either server takes a connection
+    // (#327). A start that fails on the second port — taken, or no file
+    // descriptors left — must not have accepted, and acknowledged, messages
+    // on the first one before it exits: they would be lost with the process.
+    let mllp_listener = mllp::bind(&mllp_addr.to_string()).await?;
+    let web_listener = tokio::net::TcpListener::bind(web_addr).await.map_err(|e| {
+        anyhow::anyhow!("cannot listen on {web_addr} (server.web_bind / web_port): {e}")
+    })?;
+
     // Start MLLP server
     let mllp_store = store.clone();
     let mllp_stats = stats.clone();
     let mllp_shutdown = shutdown_rx.clone();
     let mllp_config = config.mllp.clone();
-    let mllp_handle = tokio::spawn(async move {
-        let addr = mllp_addr.to_string();
-        if let Err(e) =
-            mllp::start_mllp_server(&addr, mllp_store, mllp_stats, mllp_shutdown, mllp_config).await
-        {
-            warn!("MLLP server error: {}", e);
-        }
-    });
+    let mllp_handle = tokio::spawn(mllp::serve(
+        mllp_listener,
+        mllp_store,
+        mllp_stats,
+        mllp_shutdown,
+        mllp_config,
+    ));
 
     // Start Web server
     let app_state = AppState {
@@ -174,15 +182,12 @@ async fn main() -> anyhow::Result<()> {
         sender: sender.clone(),
     };
     let app = create_router(app_state);
-    let listener = tokio::net::TcpListener::bind(web_addr).await.map_err(|e| {
-        anyhow::anyhow!("cannot listen on {web_addr} (server.web_bind / web_port): {e}")
-    })?;
     let web_shutdown = shutdown_rx.clone();
     let web_handle = tokio::spawn(async move {
         // With the client's address (`ConnectInfo`): a sent message records
         // who asked for it (#272).
         if let Err(e) = axum::serve(
-            listener,
+            web_listener,
             app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
         )
         .with_graceful_shutdown(async move {

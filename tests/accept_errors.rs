@@ -54,6 +54,7 @@ fn accept_errors_do_not_stop_the_server() {
     let dir: PathBuf = std::env::temp_dir().join(format!("harux-accept-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let log_path = dir.join("harux.log");
+    let err_path = dir.join("stderr.txt");
     let (mllp_port, web_port) = (free_port(), free_port());
 
     let mut child = Command::new("sh")
@@ -67,7 +68,7 @@ fn accept_errors_do_not_stop_the_server() {
         .env("WEB_PORT", web_port.to_string())
         .env("RUST_LOG", "info")
         .stdout(Stdio::from(std::fs::File::create(&log_path).unwrap()))
-        .stderr(Stdio::null())
+        .stderr(Stdio::from(std::fs::File::create(&err_path).unwrap()))
         .spawn()
         .unwrap();
 
@@ -75,13 +76,27 @@ fn accept_errors_do_not_stop_the_server() {
         drop(connect_when_up(mllp_port));
 
         // More connections than descriptors: accept() fails with EMFILE.
-        let flood: Vec<TcpStream> = (0..80)
-            .map(|_| TcpStream::connect(("127.0.0.1", mllp_port)).expect("connect"))
-            .collect();
+        // A refused connection means nothing listens any more: say why
+        // (#327) — Harux's exit status, its output and the ports.
+        let mut flood = Vec::new();
+        for i in 0..80 {
+            match TcpStream::connect(("127.0.0.1", mllp_port)) {
+                Ok(s) => flood.push(s),
+                Err(e) => panic!(
+                    "connection {i} of the flood failed: {e}\n\
+                     Harux: {:?}, MLLP port {mllp_port}, web port {web_port}\n\
+                     stderr:\n{}\nlog:\n{}",
+                    child.try_wait(),
+                    std::fs::read_to_string(&err_path).unwrap_or_default(),
+                    std::fs::read_to_string(&log_path).unwrap_or_default(),
+                ),
+            }
+        }
         std::thread::sleep(Duration::from_secs(1));
         assert!(
             child.try_wait().unwrap().is_none(),
-            "Harux exited while accept() was failing"
+            "Harux exited while accept() was failing; stderr:\n{}",
+            std::fs::read_to_string(&err_path).unwrap_or_default()
         );
         drop(flood);
         std::thread::sleep(Duration::from_millis(800));
