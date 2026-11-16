@@ -92,7 +92,8 @@ export class El {
 }
 
 function matcher(sel) {
-    const m = /^([a-zA-Z]*)((?:\.[\w-]+)*)((?:\[[^\]]+\])*)$/.exec(sel.trim());
+    // A quoted attribute value may hold `]` (`OBX[2]-3`, #318).
+    const m = /^([a-zA-Z]*)((?:\.[\w-]+)*)((?:\[(?:[^\]"]|"[^"]*")+\])*)$/.exec(sel.trim());
     if (!m) throw new Error(`fake-dom: unsupported selector ${sel}`);
     const tag = m[1].toUpperCase();
     const classes = m[2] ? m[2].split('.').filter(Boolean) : [];

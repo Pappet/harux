@@ -793,6 +793,7 @@ async fn history_state() -> AppState {
                     message: "PV1 missing".into(),
                     segment: "PV1".into(),
                     field: None,
+                    segment_index: None,
                 });
         }
         if i == 4 {
@@ -803,6 +804,7 @@ async fn history_state() -> AppState {
                     message: "PID-3 missing".into(),
                     segment: "PID".into(),
                     field: Some(3),
+                    segment_index: Some(1),
                 });
         }
         state.store.insert(msg).await;

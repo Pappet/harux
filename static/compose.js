@@ -1117,16 +1117,22 @@ function draftFieldPath(name, occurrence, index) {
     return occurrence === 1 ? `${name}-${index}` : `${name}[${occurrence}]-${index}`;
 }
 
-// Warnings by field (`PID-5`), for the warning marks. A validation warning
-// names the segment, not which occurrence of it (#291 review), so a missing
-// required field in one OBX marks that field in every OBX — the banner lists
-// the warnings themselves.
+// The key of a field row for the warning marks: the segment's position and
+// the field (`2:5`), so a warning marks the occurrence of the segment it was
+// found in, not every segment of the name (#318).
+function draftWarnKey(segIdx, index) {
+    return `${segIdx}:${index}`;
+}
+
+// Warned fields by segment position, for the warning marks; the banner
+// lists the warnings themselves.
 function draftWarningIndex(message) {
-    const fields = new Set();
-    for (const w of message.validation_warnings || []) {
-        if (w.field != null && w.segment) fields.add(`${w.segment}-${w.field}`);
-    }
-    return fields;
+    return warnedFieldsBySegment(message.validation_warnings);
+}
+
+function isDraftFieldWarned(warned, segIdx, index) {
+    const fields = warned.get(segIdx);
+    return !!fields && fields.has(index);
 }
 
 function placeholderBadge(path, value) {
@@ -1182,7 +1188,7 @@ function fillDraftValidation(container, msg) {
         }
         nodes.push(list);
     }
-    if (warnings.length) nodes.push(buildValidationBanner(warnings));
+    if (warnings.length) nodes.push(buildValidationBanner(warnings, msg.segments));
     container.replaceChildren(...nodes);
 }
 
@@ -1232,16 +1238,18 @@ function buildDraftSegmentBlock(d, seg, segIdx, occurrence, warned, delims) {
     const tbody = document.createElement('tbody');
     const present = new Map(seg.fields.map((f) => [f.index, f]));
     const dict = showingEmpty ? state.dictionaryCache.get(seg.name) : null;
+    // A required field missing after the last one present (OBX-11 of an
+    // OBX with five fields) is listed too (#318).
     const highest = Math.max(
         seg.fields.length ? seg.fields[seg.fields.length - 1].index : 0,
         dict && dict.fields.length ? dict.fields[dict.fields.length - 1].seq : 0,
+        ...(warned.get(segIdx) || []),
     );
     const dictBySeq = new Map(dict ? dict.fields.map((f) => [f.seq, f]) : []);
     for (let index = 1; index <= highest; index++) {
         const f = present.get(index);
         const path = draftFieldPath(seg.name, occurrence, index);
-        const label = `${seg.name}-${index}`;
-        const isWarn = warned.has(label);
+        const isWarn = isDraftFieldWarned(warned, segIdx, index);
         const value = f ? f.value : '';
         // Empty fields are listed only on request, or when they are missing
         // and required.
@@ -1249,7 +1257,9 @@ function buildDraftSegmentBlock(d, seg, segIdx, occurrence, warned, delims) {
         const def = dictBySeq.get(index);
         const description = (f && f.description) || (def && def.name) || '';
         const datatype = (f && f.datatype) || (def && def.datatype) || '';
-        tbody.appendChild(buildDraftFieldRow(seg.name, index, path, value, description, datatype, isWarn));
+        const tr = buildDraftFieldRow(seg.name, index, path, value, description, datatype, isWarn);
+        tr.dataset.warnKey = draftWarnKey(segIdx, index);
+        tbody.appendChild(tr);
     }
     table.appendChild(tbody);
     block.appendChild(table);
@@ -1420,8 +1430,9 @@ function refreshDraftSegmentsInPlace(path, value, data) {
     const top = content.querySelector('.draft-validation');
     if (top) fillDraftValidation(top, data.message);
     const warned = draftWarningIndex(data.message);
-    for (const tr of content.querySelectorAll('tr[data-label]')) {
-        tr.classList.toggle('warn', warned.has(tr.dataset.label));
+    for (const tr of content.querySelectorAll('tr[data-warn-key]')) {
+        const [segIdx, index] = tr.dataset.warnKey.split(':').map(Number);
+        tr.classList.toggle('warn', isDraftFieldWarned(warned, segIdx, index));
     }
     const input = draftInputFor(path);
     if (input) {

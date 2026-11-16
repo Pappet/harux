@@ -1011,7 +1011,44 @@ function buildTypicalChecklist(msg, missingSegWarnings, fieldWarningSegs) {
     return div;
 }
 
-function buildValidationBanner(warnings) {
+// Where each warning points, as its text names it (#318): `PID-5`, or
+// `OBX[2]-11` when the segment repeats in `segments` — the occurrence of the
+// segment at the warning's `segment_index`, counted from 1.
+function warningLabels(warnings, segments) {
+    const segs = segments || [];
+    const occurrence = [];
+    const total = new Map();
+    for (const seg of segs) {
+        const n = (total.get(seg.name) || 0) + 1;
+        total.set(seg.name, n);
+        occurrence.push(n);
+    }
+    return warnings.map((w) => {
+        const at = w.segment_index;
+        const seg = at != null && segs[at] && total.get(segs[at].name) > 1
+            ? `${w.segment}[${occurrence[at]}]`
+            : w.segment;
+        return w.field != null ? `${seg}-${w.field}` : seg;
+    });
+}
+
+// The fields to mark, by the position of their segment (#318): a warning
+// names the occurrence it was found in (`segment_index`), so a field missing
+// in one OBX is marked in that OBX only, not in every segment of the name.
+// `codes`, if given, limits the warnings taken.
+function warnedFieldsBySegment(warnings, codes) {
+    const bySegment = new Map();
+    for (const w of warnings || []) {
+        if (w.field == null || w.segment_index == null) continue;
+        if (codes && !codes.includes(w.code)) continue;
+        if (!bySegment.has(w.segment_index)) bySegment.set(w.segment_index, new Set());
+        bySegment.get(w.segment_index).add(w.field);
+    }
+    return bySegment;
+}
+
+function buildValidationBanner(warnings, segments) {
+    const labels = warningLabels(warnings, segments);
     const hasSegErrors = warnings.some(w => w.code === 'MISSING_SEGMENT');
     const details = document.createElement('details');
     details.className = hasSegErrors ? 'validation-summary error' : 'validation-summary';
@@ -1028,9 +1065,10 @@ function buildValidationBanner(warnings) {
     strongEl.textContent = `${warnings.length} validation ${warnings.length === 1 ? 'warning' : 'warnings'}`;
     textSpan.appendChild(strongEl);
 
-    const segMissing = warnings.filter(w => w.code === 'MISSING_SEGMENT').map(w => w.segment);
-    const fieldMissing = warnings.filter(w => w.code === 'MISSING_FIELD').map(w => `${w.segment}-${w.field}`);
-    const datatype = warnings.filter(w => w.code === 'INVALID_DATATYPE').map(w => `${w.segment}-${w.field}`);
+    const labelsOf = (code) => labels.filter((_, i) => warnings[i].code === code);
+    const segMissing = labelsOf('MISSING_SEGMENT');
+    const fieldMissing = labelsOf('MISSING_FIELD');
+    const datatype = labelsOf('INVALID_DATATYPE');
 
     function appendListPart(prefix, items, listCls) {
         textSpan.appendChild(document.createTextNode(' · ' + prefix));
@@ -1056,19 +1094,31 @@ function buildValidationBanner(warnings) {
 
     const ul = document.createElement('ul');
     ul.className = 'validation-warnings-list';
-    for (const w of warnings) {
+    warnings.forEach((w, i) => {
         const li = document.createElement('li');
         const badge = document.createElement('span');
         badge.className = w.code === 'MISSING_SEGMENT' ? 'validation-seg error'
             : w.code === 'INVALID_DATATYPE' ? 'validation-seg type'
             : 'validation-seg';
-        badge.textContent = w.segment + (w.field != null ? '-' + w.field : '');
+        badge.textContent = labels[i];
         li.appendChild(badge);
         li.appendChild(document.createTextNode(' ' + w.message));
         ul.appendChild(li);
-    }
+    });
     details.appendChild(ul);
     return details;
+}
+
+// The segment's fields plus an empty one for each warned field the segment
+// does not reach (OBX-11 of an OBX that ends at field 5), so the mark shows
+// where the field is missing (#318).
+function fieldsWithWarned(fields, warnFields) {
+    if (!warnFields) return fields;
+    const present = new Set(fields.map((f) => f.index));
+    const absent = [...warnFields].filter((index) => !present.has(index));
+    if (!absent.length) return fields;
+    return fields.concat(absent.map((index) => ({ index, value: '' })))
+        .sort((a, b) => a.index - b.index);
 }
 
 function buildSegmentBlock(seg, segIdx, key, collapsed, warnFields, delims) {
@@ -1113,7 +1163,7 @@ function buildSegmentBlock(seg, segIdx, key, collapsed, warnFields, delims) {
     const table = document.createElement('table');
     table.className = 'field-table';
     const tbody = document.createElement('tbody');
-    for (const f of seg.fields) {
+    for (const f of fieldsWithWarned(seg.fields, warnFields)) {
         tbody.appendChild(buildFieldRow(seg, f, warnFields && warnFields.has(f.index), delims));
     }
     table.appendChild(tbody);
@@ -1217,30 +1267,28 @@ function renderParsedTab(content, msg) {
     const warnings = msg.validation_warnings || [];
     const missingSegWarnings = {};
     const fieldWarningSegs = {};
-    const missingFieldByseg = new Map();
     for (const w of warnings) {
         if (w.code === 'MISSING_SEGMENT') {
             missingSegWarnings[w.segment] = w.message;
         } else if (w.code === 'MISSING_FIELD') {
             fieldWarningSegs[w.segment] = true;
-            if (w.segment != null && w.field != null) {
-                if (!missingFieldByseg.has(w.segment)) missingFieldByseg.set(w.segment, new Set());
-                missingFieldByseg.get(w.segment).add(w.field);
-            }
         }
     }
+    // Marked in the occurrence the field is missing in, not in every
+    // segment of the name (#318).
+    const missingFields = warnedFieldsBySegment(warnings, ['MISSING_FIELD']);
 
     const children = [];
     if (msg.typical_segments && msg.typical_segments.length) {
         children.push(buildTypicalChecklist(msg, missingSegWarnings, fieldWarningSegs));
     }
     if (warnings.length) {
-        children.push(buildValidationBanner(warnings));
+        children.push(buildValidationBanner(warnings, msg.segments));
     }
     for (let segIdx = 0; segIdx < msg.segments.length; segIdx++) {
         const seg = msg.segments[segIdx];
         const key = `${msg.id}-${segIdx}`;
-        children.push(buildSegmentBlock(seg, segIdx, key, state.collapsedSegments.has(key), missingFieldByseg.get(seg.name), msg.delimiters));
+        children.push(buildSegmentBlock(seg, segIdx, key, state.collapsedSegments.has(key), missingFields.get(segIdx), msg.delimiters));
     }
     content.replaceChildren(...children);
 }

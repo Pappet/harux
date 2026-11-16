@@ -922,6 +922,7 @@ mod tests {
                 message: String::new(),
                 segment: "MSH".into(),
                 field: Some(18),
+                segment_index: None,
             });
         assert!(
             !build_ack(&msg, "AA").contains("8859"),
