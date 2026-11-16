@@ -336,6 +336,12 @@ fn ack_time_is_local_time() {
 /// the process. (Before, the MLLP listener was bound in a task of its own
 /// and could serve while the web bind failed; under `ulimit -n` a flood of
 /// MLLP connections could even be what made the web bind fail.)
+///
+/// A best-effort guard: on the old code the window between the two binds
+/// was short, and this test caught it in about 1 of 10 runs (#328 review).
+/// The deterministic proof was a pause inserted before the web bind, which
+/// made the old code fail every time; a test hook for that in the binary
+/// was not worth it.
 #[test]
 fn a_taken_web_port_stops_the_start_before_mllp_serves() {
     let _serial = SERVER_TESTS.lock().unwrap_or_else(|e| e.into_inner());
@@ -385,8 +391,14 @@ fn a_taken_web_port_stops_the_start_before_mllp_serves() {
             .read_to_string(&mut stderr)
             .unwrap();
         drop(taken);
-        if attempt < 3 && stderr.contains("mllp_port") {
-            continue; // the MLLP port was taken in between by someone else
+        if stderr.contains("mllp_port") {
+            // The MLLP port was taken in between by another process: not
+            // what this test is about.
+            assert!(
+                attempt < 3,
+                "the MLLP port was taken by another process three times; stderr:\n{stderr}"
+            );
+            continue;
         }
         let _ = std::fs::remove_dir_all(&dir);
         assert!(
@@ -403,5 +415,4 @@ fn a_taken_web_port_stops_the_start_before_mllp_serves() {
         );
         return;
     }
-    unreachable!()
 }

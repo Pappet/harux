@@ -16,7 +16,7 @@ use config::Config;
 use mllp::MllpStats;
 use std::sync::atomic::Ordering;
 use store::MessageStore;
-use tracing::{info, warn};
+use tracing::{error, info, warn};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 use web::{create_router, AppState};
 
@@ -154,10 +154,18 @@ async fn main() -> anyhow::Result<()> {
     // (#327). A start that fails on the second port — taken, or no file
     // descriptors left — must not have accepted, and acknowledged, messages
     // on the first one before it exits: they would be lost with the process.
-    let mllp_listener = mllp::bind(&mllp_addr.to_string()).await?;
-    let web_listener = tokio::net::TcpListener::bind(web_addr).await.map_err(|e| {
-        anyhow::anyhow!("cannot listen on {web_addr} (server.web_bind / web_port): {e}")
-    })?;
+    // A failed bind is logged too, not only printed to stderr: a service
+    // manager may not keep stderr, and the log is where the reason is looked
+    // for (#328 review).
+    let mllp_listener = mllp::bind(&mllp_addr.to_string())
+        .await
+        .inspect_err(|e| error!("{e}"))?;
+    let web_listener = tokio::net::TcpListener::bind(web_addr)
+        .await
+        .map_err(|e| {
+            anyhow::anyhow!("cannot listen on {web_addr} (server.web_bind / web_port): {e}")
+        })
+        .inspect_err(|e| error!("{e}"))?;
 
     // Start MLLP server
     let mllp_store = store.clone();
