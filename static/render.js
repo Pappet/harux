@@ -1047,7 +1047,10 @@ function warnedFieldsBySegment(warnings, codes) {
     return bySegment;
 }
 
-function buildValidationBanner(warnings, segments) {
+// `segments` is the message's segment list (`msg.segments`), which the
+// labels need to name an occurrence (`OBX[2]-11`, #318). Without it every
+// label falls back to the plain segment name — pass it from every caller.
+function buildValidationBanner(warnings, segments = []) {
     const labels = warningLabels(warnings, segments);
     const hasSegErrors = warnings.some(w => w.code === 'MISSING_SEGMENT');
     const details = document.createElement('details');

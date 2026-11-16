@@ -1317,6 +1317,57 @@ async fn the_detail_json_names_datatypes() {
     );
 }
 
+/// The detail JSON's warnings name the segment occurrence they were found
+/// in (#318): `segment_index` for a field warning — what the detail view and
+/// the draft editor mark by — and no key at all for a missing segment.
+#[tokio::test]
+async fn the_detail_json_names_the_segment_of_a_warning() {
+    let state = make_state();
+    store_bytes(
+        &state,
+        "oru",
+        b"MSH|^~\\&|LAB|KLINIK|RCV|RZ|20240101120000||ORU^R01|C1|P|2.5\r\
+          PID|||4711^^^H||M^M\r\
+          OBR|1||F1|GLU\r\
+          OBX|1|ST|GLU^Glucose||5.4||||||F\r\
+          OBX|2|ST|NA^Sodium||140\r",
+    )
+    .await;
+    let detail = get_json(&state, "/api/messages/oru").await;
+    let warnings = detail["validation_warnings"].as_array().unwrap();
+    assert_eq!(warnings.len(), 1, "{warnings:?}");
+    assert_eq!(warnings[0]["code"], "MISSING_FIELD");
+    assert_eq!(warnings[0]["segment"], "OBX");
+    assert_eq!(warnings[0]["field"], 11);
+    assert_eq!(warnings[0]["segment_index"], 4, "the second OBX");
+    assert!(
+        warnings[0]["message"]
+            .as_str()
+            .unwrap()
+            .starts_with("OBX[2]-11 "),
+        "{}",
+        warnings[0]["message"]
+    );
+
+    store_bytes(
+        &state,
+        "adt",
+        b"MSH|^~\\&|A|B|||20240101||ADT^A01|C2|P|2.5\rEVN|A01\rPID|1||4711||M^M\r",
+    )
+    .await;
+    let detail = get_json(&state, "/api/messages/adt").await;
+    let missing = detail["validation_warnings"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|w| w["code"] == "MISSING_SEGMENT")
+        .expect("PV1 is missing");
+    assert!(
+        missing.get("segment_index").is_none(),
+        "omitted, not null: {missing}"
+    );
+}
+
 /// The roadmap's criterion with `curl` alone, for the MDM: a draft whose
 /// attachment is a reference is made, previewed, changed with `set`,
 /// built and sent — and the attachment arrives as it was stored.
