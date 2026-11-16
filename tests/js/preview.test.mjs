@@ -5,8 +5,8 @@
 //   node --test 'tests/js/*.test.mjs'
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
+import { loadStatic } from './static.mjs';
 
 function setup() {
     const store = new Map();
@@ -18,7 +18,7 @@ function setup() {
         window: {},
     };
     vm.createContext(ctx);
-    vm.runInContext(readFileSync(new URL('../../static/util.js', import.meta.url), 'utf8'), ctx);
+    loadStatic(ctx, 'util.js');
     // const declarations are not context properties; expose what the tests need.
     vm.runInContext('globalThis.LIMITS = { max: DISPLAY_VALUE_MAX, preview: DISPLAY_VALUE_PREVIEW };', ctx);
     return ctx;

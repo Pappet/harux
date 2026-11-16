@@ -7,12 +7,11 @@
 //   node --test 'tests/js/*.test.mjs'
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
 
-const read = (f) => readFileSync(new URL(`../../static/${f}`, import.meta.url), 'utf8');
 
 import { El } from './fake-dom.mjs';
+import { loadStatic } from './static.mjs';
 
 function setup({ cap = 5 } = {}) {
     const noop = () => {};
@@ -54,9 +53,9 @@ function setup({ cap = 5 } = {}) {
         fetch: () => new Promise(noop),
     };
     vm.createContext(ctx);
-    vm.runInContext(read('state.js'), ctx);
-    vm.runInContext(read('ws.js'), ctx);
-    vm.runInContext(read('render.js'), ctx);
+    loadStatic(ctx, 'state.js');
+    loadStatic(ctx, 'ws.js');
+    loadStatic(ctx, 'render.js');
     // render.js redefines the render functions; keep the two under test and
     // put the stubs back for the rest, so the buffer tests don't render.
     ctx.removeRowsFromListReal = ctx.removeRowsFromList;

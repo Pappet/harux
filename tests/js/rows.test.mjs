@@ -6,9 +6,9 @@
 //   node --test 'tests/js/*.test.mjs'
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
 import { El } from './fake-dom.mjs';
+import { loadStatic } from './static.mjs';
 
 function setup() {
     const ctx = {
@@ -28,8 +28,8 @@ function setup() {
         ackChipClass: (code) => `msg-ack ${code.toLowerCase()}`,
     };
     vm.createContext(ctx);
-    vm.runInContext(readFileSync(new URL('../../static/state.js', import.meta.url), 'utf8'), ctx);
-    vm.runInContext(readFileSync(new URL('../../static/render.js', import.meta.url), 'utf8'), ctx);
+    loadStatic(ctx, 'state.js');
+    loadStatic(ctx, 'render.js');
     // The SVG icons are parsed from markup in the browser; a marker is enough here.
     ctx.iconNode = (name) => { const el = new El('icon'); el.dataset.icon = name; return el; };
     return { ctx, state: ctx.window.state };

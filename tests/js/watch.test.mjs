@@ -8,11 +8,10 @@
 //   node --test 'tests/js/*.test.mjs'
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
 import { El } from './fake-dom.mjs';
+import { loadStatic } from './static.mjs';
 
-const read = (f) => readFileSync(new URL(`../../static/${f}`, import.meta.url), 'utf8');
 
 function memoryStorage() {
     const data = new Map();
@@ -55,7 +54,7 @@ function setup({ secure = false, permission = 'default', session = memoryStorage
         Date, JSON, Map, Set, WeakMap, Array, Math, Number, String,
     };
     vm.createContext(ctx);
-    for (const f of ['state.js', 'util.js', 'render.js', 'watch.js']) vm.runInContext(read(f), ctx);
+    for (const f of ['state.js', 'util.js', 'render.js', 'watch.js']) loadStatic(ctx, f);
     Object.assign(ctx, {
         showToast: (m, t) => toasts.push([m, t]),
         playWatchSound: () => sounds.push(Date.now()),

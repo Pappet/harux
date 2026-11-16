@@ -8,12 +8,11 @@
 //   node --test 'tests/js/*.test.mjs'
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
 import { webcrypto } from 'node:crypto';
 import vm from 'node:vm';
 import { El } from './fake-dom.mjs';
+import { loadStatic } from './static.mjs';
 
-const read = (f) => readFileSync(new URL(`../../static/${f}`, import.meta.url), 'utf8');
 
 const running = (over = {}) => ({
     id: 'run-1', target: 'orchestra', requested_by: '10.0.0.7', total: 3, done: 0, state: 'running',
@@ -54,7 +53,7 @@ function setup({ confirmAnswer = true, statuses = [], sendStatus = 202 } = {}) {
         },
     };
     vm.createContext(ctx);
-    for (const f of ['state.js', 'util.js', 'render.js', 'send.js']) vm.runInContext(read(f), ctx);
+    for (const f of ['state.js', 'util.js', 'render.js', 'send.js']) loadStatic(ctx, f);
     // esc() needs a real DOM; this escapes the same five characters.
     const escape = (s) => (s ? String(s).replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`) : '');
     Object.assign(ctx, {

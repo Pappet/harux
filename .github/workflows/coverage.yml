@@ -1,0 +1,93 @@
+name: Coverage
+
+# Test coverage of the Rust code and the frontend, written to the job
+# summary (#322). Not part of the required gate in ci.yml: it reports, it
+# does not fail on a number. A threshold can come once the numbers are
+# stable.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: coverage-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+defaults:
+  run:
+    # An explicit bash runs with -o pipefail, so `cmd | tee` fails when
+    # cmd does.
+    shell: bash
+
+jobs:
+  coverage:
+    name: Coverage
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup Rust
+        id: toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: llvm-tools-preview
+
+      # A prebuilt binary; a CI tool, not a crate dependency of Harux.
+      - name: Install cargo-llvm-cov
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-llvm-cov
+
+      - name: Cache cargo
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: coverage-cargo-${{ steps.toolchain.outputs.rustc_hash }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: coverage-cargo-${{ steps.toolchain.outputs.rustc_hash }}-
+
+      # Line, region and function coverage of every test (unit and
+      # integration). Branch coverage needs a nightly toolchain.
+      - name: Rust coverage
+        run: cargo llvm-cov --summary-only --color never | tee rust-coverage.txt
+
+      - name: Setup Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: 22
+
+      # tests/js/static.mjs loads static/*.js under their file names, so
+      # Node's own coverage reports them — no npm, no dependencies. A file
+      # no test loads (app.js) is not in the report.
+      - name: Frontend coverage
+        run: >
+          node --test --experimental-test-coverage
+          --test-coverage-include='static/**'
+          --test-reporter=spec --test-reporter-destination=stdout
+          --test-reporter=lcov --test-reporter-destination=frontend.lcov
+          'tests/js/*.test.mjs'
+
+      - name: Job summary
+        run: |
+          {
+            echo '## Rust (`cargo llvm-cov`)'
+            echo
+            echo '```text'
+            cat rust-coverage.txt
+            echo '```'
+            echo
+            echo '## Frontend (`node --test`, `static/*.js`)'
+            echo
+            node .github/scripts/coverage-summary.mjs frontend.lcov
+            echo
+            echo '`app.js` (UI wiring) is loaded by no test and is not listed.'
+          } >> "$GITHUB_STEP_SUMMARY"

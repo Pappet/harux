@@ -7,11 +7,10 @@
 //   node --test 'tests/js/*.test.mjs'
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
 import { El } from './fake-dom.mjs';
+import { loadStatic } from './static.mjs';
 
-const read = (f) => readFileSync(new URL(`../../static/${f}`, import.meta.url), 'utf8');
 
 function setup() {
     const noop = () => {};
@@ -33,7 +32,7 @@ function setup() {
         fetch: (url) => new Promise((resolve) => requests.push({ url, resolve })),
     };
     vm.createContext(ctx);
-    for (const f of ['state.js', 'util.js', 'ws.js', 'render.js']) vm.runInContext(read(f), ctx);
+    for (const f of ['state.js', 'util.js', 'ws.js', 'render.js']) loadStatic(ctx, f);
     // Rendering is not under test here (the detail view's is, through
     // `renderDetailReal`).
     ctx.renderDetailReal = ctx.renderDetail;

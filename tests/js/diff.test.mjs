@@ -5,8 +5,8 @@
 //   node --test tests/js/
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
+import { loadStatic } from './static.mjs';
 
 function loadDiff(previewText = (t) => ({ text: t, truncated: false, size: '' })) {
     const ctx = {
@@ -17,7 +17,7 @@ function loadDiff(previewText = (t) => ({ text: t, truncated: false, size: '' })
         escAttr: (s) => String(s ?? '').replace(/"/g, '&quot;'),
     };
     vm.createContext(ctx);
-    vm.runInContext(readFileSync(new URL('../../static/diff.js', import.meta.url), 'utf8'), ctx);
+    loadStatic(ctx, 'diff.js');
     return ctx;
 }
 

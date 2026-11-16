@@ -82,6 +82,14 @@ A separate workflow (`.github/workflows/audit.yml`) runs `cargo audit` when
 dependencies change and daily; `.cargo/audit.toml` lists ignored advisories,
 each with a reason. Dependabot proposes weekly crate and Actions updates.
 
+`.github/workflows/coverage.yml` measures test coverage on every pull request
+and push to `main` (#322) and writes it to the job summary: Rust with
+`cargo llvm-cov --summary-only` (lines, regions, functions), the frontend with
+Node's own coverage. It reports and is **not** part of the gate. Frontend code
+is measured because the tests load `static/*.js` through `loadStatic`
+(`tests/js/static.mjs`), which runs each file under its own file name — load
+new frontend files the same way, never with a bare `vm.runInContext`.
+
 Run these locally before pushing. A task whose build, tests or clippy fail is
 not done.
 
@@ -256,6 +264,11 @@ tests/test.sh                       # functional + load test, Linux/macOS (needs
 .\tests\test.ps1                    # functional + load test, Windows (persistent TCP, 1000 messages)
 ```
 
+Coverage locally: `node --test --experimental-test-coverage
+--test-coverage-include='static/**' 'tests/js/*.test.mjs'` for the frontend;
+`cargo llvm-cov --summary-only` for Rust (needs the `llvm-tools-preview`
+component and `cargo-llvm-cov`).
+
 `tests/test.sh` starts a new `nc` process per message, so its load numbers
 measure process overhead, not server throughput. `tests/fuzz_ingest.rs` runs
 20,000 mutated frames by default; `HARUX_FUZZ_ITERATIONS` changes the count.
@@ -326,7 +339,7 @@ tests/
 ├── alloc_accounting.rs           # Counting allocator: estimated_bytes() matches the real heap (#226)
 ├── doc_paths.rs                  # Paths named in the docs exist (#246)
 ├── web_api.rs                    # Axum REST/handler integration tests (incl. drafts: MDM reference, Latin-1 round trip, body limits, permits)
-├── js/                           # node:test tests for static/*.js (diff, list load queue, client buffer + counters, row builder, long-value preview, sent rows, resend + target list, drafts, runs, watch); fake-dom.mjs is the shared minimal DOM
+├── js/                           # node:test tests for static/*.js (diff, list load queue, client buffer + counters, row builder, long-value preview, sent rows, resend + target list, drafts, runs, watch); fake-dom.mjs is the shared minimal DOM, static.mjs loads static/*.js under their file names (#322)
 ├── benchmark_concurrent_insert.rs # Concurrent store insert benchmark
 ├── messages/                     # .hl7 fixtures (valid / errors / unknown_types)
 ├── test.sh                       # Linux/macOS functional + load test (netcat)
@@ -334,7 +347,8 @@ tests/
 examples/harux-example.toml       # Every configuration key with its default
 harux.toml                        # The shipped configuration (defaults)
 .cargo/audit.toml                 # cargo-audit policy and ignored advisories (with reasons)
-.github/workflows/                # ci.yml (gate), audit.yml, build.yml (releases), release-drafter.yml
+.github/workflows/                # ci.yml (gate), audit.yml, build.yml (releases), coverage.yml (#322), release-drafter.yml
+.github/scripts/coverage-summary.mjs # LCOV → Markdown table for the coverage job summary
 docs/                             # ROADMAP, PROJECT_OVERVIEW, STYLE_GUIDE; handoffs/ and audits are historical
 ```
 ---
